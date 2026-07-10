@@ -1,3 +1,6 @@
+packages:
+  - apps/technician-mobile
+
 allowBuilds:
   esbuild: true
   sharp: false

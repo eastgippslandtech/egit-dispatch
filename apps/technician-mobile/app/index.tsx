@@ -1,29 +1,13 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Redirect } from "expo-router";
+
+import { useSession } from "../src/providers/app-providers";
 
 export default function IndexRoute() {
+  const { session } = useSession();
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Command Centre</Text>
-      <Text style={styles.context}>Technician</Text>
-    </View>
+    <Redirect
+      href={session.status === "approved" ? "/(tabs)/today" : "/sign-in"}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    alignItems: "center",
-    backgroundColor: "#09090b",
-    flex: 1,
-    justifyContent: "center",
-  },
-  title: {
-    color: "#fafafa",
-    fontSize: 24,
-    fontWeight: "600",
-  },
-  context: {
-    color: "#a1a1aa",
-    fontSize: 16,
-    marginTop: 8,
-  },
-});

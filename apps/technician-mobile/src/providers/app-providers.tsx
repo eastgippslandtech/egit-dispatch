@@ -46,15 +46,17 @@ export function AppProviders({
   repository,
 }: AppProvidersProps) {
   const [session, setSession] = useState<TechnicianSession>(initialSession);
-  const [repositoryValue] = useState<TechnicianRepository>(() => {
-    if (repository) return repository;
-
-    const staff =
-      initialSession.status === "approved"
-        ? initialSession.staff
-        : approvedMockStaff;
-    return new MockTechnicianRepository({ staffEmail: staff.email });
-  });
+  const [injectedRepository] = useState(repository);
+  const effectiveStaffEmail =
+    session.status === "approved"
+      ? session.staff.email
+      : approvedMockStaff.email;
+  const repositoryValue = useMemo<TechnicianRepository>(
+    () =>
+      injectedRepository ??
+      new MockTechnicianRepository({ staffEmail: effectiveStaffEmail }),
+    [effectiveStaffEmail, injectedRepository],
+  );
   const sessionValue = useMemo<SessionContextValue>(
     () => ({
       session,

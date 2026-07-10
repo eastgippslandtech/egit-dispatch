@@ -14,7 +14,7 @@ const config: ExpoConfig = {
   android: {
     package: "au.com.egit.commandcentre",
   },
-  plugins: ["expo-router", "expo-secure-store", "expo-sqlite"],
+  plugins: ["expo-font", "expo-router", "expo-secure-store", "expo-sqlite"],
   experiments: { typedRoutes: true },
 };
 

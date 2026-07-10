@@ -1,24 +1,7 @@
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Tabs } from "expo-router";
-import { StyleSheet, Text, type ColorValue } from "react-native";
 
 import { colours } from "../../src/theme/tokens";
-
-type TabIconProps = {
-  colour: ColorValue;
-  symbol: string;
-};
-
-function TabIcon({ colour, symbol }: TabIconProps) {
-  return (
-    <Text
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-      style={[styles.icon, { color: colour }]}
-    >
-      {symbol}
-    </Text>
-  );
-}
 
 export default function TabsLayout() {
   return (
@@ -34,9 +17,6 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colours.surface,
           borderTopColor: colours.border,
-          height: 68,
-          paddingBottom: 8,
-          paddingTop: 6,
         },
       }}
     >
@@ -44,7 +24,15 @@ export default function TabsLayout() {
         name="today"
         options={{
           tabBarAccessibilityLabel: "Today tab",
-          tabBarIcon: ({ color }) => <TabIcon colour={color} symbol="◉" />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              accessibilityElementsHidden
+              color={color}
+              importantForAccessibility="no-hide-descendants"
+              name="calendar-today"
+              size={size}
+            />
+          ),
           title: "Today",
         }}
       />
@@ -52,7 +40,15 @@ export default function TabsLayout() {
         name="my-work"
         options={{
           tabBarAccessibilityLabel: "My Work tab",
-          tabBarIcon: ({ color }) => <TabIcon colour={color} symbol="≡" />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              accessibilityElementsHidden
+              color={color}
+              importantForAccessibility="no-hide-descendants"
+              name="clipboard-text-outline"
+              size={size}
+            />
+          ),
           title: "My Work",
         }}
       />
@@ -60,7 +56,15 @@ export default function TabsLayout() {
         name="sync"
         options={{
           tabBarAccessibilityLabel: "Sync tab",
-          tabBarIcon: ({ color }) => <TabIcon colour={color} symbol="↻" />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              accessibilityElementsHidden
+              color={color}
+              importantForAccessibility="no-hide-descendants"
+              name="sync"
+              size={size}
+            />
+          ),
           title: "Sync",
         }}
       />
@@ -68,18 +72,18 @@ export default function TabsLayout() {
         name="profile"
         options={{
           tabBarAccessibilityLabel: "Profile tab",
-          tabBarIcon: ({ color }) => <TabIcon colour={color} symbol="●" />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              accessibilityElementsHidden
+              color={color}
+              importantForAccessibility="no-hide-descendants"
+              name="account-outline"
+              size={size}
+            />
+          ),
           title: "Profile",
         }}
       />
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  icon: {
-    fontSize: 20,
-    fontWeight: "700",
-    lineHeight: 24,
-  },
-});

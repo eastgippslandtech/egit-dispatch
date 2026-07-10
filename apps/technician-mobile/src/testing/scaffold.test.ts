@@ -70,6 +70,24 @@ describe("technician mobile scaffold", () => {
     expect(existsSync(resolve(projectRoot, "src/app"))).toBe(false);
   });
 
+  it("owns its native Expo lint toolchain", () => {
+    const packageJson = JSON.parse(readProjectFile("package.json"));
+    const eslintConfigPath = resolve(projectRoot, "eslint.config.mjs");
+
+    expect(packageJson.devDependencies).toEqual(
+      expect.objectContaining({
+        eslint: expect.any(String),
+        "eslint-config-expo": expect.any(String),
+      }),
+    );
+    expect(existsSync(eslintConfigPath)).toBe(true);
+    if (!existsSync(eslintConfigPath)) return;
+
+    expect(readFileSync(eslintConfigPath, "utf8")).toContain(
+      'from "eslint-config-expo/flat.js"',
+    );
+  });
+
   it("documents fail-closed public environment defaults without a client secret", () => {
     const envPath = resolve(projectRoot, ".env.example");
 
@@ -89,7 +107,14 @@ describe("technician mobile scaffold", () => {
     expect(existsSync(easPath)).toBe(true);
     if (!existsSync(easPath)) return;
 
-    expect(JSON.parse(readFileSync(easPath, "utf8"))).toHaveProperty("build");
+    expect(JSON.parse(readFileSync(easPath, "utf8"))).toMatchObject({
+      build: {
+        development: {
+          developmentClient: true,
+          distribution: "internal",
+        },
+      },
+    });
   });
 
   it("records the resolved Expo, React Native, and React versions", () => {

@@ -4,6 +4,7 @@ export default function IndexRoute() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Command Centre</Text>
+      <Text style={styles.context}>Technician</Text>
     </View>
   );
 }
@@ -19,5 +20,10 @@ const styles = StyleSheet.create({
     color: "#fafafa",
     fontSize: 24,
     fontWeight: "600",
+  },
+  context: {
+    color: "#a1a1aa",
+    fontSize: 16,
+    marginTop: 8,
   },
 });

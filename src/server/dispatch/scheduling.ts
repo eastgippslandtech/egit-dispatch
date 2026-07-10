@@ -1,4 +1,10 @@
-import type { Appointment, DispatchRequest, Technician } from "./types";
+import { bookingTiming, bookingTypeForRequest } from "./booking";
+import type {
+  Appointment,
+  BookingType,
+  DispatchRequest,
+  Technician,
+} from "./types";
 import {
   applyTravelToAppointment,
   detectTravelScheduleWarnings,
@@ -330,6 +336,7 @@ export function detectScheduleWarnings({
 export function scheduleRequest({
   appointmentId,
   appointments,
+  bookingType,
   durationMinutes,
   request,
   start,
@@ -339,6 +346,7 @@ export function scheduleRequest({
 }: {
   appointmentId: string;
   appointments: Appointment[];
+  bookingType?: BookingType;
   date?: string;
   durationMinutes: number;
   request: DispatchRequest;
@@ -346,7 +354,9 @@ export function scheduleRequest({
   technicianId: string;
   travel?: TravelEstimate;
 }) {
-  const slot = buildScheduleSlot(start, durationMinutes);
+  const resolvedBookingType = bookingType ?? bookingTypeForRequest(request);
+  const timing = bookingTiming(durationMinutes, resolvedBookingType);
+  const slot = buildScheduleSlot(start, timing.totalDurationMinutes);
   const appointment: Appointment = {
     id: appointmentId,
     date,
@@ -354,6 +364,9 @@ export function scheduleRequest({
     technicianId,
     title: request.subject,
     customer: request.customer,
+    bookingType: resolvedBookingType,
+    noteTimeMinutes: timing.noteTimeMinutes,
+    workDurationMinutes: timing.workDurationMinutes,
     siteAddress: request.siteAddress,
     siteArea: request.siteArea,
     siteTown: request.siteTown,
@@ -369,19 +382,25 @@ export function scheduleRequest({
 export function moveAppointment({
   appointmentId,
   appointments,
+  bookingType,
   durationMinutes,
   start,
   technicianId,
   date,
+  noteTimeMinutes,
   travel,
+  workDurationMinutes,
 }: {
   appointmentId: string;
   appointments: Appointment[];
+  bookingType?: BookingType;
   date?: string;
+  noteTimeMinutes?: number;
   durationMinutes: number;
   start: string;
   technicianId: string;
   travel?: TravelEstimate;
+  workDurationMinutes?: number;
 }) {
   const slot = buildScheduleSlot(start, durationMinutes);
 
@@ -390,8 +409,13 @@ export function moveAppointment({
       ? applyTravelToAppointment(
           {
             ...appointment,
+            bookingType: bookingType ?? appointment.bookingType,
             date: date ?? appointment.date,
+            noteTimeMinutes:
+              noteTimeMinutes ?? appointment.noteTimeMinutes,
             technicianId,
+            workDurationMinutes:
+              workDurationMinutes ?? appointment.workDurationMinutes,
             start: slot.start,
             end: slot.end,
             syncIssue:

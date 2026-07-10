@@ -324,7 +324,7 @@ describe("mock dispatch scheduling helpers", () => {
     ]);
   });
 
-  it("turns an unscheduled request into a mock appointment", () => {
+  it("adds fifteen minutes of note time to an onsite booking", () => {
     const appointments = scheduleRequest({
       appointmentId: "mock-1",
       appointments: [],
@@ -341,9 +341,46 @@ describe("mock dispatch scheduling helpers", () => {
       requestId: "100",
       technicianId: "tech-a",
       start: "14:00",
-      end: "15:00",
+      end: "15:15",
       date: "2026-07-08",
       title: "Printer offline",
+      bookingType: "Onsite",
+      noteTimeMinutes: 15,
+      workDurationMinutes: 60,
+    });
+  });
+
+  it("does not add note time to remote or in-house bookings", () => {
+    const remote = scheduleRequest({
+      appointmentId: "remote-1",
+      appointments: [],
+      bookingType: "Remote",
+      durationMinutes: 60,
+      request,
+      start: "14:00",
+      technicianId: "tech-a",
+    });
+    const inHouse = scheduleRequest({
+      appointmentId: "in-house-1",
+      appointments: [],
+      bookingType: "In house",
+      durationMinutes: 60,
+      request,
+      start: "14:00",
+      technicianId: "tech-a",
+    });
+
+    expect(remote[0]).toMatchObject({
+      bookingType: "Remote",
+      end: "15:00",
+      noteTimeMinutes: 0,
+      workDurationMinutes: 60,
+    });
+    expect(inHouse[0]).toMatchObject({
+      bookingType: "In house",
+      end: "15:00",
+      noteTimeMinutes: 0,
+      workDurationMinutes: 60,
     });
   });
 
@@ -362,6 +399,34 @@ describe("mock dispatch scheduling helpers", () => {
       start: "12:30",
       end: "14:00",
       date: "2026-07-09",
+    });
+  });
+
+  it("moves an onsite appointment without adding note time twice", () => {
+    const onsiteAppointment: Appointment = {
+      ...appointment,
+      bookingType: "Onsite",
+      end: "11:15",
+      noteTimeMinutes: 15,
+      workDurationMinutes: 60,
+    };
+    const appointments = moveAppointment({
+      appointmentId: "appt-1",
+      appointments: [onsiteAppointment],
+      bookingType: "Onsite",
+      durationMinutes: 75,
+      noteTimeMinutes: 15,
+      start: "12:30",
+      technicianId: "tech-b",
+      workDurationMinutes: 60,
+    });
+
+    expect(appointments[0]).toMatchObject({
+      bookingType: "Onsite",
+      end: "13:45",
+      noteTimeMinutes: 15,
+      start: "12:30",
+      workDurationMinutes: 60,
     });
   });
 

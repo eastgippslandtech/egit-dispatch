@@ -1,0 +1,27 @@
+{
+  "request": {
+    "id": "msp-1001",
+    "request_number": "REQ-MSP-1001",
+    "subject": "Fixture workstation cannot print",
+    "description": "Synthetic fixture for mapper tests. Contains no customer data.",
+    "status": { "name": "Ready for Scheduling" },
+    "priority": { "name": "High" },
+    "requester": { "name": "Mel Harris", "email": "mel@example.invalid" },
+    "account": { "name": "Fixture OneHarvest" },
+    "site": {
+      "name": "Bairnsdale packing floor",
+      "address": "Bairnsdale VIC 3875",
+      "city": "Bairnsdale",
+      "area": "Bairnsdale"
+    },
+    "technician": {
+      "id": "msp-tech-matt",
+      "name": "Matt",
+      "email": "mattd@egit.com.au"
+    },
+    "due_by_time": "2026-07-09T12:00:00+10:00",
+    "udf_fields": {
+      "ready_to_book": true
+    }
+  }
+}

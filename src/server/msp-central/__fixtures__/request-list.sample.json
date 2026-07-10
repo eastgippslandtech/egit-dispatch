@@ -1,0 +1,62 @@
+{
+  "requests": [
+    {
+      "id": "msp-1001",
+      "request_number": "REQ-MSP-1001",
+      "subject": "Fixture workstation cannot print",
+      "account": { "name": "Fixture OneHarvest" },
+      "site": {
+        "name": "Bairnsdale packing floor",
+        "address": "Bairnsdale VIC 3875",
+        "city": "Bairnsdale",
+        "area": "Bairnsdale"
+      },
+      "requester": { "name": "Mel Harris", "email": "mel@example.invalid" },
+      "priority": { "name": "High" },
+      "status": { "name": "Ready for Scheduling" },
+      "technician": {
+        "id": "msp-tech-matt",
+        "name": "Matt",
+        "email": "mattd@egit.com.au"
+      },
+      "created_time": "2026-07-08T09:30:00+10:00",
+      "due_by_time": "2026-07-09T12:00:00+10:00",
+      "scheduled_start_time": null,
+      "scheduled_end_time": null,
+      "is_billable": true,
+      "is_onsite": true,
+      "sla_status": "due-soon",
+      "udf_fields": {
+        "ready_to_book": true
+      },
+      "assets": [
+        { "name": "Front desk printer" }
+      ]
+    },
+    {
+      "id": "msp-1002",
+      "request_number": "REQ-MSP-1002",
+      "subject": "Fixture scheduled network tidy",
+      "customer": "Fixture East Gippsland Homes",
+      "site_name": "Comms room",
+      "site_address": "Sale VIC 3850",
+      "site_town": "Sale",
+      "requester_name": "Priya Stone",
+      "requester_email": "priya@example.invalid",
+      "priority": "Critical",
+      "status": "Scheduled",
+      "technician": {
+        "id": "msp-tech-riley",
+        "name": "Riley",
+        "email": "riley@egit.com.au"
+      },
+      "created_time": "2026-07-07T15:00:00+10:00",
+      "due_by_time": "2026-07-09T10:00:00+10:00",
+      "scheduled_start_time": "2026-07-09T09:00:00+10:00",
+      "scheduled_end_time": "2026-07-09T10:30:00+10:00",
+      "billable": false,
+      "onsite": true,
+      "sla": { "status": "overdue" }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "technicians": [
+    {
+      "id": "msp-tech-simeon",
+      "name": "Simeon",
+      "email": "simeon@egit.com.au"
+    },
+    {
+      "id": "msp-tech-matt",
+      "name": "Matt",
+      "email": "mattd@egit.com.au"
+    },
+    {
+      "id": "msp-tech-jervy",
+      "name": "Jervy",
+      "email": "jervy@egit.com.au"
+    },
+    {
+      "id": "msp-tech-riley",
+      "name": "Riley",
+      "email": "riley@egit.com.au"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "Command Centre Mobile",
+  "short_name": "Command Centre",
+  "description": "EGIT Command Centre mobile technician app",
+  "start_url": "/mobile",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": [
+    {
+      "src": "/assets/command-centre-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/command-centre-logo-header.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

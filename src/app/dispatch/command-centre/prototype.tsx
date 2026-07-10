@@ -1555,8 +1555,8 @@ function ScheduleConfirmModal({
               Review warnings before confirming
             </div>
             <ul className="mt-2 list-disc space-y-1 pl-5">
-              {pending.warnings.map((warning, index) => (
-                <li key={`${warning.code}-${index}`}>{warning.message}</li>
+              {pending.warnings.map((warning) => (
+                <li key={`${warning.code}-${warning.message}`}>{warning.message}</li>
               ))}
             </ul>
           </div>

@@ -1,6 +1,7 @@
 export type Severity = "critical" | "warning" | "info" | "healthy";
 export type SlaState = "overdue" | "due-soon" | "normal";
 export type Priority = "Critical" | "High" | "Medium" | "Low";
+export type BookingType = "Remote" | "Onsite" | "In house";
 export type RequestStatus =
   | "Open"
   | "Ready for Scheduling"
@@ -75,6 +76,7 @@ export type DispatchRequest = {
   dueAt: string;
   ageHours: number;
   billable: boolean;
+  bookingType?: BookingType;
   readyToBook: boolean;
   slaState: SlaState;
   warnings: string[];
@@ -87,6 +89,9 @@ export type Appointment = {
   technicianId: string;
   title: string;
   customer: string;
+  bookingType?: BookingType;
+  noteTimeMinutes?: number;
+  workDurationMinutes?: number;
   siteAddress?: string;
   siteTown?: string;
   siteArea?: string;

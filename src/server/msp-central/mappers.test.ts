@@ -23,6 +23,7 @@ describe("MSP Central request mappers", () => {
         description: "Printer queue is stuck after driver update.",
         due_by_time: "2026-07-09T12:00:00+10:00",
         id: "msp-1",
+        is_onsite: true,
         item: { name: "Printer" },
         priority: { name: "High" },
         request_number: "REQ-MSP-1",
@@ -50,6 +51,7 @@ describe("MSP Central request mappers", () => {
     );
 
     expect(request).toMatchObject({
+      bookingType: "Onsite",
       customer: "Fixture Customer",
       helpdeskUrl: "https://helpdesk.example/requests/REQ-MSP-1",
       notes: "Printer queue is stuck after driver update.",

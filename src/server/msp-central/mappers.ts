@@ -4,6 +4,7 @@ import type {
   RequestStatus,
   SlaState,
 } from "@/server/dispatch/types";
+import { bookingTypeForRequest } from "@/server/dispatch/booking";
 import {
   findStaffForMspCentralTechnician,
   getInitialStaffProfiles,
@@ -34,6 +35,13 @@ export function mapMspCentralRequest(
   const dueAt = readString(raw.due_by_time) ?? new Date(0).toISOString();
   const scheduledStart = readString(raw.scheduled_start_time);
   const scheduledEnd = readString(raw.scheduled_end_time);
+  const customer =
+    readString(raw.account?.name) ??
+    readString(raw.customer) ??
+    "Unknown customer";
+  const onsite = raw.is_onsite ?? raw.onsite ?? undefined;
+  const site =
+    readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site";
   const warnings = [
     ...assetWarnings(raw),
     match.warning,
@@ -47,15 +55,13 @@ export function mapMspCentralRequest(
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
     billable: Boolean(raw.is_billable ?? raw.billable),
+    bookingType: bookingTypeForRequest({ customer, onsite, site }),
     category: readPriorityStatusName(raw.category),
     contact:
       readString(raw.requester?.email) ??
       readString(raw.requester_email) ??
       "Unknown contact",
-    customer:
-      readString(raw.account?.name) ??
-      readString(raw.customer) ??
-      "Unknown customer",
+    customer,
     dueAt,
     helpdeskUrl: buildMspCentralRequestUrl(
       requestNumber,
@@ -63,7 +69,7 @@ export function mapMspCentralRequest(
     ),
     item: readPriorityStatusName(raw.item),
     notes: readString(raw.description),
-    onsite: Boolean(raw.is_onsite ?? raw.onsite),
+    onsite,
     priority: mapMspCentralPriority(readPriorityStatusName(raw.priority)),
     readyToBook: isReadyToBook(raw, scheduledStart),
     requester:
@@ -73,7 +79,7 @@ export function mapMspCentralRequest(
     requestNumber,
     scheduledEnd: scheduledEnd ?? undefined,
     scheduledStart: scheduledStart ?? undefined,
-    site: readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site",
+    site,
     siteAddress:
       readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined,
     siteArea: readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined,

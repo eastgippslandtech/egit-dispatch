@@ -20,6 +20,8 @@ const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 const originalGeolocation = navigator.geolocation;
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
     email: "riley@egit.com.au",
@@ -29,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   Object.defineProperty(navigator, "geolocation", {
     configurable: true,
     value: originalGeolocation,

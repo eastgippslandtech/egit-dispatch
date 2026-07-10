@@ -27,7 +27,7 @@ export interface MobileStaff {
   outlookUserPrincipalName: string;
   mspCentralEmail: string;
   mspCentralTechnicianId: string | null;
-  role: "technician";
+  role: "admin" | "technician";
   baseOffice: "Bairnsdale" | "Sale";
   active: boolean;
 }

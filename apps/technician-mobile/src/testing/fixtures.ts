@@ -28,15 +28,15 @@ const OUTLOOK_READ_ONLY_PERMISSIONS: MobileJobPermissions = {
 
 export const MOBILE_STAFF_FIXTURES: readonly MobileStaff[] = [
   {
-    id: "staff-riley",
-    displayName: "Riley",
-    email: "riley@egit.com.au",
-    zohoEmail: "riley@egit.com.au",
-    outlookEmail: "riley@egit.com.au",
-    outlookUserPrincipalName: "riley@egit.com.au",
-    mspCentralEmail: "riley@egit.com.au",
-    mspCentralTechnicianId: "msp-tech-riley",
-    role: "technician",
+    id: "staff-simeon",
+    displayName: "Simeon",
+    email: "simeon@egit.com.au",
+    zohoEmail: "simeon@egit.com.au",
+    outlookEmail: "simeon@egit.com.au",
+    outlookUserPrincipalName: "simeon@egit.com.au",
+    mspCentralEmail: "simeon@egit.com.au",
+    mspCentralTechnicianId: null,
+    role: "admin",
     baseOffice: "Bairnsdale",
     active: true,
   },
@@ -48,15 +48,45 @@ export const MOBILE_STAFF_FIXTURES: readonly MobileStaff[] = [
     outlookEmail: "mattd@egit.com.au",
     outlookUserPrincipalName: "mattd@egit.com.au",
     mspCentralEmail: "mattd@egit.com.au",
-    mspCentralTechnicianId: "msp-tech-mattd",
+    mspCentralTechnicianId: null,
     role: "technician",
     baseOffice: "Sale",
     active: true,
   },
+  {
+    id: "staff-jervy",
+    displayName: "Jervy",
+    email: "jervy@egit.com.au",
+    zohoEmail: "jervy@egit.com.au",
+    outlookEmail: "jervy@egit.com.au",
+    outlookUserPrincipalName: "jervy@egit.com.au",
+    mspCentralEmail: "jervy@egit.com.au",
+    mspCentralTechnicianId: null,
+    role: "technician",
+    baseOffice: "Bairnsdale",
+    active: true,
+  },
+  {
+    id: "staff-riley",
+    displayName: "Riley",
+    email: "riley@egit.com.au",
+    zohoEmail: "riley@egit.com.au",
+    outlookEmail: "riley@egit.com.au",
+    outlookUserPrincipalName: "riley@egit.com.au",
+    mspCentralEmail: "riley@egit.com.au",
+    mspCentralTechnicianId: null,
+    role: "technician",
+    baseOffice: "Bairnsdale",
+    active: true,
+  },
 ];
 
-const riley = MOBILE_STAFF_FIXTURES[0];
-const matt = MOBILE_STAFF_FIXTURES[1];
+const riley = MOBILE_STAFF_FIXTURES.find(
+  (staff) => staff.email === "riley@egit.com.au",
+) as MobileStaff;
+const matt = MOBILE_STAFF_FIXTURES.find(
+  (staff) => staff.email === "mattd@egit.com.au",
+) as MobileStaff;
 
 export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
   {

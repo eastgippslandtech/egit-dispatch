@@ -33,12 +33,17 @@ export class MockTechnicianRepository implements TechnicianRepository {
   private activeTimer: ActiveTimer | null = null;
   private readonly receipts = new Map<string, MutationReceipt>();
   private readonly mutationSignatures = new Map<string, string>();
+  private readonly timerResults = new Map<
+    string,
+    ActiveTimer | StoppedTimer
+  >();
 
   constructor({ staffEmail }: MockTechnicianRepositoryOptions) {
     const normalizedEmail = staffEmail.trim().toLowerCase();
-    this.staff = MOBILE_STAFF_FIXTURES.find(
+    const staff = MOBILE_STAFF_FIXTURES.find(
       (candidate) => candidate.email.toLowerCase() === normalizedEmail,
     );
+    this.staff = staff ? cloneMobileFixture(staff) : undefined;
   }
 
   async getCurrentStaff(): Promise<MobileStaff> {
@@ -64,7 +69,10 @@ export class MockTechnicianRepository implements TechnicianRepository {
   }
 
   async startTimer(command: StartTimerCommand): Promise<ActiveTimer> {
-    const job = this.requireWritableJob(command.jobId);
+    const replay = this.replayedTimer<ActiveTimer>("timer-start", command);
+    if (replay) return replay;
+
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canStartTimer) {
       throw new Error("A timer cannot be started for this job.");
     }
@@ -82,11 +90,14 @@ export class MockTechnicianRepository implements TechnicianRepository {
       accumulatedPausedSeconds: 0,
     };
 
-    return cloneMobileFixture(this.activeTimer);
+    return this.recordTimer("timer-start", command, this.activeTimer);
   }
 
   async stopTimer(command: StopTimerCommand): Promise<StoppedTimer> {
-    this.requireWritableJob(command.jobId);
+    const replay = this.replayedTimer<StoppedTimer>("timer-stop", command);
+    if (replay) return replay;
+
+    this.requireWritableCommand(command);
     const timer = this.activeTimer;
     if (
       !timer ||
@@ -115,14 +126,14 @@ export class MockTechnicianRepository implements TechnicianRepository {
     };
     this.activeTimer = null;
 
-    return cloneMobileFixture(stopped);
+    return this.recordTimer("timer-stop", command, stopped);
   }
 
   async saveWorklog(command: SaveWorklogCommand): Promise<MutationReceipt> {
     const replay = this.replayedReceipt("worklog", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canWriteWorklog) {
       throw new Error("Worklogs cannot be added to this job.");
     }
@@ -152,7 +163,7 @@ export class MockTechnicianRepository implements TechnicianRepository {
     const replay = this.replayedReceipt("status", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canUpdateStatus) {
       throw new Error("Status cannot be changed for this job.");
     }
@@ -166,7 +177,7 @@ export class MockTechnicianRepository implements TechnicianRepository {
     const replay = this.replayedReceipt("evidence", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canAttachEvidence) {
       throw new Error("Evidence cannot be attached to this job.");
     }
@@ -193,7 +204,7 @@ export class MockTechnicianRepository implements TechnicianRepository {
     const replay = this.replayedReceipt("part", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canAddPart) {
       throw new Error("Parts cannot be added to this job.");
     }
@@ -219,7 +230,7 @@ export class MockTechnicianRepository implements TechnicianRepository {
     const replay = this.replayedReceipt("signoff", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canSignOff) {
       throw new Error("Customer sign-off cannot be saved for this job.");
     }
@@ -246,7 +257,7 @@ export class MockTechnicianRepository implements TechnicianRepository {
     const replay = this.replayedReceipt("completion", command);
     if (replay) return replay;
 
-    const job = this.requireWritableJob(command.jobId);
+    const job = this.requireWritableCommand(command);
     if (!job.permissions.canComplete) {
       throw new Error("This job cannot be completed.");
     }
@@ -299,17 +310,58 @@ export class MockTechnicianRepository implements TechnicianRepository {
     return job;
   }
 
-  private replayedReceipt(resource: string, command: MutationEnvelope) {
-    const receipt = this.receipts.get(command.clientMutationId);
-    if (!receipt) return undefined;
+  private requireWritableCommand(command: MutationEnvelope): MobileJob {
+    const job = this.requireWritableJob(command.jobId);
+    if (job.version !== command.baseVersion) {
+      throw new Error("Job version conflict.");
+    }
+    return job;
+  }
 
+  private replayedReceipt(resource: string, command: MutationEnvelope) {
     const expectedSignature = this.mutationSignatures.get(
       command.clientMutationId,
     );
+    if (!expectedSignature) return undefined;
     if (expectedSignature !== mutationSignature(resource, command)) {
       throw new Error("Idempotency key was reused for a different mutation.");
     }
+    const receipt = this.receipts.get(command.clientMutationId);
+    if (!receipt) {
+      throw new Error("Idempotency key was reused for a different mutation.");
+    }
     return cloneMobileFixture(receipt);
+  }
+
+  private replayedTimer<T extends ActiveTimer | StoppedTimer>(
+    resource: string,
+    command: MutationEnvelope,
+  ): T | undefined {
+    const expectedSignature = this.mutationSignatures.get(
+      command.clientMutationId,
+    );
+    if (!expectedSignature) return undefined;
+    if (expectedSignature !== mutationSignature(resource, command)) {
+      throw new Error("Idempotency key was reused for a different mutation.");
+    }
+    const result = this.timerResults.get(command.clientMutationId);
+    if (!result) {
+      throw new Error("Idempotency key was reused for a different mutation.");
+    }
+    return cloneMobileFixture(result) as T;
+  }
+
+  private recordTimer<T extends ActiveTimer | StoppedTimer>(
+    resource: string,
+    command: MutationEnvelope,
+    result: T,
+  ): T {
+    this.mutationSignatures.set(
+      command.clientMutationId,
+      mutationSignature(resource, command),
+    );
+    this.timerResults.set(command.clientMutationId, cloneMobileFixture(result));
+    return cloneMobileFixture(result);
   }
 
   private recordMutation(

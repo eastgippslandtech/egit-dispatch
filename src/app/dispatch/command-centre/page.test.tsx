@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
 
 import CommandCentrePage from "./page";
+import { bookingPriorityCardTone } from "./prototype";
 
 vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
@@ -23,6 +24,77 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+test("maps every request priority to a full booking-card colour", () => {
+  expect(bookingPriorityCardTone("Critical")).toContain("bg-rose");
+  expect(bookingPriorityCardTone("High")).toContain("bg-amber");
+  expect(bookingPriorityCardTone("Medium")).toContain("bg-emerald");
+  expect(bookingPriorityCardTone("Low")).toContain("bg-sky");
+  expect(bookingPriorityCardTone()).toContain("bg-slate");
+});
+
+test("colours rendered booking cards by priority and exposes booking type", async () => {
+  render(await CommandCentrePage());
+
+  const highBooking = screen.getByTestId("timeline-appointment-appt-1");
+  expect(highBooking).toHaveAttribute("data-priority", "High");
+  expect(highBooking).toHaveAttribute("data-booking-type", "Onsite");
+  expect(highBooking).toHaveClass("bg-amber-400/40");
+
+  const overlap = screen.getByTestId("timeline-overlap-appt-3");
+  expect(overlap).toHaveAttribute("data-priority", "Medium");
+  expect(overlap).toHaveAttribute("data-booking-type", "Onsite");
+
+  fireEvent.mouseEnter(
+    screen.getByRole("button", { name: /2 overlapping appointments/ }),
+  );
+  const outlookBooking = within(
+    screen.getByTestId("timeline-overlap-reveal"),
+  ).getByRole("button", { name: /Outlook busy: supplier call/ });
+  expect(outlookBooking).toHaveAttribute("data-priority", "None");
+  expect(outlookBooking).toHaveAttribute("data-booking-type", "None");
+  expect(outlookBooking).toHaveClass("bg-slate-500/25");
+});
+
+test("adds onsite note time and recalculates it when booking type changes", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  render(await CommandCentrePage());
+
+  const dataTransfer = {
+    effectAllowed: "none",
+    setData: vi.fn(),
+  };
+  fireEvent.dragStart(
+    screen.getByRole("button", {
+      name: /REQ-100284 Packhouse label printer offline/,
+    }),
+    { dataTransfer },
+  );
+  const track = screen.getAllByTestId("timeline-track")[0];
+  Object.defineProperty(track, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({ left: 0 }),
+  });
+  const dropEvent = createEvent.drop(track, { dataTransfer });
+  Object.defineProperty(dropEvent, "clientX", { value: 0 });
+  fireEvent(track, dropEvent);
+
+  const modal = screen
+    .getByRole("heading", { name: "Schedule request" })
+    .closest("section");
+  if (!modal) throw new Error("Schedule confirmation did not render.");
+  const bookingType = within(modal).getByLabelText("Booking type");
+  expect(bookingType).toHaveValue("Onsite");
+  expect(within(modal).getByText("15 min notes")).toBeInTheDocument();
+  expect(within(modal).getAllByText("09:00-10:15").length).toBeGreaterThan(0);
+
+  fireEvent.change(bookingType, { target: { value: "Remote" } });
+
+  expect(within(modal).getByText("0 min notes")).toBeInTheDocument();
+  expect(within(modal).getAllByText("09:00-10:00").length).toBeGreaterThan(0);
+  expect(consoleError).not.toHaveBeenCalled();
 });
 
 test("renders the locked Command Centre prototype with shared mock data", async () => {

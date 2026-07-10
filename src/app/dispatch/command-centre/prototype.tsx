@@ -22,12 +22,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   Appointment,
+  BookingType,
   DispatchDashboardData,
   DispatchRequest,
   HealthItem,
+  Priority,
   Severity,
   Technician,
 } from "@/server/dispatch/types";
+import {
+  bookingTiming,
+  bookingTypeForRequest,
+} from "@/server/dispatch/booking";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
   buildTimelineLayout,
@@ -81,6 +87,27 @@ type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
 
+const bookingPriorityCardTones: Record<Priority, string> = {
+  Critical: "border-rose-300/70 bg-rose-500/45 text-rose-50",
+  High: "border-amber-300/70 bg-amber-400/40 text-amber-50",
+  Medium: "border-emerald-300/65 bg-emerald-500/35 text-emerald-50",
+  Low: "border-sky-300/65 bg-sky-500/35 text-sky-50",
+};
+
+export function bookingPriorityCardTone(priority?: Priority) {
+  return priority
+    ? bookingPriorityCardTones[priority]
+    : "border-slate-300/35 bg-slate-500/25 text-slate-50";
+}
+
+function appointmentBookingType(
+  appointment: Appointment,
+  request?: DispatchRequest,
+): BookingType | undefined {
+  return appointment.bookingType ??
+    (request ? bookingTypeForRequest(request) : undefined);
+}
+
 const PRIMARY_HEALTH_KEYS = [
   "unscheduled",
   "sla-risk",
@@ -133,18 +160,22 @@ type DropPreview = {
 
 type PendingSchedule =
   | {
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "request";
       date: string;
       requestId: string;
       start: string;
       end: string;
+      noteTimeMinutes: number;
       technicianId: string;
       travel?: TravelEstimate;
       warnings: ScheduleWarning[];
+      workDurationMinutes: number;
     }
   | {
       appointmentId: string;
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "appointment";
       date: string;
@@ -154,9 +185,11 @@ type PendingSchedule =
       oldTechnicianId: string;
       start: string;
       end: string;
+      noteTimeMinutes: number;
       technicianId: string;
       travel?: TravelEstimate;
       warnings: ScheduleWarning[];
+      workDurationMinutes: number;
     };
 
 export function CommandCentrePrototype({
@@ -454,7 +487,9 @@ export function CommandCentrePrototype({
         return undefined;
       }
 
-      const slot = buildScheduleSlot(start, 60);
+      const bookingType = bookingTypeForRequest(request);
+      const timing = bookingTiming(60, bookingType);
+      const slot = buildScheduleSlot(start, timing.totalDurationMinutes);
       const travel = buildTravel(request, technicianId);
       const travelAppointment = buildTravelCandidate({
         date,
@@ -466,12 +501,14 @@ export function CommandCentrePrototype({
       });
 
       return {
-        durationMinutes: 60,
+        bookingType,
+        durationMinutes: timing.totalDurationMinutes,
         kind: "request",
         date,
         requestId: request.id,
         start: slot.start,
         end: slot.end,
+        noteTimeMinutes: timing.noteTimeMinutes,
         technicianId,
         travel,
         warnings: buildWarnings({
@@ -481,6 +518,7 @@ export function CommandCentrePrototype({
           technicianId,
           travelAppointment,
         }),
+        workDurationMinutes: timing.workDurationMinutes,
       } satisfies PendingSchedule;
     }
 
@@ -494,10 +532,15 @@ export function CommandCentrePrototype({
 
     const durationMinutes =
       minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
-    const slot = buildScheduleSlot(start, durationMinutes);
     const request = dashboard.requests.find(
       (candidate) => candidate.id === appointment.requestId,
     );
+    const bookingType =
+      appointmentBookingType(appointment, request) ?? "In house";
+    const noteTimeMinutes = appointment.noteTimeMinutes ?? 0;
+    const workDurationMinutes =
+      appointment.workDurationMinutes ?? durationMinutes - noteTimeMinutes;
+    const slot = buildScheduleSlot(start, durationMinutes);
     const travel = request ? buildTravel(request, technicianId) : undefined;
     const travelAppointment = buildTravelCandidate({
       appointmentId: appointment.id,
@@ -511,6 +554,7 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      bookingType,
       durationMinutes,
       kind: "appointment",
       date,
@@ -520,6 +564,7 @@ export function CommandCentrePrototype({
       oldTechnicianId: appointment.technicianId,
       start: slot.start,
       end: slot.end,
+      noteTimeMinutes,
       technicianId,
       travel,
       warnings: buildWarnings({
@@ -527,9 +572,10 @@ export function CommandCentrePrototype({
         date,
         end: slot.end,
         start: slot.start,
-        technicianId,
-        travelAppointment,
-      }),
+          technicianId,
+          travelAppointment,
+        }),
+      workDurationMinutes,
     } satisfies PendingSchedule;
   }
 
@@ -579,13 +625,17 @@ export function CommandCentrePrototype({
     endDrag();
   }
 
-  function updatePendingDuration(durationMinutes: number) {
+  function updatePendingDuration(workDurationMinutes: number) {
     setPendingSchedule((current) => {
       if (!current) {
         return current;
       }
 
-      const slot = buildScheduleSlot(current.start, durationMinutes);
+      const timing = bookingTiming(workDurationMinutes, current.bookingType);
+      const slot = buildScheduleSlot(
+        current.start,
+        timing.totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -618,8 +668,62 @@ export function CommandCentrePrototype({
 
       return {
         ...current,
-        durationMinutes,
+        durationMinutes: timing.totalDurationMinutes,
         end: slot.end,
+        noteTimeMinutes: timing.noteTimeMinutes,
+        warnings,
+        workDurationMinutes: timing.workDurationMinutes,
+      };
+    });
+  }
+
+  function updatePendingBookingType(bookingType: BookingType) {
+    setPendingSchedule((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const timing = bookingTiming(current.workDurationMinutes, bookingType);
+      const slot = buildScheduleSlot(
+        current.start,
+        timing.totalDurationMinutes,
+      );
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        date: current.date,
+        end: slot.end,
+        request,
+        start: slot.start,
+        technicianId: current.technicianId,
+        travel: current.travel,
+      });
+      const warnings = buildWarnings({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        date: current.date,
+        end: slot.end,
+        start: slot.start,
+        technicianId: current.technicianId,
+        travelAppointment,
+      });
+
+      return {
+        ...current,
+        bookingType,
+        durationMinutes: timing.totalDurationMinutes,
+        end: slot.end,
+        noteTimeMinutes: timing.noteTimeMinutes,
         warnings,
       };
     });
@@ -760,8 +864,9 @@ export function CommandCentrePrototype({
       const appointments = scheduleRequest({
         appointmentId,
         appointments: dashboard.appointments,
+        bookingType: pendingSchedule.bookingType,
         date: pendingSchedule.date,
-        durationMinutes: pendingSchedule.durationMinutes,
+        durationMinutes: pendingSchedule.workDurationMinutes,
         request,
         start: pendingSchedule.start,
         technicianId: pendingSchedule.technicianId,
@@ -775,6 +880,7 @@ export function CommandCentrePrototype({
           candidate.id === request.id
             ? {
                 ...candidate,
+                bookingType: pendingSchedule.bookingType,
                 status: "Scheduled",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
@@ -806,11 +912,14 @@ export function CommandCentrePrototype({
       const movedAppointments = moveAppointment({
         appointmentId: pendingSchedule.appointmentId,
         appointments: dashboard.appointments,
+        bookingType: pendingSchedule.bookingType,
         date: pendingSchedule.date,
         durationMinutes: pendingSchedule.durationMinutes,
+        noteTimeMinutes: pendingSchedule.noteTimeMinutes,
         start: pendingSchedule.start,
         technicianId: pendingSchedule.technicianId,
         travel: pendingSchedule.travel,
+        workDurationMinutes: pendingSchedule.workDurationMinutes,
       });
 
       setDashboard((current) => ({
@@ -823,6 +932,7 @@ export function CommandCentrePrototype({
           )?.requestId
             ? {
                 ...request,
+                bookingType: pendingSchedule.bookingType,
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
                   pendingSchedule.date,
@@ -1119,9 +1229,10 @@ export function CommandCentrePrototype({
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-300">
-                <Legend color="bg-sky-400" label="Scheduled" />
-                <Legend color="bg-amber-400" label="Warning" />
-                <Legend color="bg-rose-500" label="Conflict" />
+                <Legend color="bg-rose-500" label="Critical" />
+                <Legend color="bg-amber-400" label="High" />
+                <Legend color="bg-emerald-500" label="Medium" />
+                <Legend color="bg-sky-500" label="Low" />
               </div>
             </div>
             {viewMode === "week" ? (
@@ -1205,6 +1316,7 @@ export function CommandCentrePrototype({
             pending={pendingSchedule}
             request={pendingRequest}
             technicians={dashboard.technicians}
+            onBookingTypeChange={updatePendingBookingType}
             onCancel={() => setPendingSchedule(undefined)}
             onConfirm={confirmPendingSchedule}
             onDurationChange={updatePendingDuration}
@@ -1230,6 +1342,7 @@ export function CommandCentrePrototype({
 }
 
 function ScheduleConfirmModal({
+  onBookingTypeChange,
   onCancel,
   onConfirm,
   onDurationChange,
@@ -1239,6 +1352,7 @@ function ScheduleConfirmModal({
   request,
   technicians,
 }: {
+  onBookingTypeChange: (bookingType: BookingType) => void;
   onCancel: () => void;
   onConfirm: () => void;
   onDurationChange: (durationMinutes: number) => void;
@@ -1269,6 +1383,7 @@ function ScheduleConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
       <section
+        aria-labelledby="schedule-confirm-title"
         aria-modal="true"
         className="w-full max-w-lg rounded-lg border border-cyan-300/20 bg-[#0b1628] p-5 text-slate-100 shadow-2xl"
         role="dialog"
@@ -1278,7 +1393,7 @@ function ScheduleConfirmModal({
             <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
               Confirm mock schedule
             </p>
-            <h2 className="mt-2 text-xl font-semibold">
+            <h2 id="schedule-confirm-title" className="mt-2 text-xl font-semibold">
               {pending.kind === "request" ? "Schedule request" : "Move appointment"}
             </h2>
           </div>
@@ -1357,10 +1472,26 @@ function ScheduleConfirmModal({
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-200">
-            Duration
+            Booking type
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
-              value={pending.durationMinutes}
+              value={pending.bookingType}
+              onChange={(event) =>
+                onBookingTypeChange(event.target.value as BookingType)
+              }
+            >
+              {(["Remote", "Onsite", "In house"] as const).map((bookingType) => (
+                <option key={bookingType} value={bookingType}>
+                  {bookingType}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm font-semibold text-slate-200">
+            Work duration
+            <select
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              value={pending.workDurationMinutes}
               onChange={(event) => onDurationChange(Number(event.target.value))}
             >
               {[30, 60, 90, 120, 150, 180].map((duration) => (
@@ -1370,6 +1501,13 @@ function ScheduleConfirmModal({
               ))}
             </select>
           </label>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-md border border-cyan-300/20 bg-cyan-300/[0.06] p-3 text-xs text-slate-200">
+          <span className="font-semibold text-cyan-100">{pending.bookingType}</span>
+          <span>{pending.workDurationMinutes} min work</span>
+          <span>{pending.noteTimeMinutes} min notes</span>
+          <span>{pending.durationMinutes} min total reserved</span>
         </div>
 
         {pending.travel ? (
@@ -1417,8 +1555,8 @@ function ScheduleConfirmModal({
               Review warnings before confirming
             </div>
             <ul className="mt-2 list-disc space-y-1 pl-5">
-              {pending.warnings.map((warning) => (
-                <li key={warning.code}>{warning.message}</li>
+              {pending.warnings.map((warning, index) => (
+                <li key={`${warning.code}-${index}`}>{warning.message}</li>
               ))}
             </ul>
           </div>
@@ -2247,18 +2385,19 @@ function WeekAppointmentCard({
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const bookingType = appointmentBookingType(appointment, request);
 
   return (
     <button
       aria-label={`${appointment.title} ${appointment.customer}`}
       aria-pressed={active}
+      data-booking-type={bookingType ?? "None"}
+      data-priority={request?.priority ?? "None"}
       draggable
-      className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${
-        active
-          ? "border-cyan-100 bg-cyan-300/22 text-cyan-50 ring-2 ring-cyan-200"
-          : warning
-            ? "border-amber-300/50 bg-amber-300/15 text-amber-50"
-            : "border-sky-300/40 bg-sky-300/12 text-sky-50"
+      className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${bookingPriorityCardTone(
+        request?.priority,
+      )} ${active ? "ring-2 ring-cyan-200" : ""} ${
+        warning ? "ring-1 ring-amber-200/70" : ""
       }`}
       type="button"
       onClick={onSelect}
@@ -2285,7 +2424,7 @@ function WeekAppointmentCard({
             {request.requestNumber}
           </span>
           <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
-            {request.priority}
+            {request.priority} · {bookingType}
           </span>
         </div>
       ) : null}
@@ -2374,6 +2513,10 @@ function TimelineOverlapGroup({
   const frontRequest = requests.find(
     (request) => request.id === frontAppointment.requestId,
   );
+  const frontBookingType = appointmentBookingType(
+    frontAppointment,
+    frontRequest,
+  );
   const groupWidth = timelineWidth(item.groupStart, item.groupEnd, trackWidth);
   const frontLeftWithinGroup =
     timelineLeft(frontAppointment.start, trackWidth) -
@@ -2390,6 +2533,8 @@ function TimelineOverlapGroup({
         searchState === "dimmed" ? "opacity-35 grayscale" : ""
       } ${searchState === "match" ? "drop-shadow-[0_0_16px_rgba(34,211,238,0.18)]" : ""}`}
       data-search-state={searchState}
+      data-booking-type={frontBookingType ?? "None"}
+      data-priority={frontRequest?.priority ?? "None"}
       data-testid={`timeline-overlap-${frontAppointment.id}`}
       style={{
         height: item.cardHeight,
@@ -2407,13 +2552,13 @@ function TimelineOverlapGroup({
       <button
         aria-label={`${item.overlapCount} overlapping appointments. ${frontAppointment.title} ${frontAppointment.customer}`}
         aria-pressed={active}
+        data-booking-type={frontBookingType ?? "None"}
+        data-priority={frontRequest?.priority ?? "None"}
         draggable
         title={`${frontAppointment.title} | ${frontAppointment.start}-${frontAppointment.end} | ${frontAppointment.customer}${frontRequest ? ` | ${frontRequest.requestNumber}` : ""}`}
-        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
-          active
-            ? "border-cyan-100 bg-cyan-300/24 text-cyan-50 ring-2 ring-cyan-200"
-            : "border-rose-200/70 bg-rose-300/18 text-rose-50"
-        }`}
+        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${bookingPriorityCardTone(
+          frontRequest?.priority,
+        )} ${active ? "ring-2 ring-cyan-200" : ""}`}
         style={{
           height: item.cardHeight,
           left: Math.max(0, frontLeftWithinGroup),
@@ -2458,6 +2603,7 @@ function TimelineOverlapGroup({
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {frontAppointment.customer}
           {frontRequest ? ` - ${frontRequest.requestNumber}` : ""}
+          {frontBookingType ? ` · ${frontBookingType}` : ""}
         </div>
       </button>
       {open ? (
@@ -2479,15 +2625,16 @@ function TimelineOverlapGroup({
                 (candidate) => candidate.id === appointment.requestId,
               );
               const selected = appointment.id === activeAppointmentId;
+              const bookingType = appointmentBookingType(appointment, request);
               return (
                 <button
                   key={appointment.id}
                   aria-label={`${appointment.title} ${appointment.customer}`}
-                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cyan-200/60 hover:bg-cyan-300/10 ${
-                    selected
-                      ? "border-cyan-200/70 bg-cyan-300/14"
-                      : "border-white/10 bg-white/[0.035]"
-                  }`}
+                  data-booking-type={bookingType ?? "None"}
+                  data-priority={request?.priority ?? "None"}
+                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cyan-200/60 ${bookingPriorityCardTone(
+                    request?.priority,
+                  )} ${selected ? "ring-2 ring-cyan-200/70" : ""}`}
                   draggable
                   type="button"
                   onClick={() => onSelectAppointment(appointment)}
@@ -2513,6 +2660,7 @@ function TimelineOverlapGroup({
                     <span className="truncate font-mono">
                       {request?.requestNumber ??
                         (appointment.source === "outlook" ? "Outlook event" : "Calendar")}
+                      {bookingType ? ` · ${bookingType}` : ""}
                     </span>
                     <span className="rounded-full bg-rose-300/12 px-1.5 py-0.5 font-semibold text-rose-100">
                       {appointment.syncIssue ? "Conflict" : appointment.status}
@@ -2552,6 +2700,7 @@ function TimelineAppointment({
   trackWidth: number;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const bookingType = appointmentBookingType(appointment, request);
   const segments = getTimelineAppointmentSegments(appointment);
   return (
     <>
@@ -2569,16 +2718,16 @@ function TimelineAppointment({
       <button
         aria-label={`${appointment.title} ${appointment.customer}`}
         aria-pressed={active}
+        data-booking-type={bookingType ?? "None"}
+        data-priority={request?.priority ?? "None"}
         data-search-state={searchState}
         data-testid={`timeline-appointment-${appointment.id}`}
         draggable
         title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
-        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
-          active
-            ? "z-20 border-cyan-100 bg-cyan-300/22 text-cyan-50 ring-2 ring-cyan-200 shadow-[0_0_0_1px_rgba(103,232,249,0.34),0_18px_42px_rgba(8,145,178,0.22)]"
-            : warning
-              ? "z-10 border-amber-300/50 bg-amber-300/15 text-amber-50"
-              : "z-10 border-sky-300/40 bg-sky-300/12 text-sky-50"
+        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${bookingPriorityCardTone(
+          request?.priority,
+        )} ${active ? "z-20 ring-2 ring-cyan-200 shadow-[0_0_0_1px_rgba(103,232,249,0.34),0_18px_42px_rgba(8,145,178,0.22)]" : "z-10"} ${
+          warning ? "ring-1 ring-amber-200/70" : ""
         } ${
           searchState === "dimmed" ? "opacity-35 grayscale" : ""
         } ${
@@ -2613,6 +2762,7 @@ function TimelineAppointment({
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {appointment.customer}
           {request ? ` - ${request.requestNumber}` : ""}
+          {bookingType ? ` · ${bookingType}` : ""}
         </div>
       </button>
       <TravelSideExtension
@@ -2768,6 +2918,11 @@ function DetailDrawer({
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
   const helpdeskUrl = request?.helpdeskUrl;
+  const bookingType = appointment
+    ? appointmentBookingType(appointment, request)
+    : request
+      ? bookingTypeForRequest(request)
+      : undefined;
 
   return (
     <aside
@@ -2831,6 +2986,11 @@ function DetailDrawer({
         </DrawerSection>
         <DrawerSection title="Schedule and sync">
           <DetailRow label="Technician" value={technician} />
+          <DetailRow label="Booking type" value={bookingType ?? "Not set"} />
+          <DetailRow
+            label="Notes allowance"
+            value={`${appointment?.noteTimeMinutes ?? 0} minutes`}
+          />
           <DetailRow
             label="Technician mapping"
             value={request?.technicianId ? "Mapped" : "Review required"}

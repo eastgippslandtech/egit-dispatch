@@ -14,19 +14,19 @@ import TestRenderer, {
 import { Pressable } from "react-native";
 import { describe, expect, it, vi } from "vitest";
 
-import { RootNavigator } from "./_layout";
-import TabsLayout from "./(tabs)/_layout";
-import IndexRoute from "./index";
-import SignInRoute from "./sign-in";
-import { colours } from "../src/theme/tokens";
+import { RootNavigator } from "../../app/_layout";
+import TabsLayout from "../../app/(tabs)/_layout";
+import IndexRoute from "../../app/index";
+import SignInRoute from "../../app/sign-in";
 import {
   AppProviders,
   type TechnicianSession,
   useSession,
   useTechnicianRepository,
-} from "../src/providers/app-providers";
-import type { TechnicianRepository } from "../src/data/technician-repository";
-import { MOBILE_STAFF_FIXTURES } from "../src/testing/fixtures";
+} from "../providers/app-providers";
+import type { TechnicianRepository } from "../data/technician-repository";
+import { colours } from "../theme/tokens";
+import { MOBILE_STAFF_FIXTURES } from "./fixtures";
 
 const navigationHarness = vi.hoisted(() => ({
   routes: {} as Record<string, ComponentType>,

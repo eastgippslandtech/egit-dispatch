@@ -26,6 +26,7 @@ export default function SignInRoute() {
             <Image
               accessibilityLabel="Command Centre brand mark"
               accessibilityRole="image"
+              alt="Command Centre brand mark"
               source={brandMark}
               style={styles.brandMark}
             />

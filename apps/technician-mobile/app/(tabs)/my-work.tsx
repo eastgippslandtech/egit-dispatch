@@ -1,17 +1,153 @@
-import { StyleSheet, Text } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import type { MobileJob } from "../../src/contracts/mobile";
+import { JobCard } from "../../src/features/jobs/job-card";
+import { useSchedule } from "../../src/features/jobs/use-schedule";
 import { colours } from "../../src/theme/tokens";
 
+const TODAY = "2026-07-09";
+
 export default function MyWorkRoute() {
+  const schedule = useSchedule({ from: TODAY, to: "2026-08-31" });
+  const sections = buildSections(schedule.jobs);
+
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
-      <Text style={styles.placeholder}>My Work workspace</Text>
+      <View style={styles.header}>
+        <Text style={styles.eyebrow}>Assigned workload</Text>
+        <Text style={styles.title}>My Work</Text>
+        <Text style={styles.subtitle}>
+          Jobs, calendar blocks, SLA risk, and waiting items.
+        </Text>
+      </View>
+
+      {schedule.error ? <Text style={styles.error}>{schedule.error}</Text> : null}
+      {schedule.loading ? (
+        <ActivityIndicator color={colours.primary} />
+      ) : (
+        <ScrollView contentContainerStyle={styles.sections}>
+          {sections.map((section) => (
+            <View key={section.title} style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <Text style={styles.sectionCount}>{section.jobs.length}</Text>
+              </View>
+              {section.jobs.length ? (
+                section.jobs.map((job) => (
+                  <JobCard compact key={`${section.title}-${job.id}`} job={job} />
+                ))
+              ) : (
+                <Text style={styles.emptyCopy}>{section.emptyCopy}</Text>
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
+function buildSections(jobs: MobileJob[]) {
+  const activeJobs = jobs.filter((job) => job.status !== "Completed");
+  return [
+    {
+      emptyCopy: "No work is scheduled for today.",
+      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) === TODAY),
+      title: "Today",
+    },
+    {
+      emptyCopy: "No upcoming assigned jobs are waiting.",
+      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) > TODAY),
+      title: "Upcoming",
+    },
+    {
+      emptyCopy: "There is no active assigned work.",
+      jobs: activeJobs,
+      title: "Assigned to me",
+    },
+    {
+      emptyCopy: "No SLA risk items are currently assigned.",
+      jobs: activeJobs.filter(
+        (job) =>
+          job.priority === "Critical" ||
+          job.tags.some((tag) => tag.toLowerCase().includes("sla")) ||
+          Boolean(job.slaDueAt),
+      ),
+      title: "SLA risk",
+    },
+    {
+      emptyCopy: "Nothing is waiting on you right now.",
+      jobs: activeJobs.filter((job) => job.status.startsWith("Waiting on")),
+      title: "Waiting on me",
+    },
+    {
+      emptyCopy: "No recently completed jobs in this range.",
+      jobs: jobs.filter((job) => job.status === "Completed"),
+      title: "Recently completed",
+    },
+  ];
+}
+
 const styles = StyleSheet.create({
-  placeholder: { color: colours.muted, fontSize: 16 },
+  emptyCopy: {
+    color: colours.muted,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  error: {
+    color: colours.critical,
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  eyebrow: {
+    color: colours.primary,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  header: {
+    marginBottom: 18,
+  },
   screen: { backgroundColor: colours.canvas, flex: 1, padding: 20 },
+  section: {
+    backgroundColor: colours.surface,
+    borderColor: colours.border,
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 12,
+    padding: 14,
+  },
+  sectionCount: {
+    color: colours.primary,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  sectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  sectionTitle: {
+    color: colours.text,
+    fontSize: 20,
+    fontWeight: "900",
+  },
+  sections: {
+    gap: 14,
+    paddingBottom: 28,
+  },
+  subtitle: {
+    color: colours.muted,
+    fontSize: 15,
+    lineHeight: 21,
+    marginTop: 6,
+  },
+  title: {
+    color: colours.text,
+    fontSize: 34,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+  },
 });

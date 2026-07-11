@@ -25,7 +25,7 @@ const config: ExpoConfig = {
       backgroundColor: "#071526",
       foregroundImage: "./assets/brand/app-icon.png",
     },
-    permissions: ["CAMERA", "ACCESS_FINE_LOCATION"],
+    permissions: ["CAMERA", "ACCESS_FINE_LOCATION", "POST_NOTIFICATIONS"],
     package: "au.com.egit.commandcentre",
   },
   plugins: [
@@ -54,6 +54,7 @@ const config: ExpoConfig = {
           "Command Centre uses your location only when you tap Calculate ETA.",
       },
     ],
+    "expo-notifications",
   ],
   experiments: { typedRoutes: true },
 };

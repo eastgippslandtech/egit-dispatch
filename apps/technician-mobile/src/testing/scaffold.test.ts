@@ -45,8 +45,8 @@ describe("technician mobile scaffold", () => {
 
     expect(packageJson.scripts).toMatchObject({
       start: "expo start",
-      ios: "expo start --ios",
-      android: "expo start --android",
+      ios: "expo run:ios",
+      android: "expo run:android",
       typecheck: "tsc --noEmit",
       lint: "expo lint",
       test: "vitest run",

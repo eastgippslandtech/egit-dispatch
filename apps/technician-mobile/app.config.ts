@@ -2,6 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 const config: ExpoConfig = {
   name: "Command Centre",
+  owner: "eastgippslandtechs-team",
   slug: "egit-command-centre-technician",
   scheme: "egitcommand",
   version: "0.1.0",
@@ -11,6 +12,7 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: "au.com.egit.commandcentre",
     infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
         "Command Centre uses the camera only when you choose to capture job evidence.",
       NSLocationWhenInUseUsageDescription:
@@ -56,6 +58,11 @@ const config: ExpoConfig = {
     ],
     "expo-notifications",
   ],
+  extra: {
+    eas: {
+      projectId: "69887271-c3b6-435e-9184-290a27c196cd",
+    },
+  },
   experiments: { typedRoutes: true },
 };
 

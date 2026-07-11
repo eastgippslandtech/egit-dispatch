@@ -2,6 +2,7 @@ packages:
   - apps/technician-mobile
 
 allowBuilds:
+  '@shopify/react-native-skia': true
   esbuild: true
   sharp: false
   unrs-resolver: false

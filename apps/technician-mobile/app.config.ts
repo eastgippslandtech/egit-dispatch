@@ -7,11 +7,16 @@ const config: ExpoConfig = {
   version: "0.1.0",
   orientation: "portrait",
   userInterfaceStyle: "dark",
+  icon: "./assets/brand/app-icon.png",
   ios: {
     bundleIdentifier: "au.com.egit.commandcentre",
     supportsTablet: false,
   },
   android: {
+    adaptiveIcon: {
+      backgroundColor: "#071526",
+      foregroundImage: "./assets/brand/app-icon.png",
+    },
     package: "au.com.egit.commandcentre",
   },
   plugins: ["expo-font", "expo-router", "expo-secure-store", "expo-sqlite"],

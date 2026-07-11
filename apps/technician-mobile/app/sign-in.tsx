@@ -1,8 +1,19 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type ImageSourcePropType,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import brandMarkImage from "../assets/brand/app-icon.png";
 import { useSession } from "../src/providers/app-providers";
 import { colours } from "../src/theme/tokens";
+
+const brandMark: ImageSourcePropType =
+  typeof brandMarkImage === "string" ? { uri: brandMarkImage } : brandMarkImage;
 
 export default function SignInRoute() {
   const { signInWithZoho } = useSession();
@@ -11,7 +22,21 @@ export default function SignInRoute() {
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={styles.safeArea}>
       <View style={styles.content}>
         <View style={styles.identity}>
-          <Text style={styles.eyebrow}>COMMAND CENTRE</Text>
+          <View style={styles.brandLockup}>
+            <Image
+              accessibilityLabel="Command Centre brand mark"
+              accessibilityRole="image"
+              source={brandMark}
+              style={styles.brandMark}
+            />
+            <View style={styles.wordmarkGroup}>
+              <Text style={styles.eyebrow}>COMMAND CENTRE</Text>
+              <View accessibilityElementsHidden style={styles.accentLine}>
+                <View style={styles.accentOrange} />
+                <View style={styles.accentRed} />
+              </View>
+            </View>
+          </View>
           <Text accessibilityRole="header" style={styles.title}>
             Technician
           </Text>
@@ -44,6 +69,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 32,
   },
+  accentLine: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 8,
+  },
+  accentOrange: {
+    backgroundColor: colours.brandOrange,
+    borderRadius: 999,
+    height: 4,
+    width: 56,
+  },
+  accentRed: {
+    backgroundColor: colours.brandRed,
+    borderRadius: 999,
+    height: 4,
+    width: 22,
+  },
+  brandLockup: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 14,
+  },
+  brandMark: {
+    borderRadius: 20,
+    height: 76,
+    width: 76,
+  },
   description: {
     color: colours.muted,
     fontSize: 17,
@@ -52,7 +104,7 @@ const styles = StyleSheet.create({
     maxWidth: 360,
   },
   eyebrow: {
-    color: colours.cyan,
+    color: colours.text,
     fontSize: 13,
     fontWeight: "700",
     letterSpacing: 1.6,
@@ -66,7 +118,7 @@ const styles = StyleSheet.create({
   },
   signInButton: {
     alignItems: "center",
-    backgroundColor: colours.cyan,
+    backgroundColor: colours.primary,
     borderRadius: 14,
     justifyContent: "center",
     minHeight: 56,
@@ -77,7 +129,7 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   signInButtonText: {
-    color: colours.canvas,
+    color: colours.textOnWarm,
     fontSize: 17,
     fontWeight: "700",
   },
@@ -86,6 +138,9 @@ const styles = StyleSheet.create({
     fontSize: 38,
     fontWeight: "700",
     letterSpacing: -0.8,
-    marginTop: 8,
+    marginTop: 28,
+  },
+  wordmarkGroup: {
+    justifyContent: "center",
   },
 });

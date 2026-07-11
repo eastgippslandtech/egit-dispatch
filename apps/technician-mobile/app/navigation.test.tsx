@@ -18,6 +18,7 @@ import { RootNavigator } from "./_layout";
 import TabsLayout from "./(tabs)/_layout";
 import IndexRoute from "./index";
 import SignInRoute from "./sign-in";
+import { colours } from "../src/theme/tokens";
 import {
   AppProviders,
   type TechnicianSession,
@@ -29,6 +30,7 @@ import { MOBILE_STAFF_FIXTURES } from "../src/testing/fixtures";
 
 const navigationHarness = vi.hoisted(() => ({
   routes: {} as Record<string, ComponentType>,
+  tabBarActiveTintColor: "",
   tabBarStyle: {} as Record<string, unknown>,
   tabIcons: [] as ReactElement[],
 }));
@@ -36,6 +38,7 @@ const navigationHarness = vi.hoisted(() => ({
 let latestRepository: TechnicianRepository | undefined;
 
 vi.mock("react-native", () => ({
+  Image: "Image",
   Pressable: "Pressable",
   StatusBar: "StatusBar",
   StyleSheet: { create: (styles: unknown) => styles },
@@ -76,8 +79,13 @@ vi.mock("expo-router", () => {
     children,
     screenOptions,
   }: PropsWithChildren<{
-    screenOptions?: { tabBarStyle?: Record<string, unknown> };
+    screenOptions?: {
+      tabBarActiveTintColor?: string;
+      tabBarStyle?: Record<string, unknown>;
+    };
   }>) {
+    navigationHarness.tabBarActiveTintColor =
+      screenOptions?.tabBarActiveTintColor ?? "";
     navigationHarness.tabBarStyle = screenOptions?.tabBarStyle ?? {};
     return createElement(Fragment, null, children);
   }
@@ -186,6 +194,7 @@ function renderTechnicianRouter(session: TechnicianSession) {
   testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
   latestRepository = undefined;
   navigationHarness.tabBarStyle = {};
+  navigationHarness.tabBarActiveTintColor = "";
   navigationHarness.tabIcons = [];
   try {
     act(() => {
@@ -240,6 +249,11 @@ describe("technician navigation", () => {
     const rendered = renderTechnicianRouter({ status: "signed-out" });
 
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(1);
+    expect(
+      rendered.root.findAll(
+        (node) => node.props.accessibilityLabel === "Command Centre brand mark",
+      ),
+    ).toHaveLength(1);
     expect(textValues(rendered.root)).not.toContain("My Work");
     expect(redirectTarget(rendered.root)).toBe("/sign-in");
   });
@@ -295,6 +309,12 @@ describe("technician navigation", () => {
 
     expect(navigationHarness.tabBarStyle).not.toHaveProperty("height");
     expect(navigationHarness.tabBarStyle).not.toHaveProperty("paddingBottom");
+  });
+
+  it("uses the Command Centre warm accent for active tabs", () => {
+    renderTechnicianRouter(approvedRileySession);
+
+    expect(navigationHarness.tabBarActiveTintColor).toBe(colours.primary);
   });
 
   it("uses native tab icons with navigator-provided size and colour", () => {

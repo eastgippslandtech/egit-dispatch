@@ -1,3 +1,4 @@
+import { Link, type Href } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -68,7 +69,20 @@ export default function TodayRoute() {
               onRefresh={schedule.refresh}
             />
           }
-          renderItem={({ item }) => <JobCard job={item} />}
+          renderItem={({ item }) => (
+            <Link
+              asChild
+              href={`/job/${item.id}` as Href}
+            >
+              <Pressable
+                accessibilityLabel={`Open ${item.title}`}
+                accessibilityRole="button"
+                testID={`job-card-${item.id}`}
+              >
+                <JobCard job={item} />
+              </Pressable>
+            </Link>
+          )}
           contentContainerStyle={styles.listContent}
         />
       )}

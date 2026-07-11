@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  Keyboard,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 import type { MobileJob, NoteVisibility } from "../../contracts/mobile";
 import { colours } from "../../theme/tokens";
@@ -21,9 +28,13 @@ export function WorklogForm({
     <View style={styles.form}>
       <Text style={styles.title}>Work note</Text>
       <TextInput
-        accessibilityLabel="Work note"
+        accessibilityLabel="Work note input"
+        blurOnSubmit
         multiline
         onChangeText={setNote}
+        onSubmitEditing={() => Keyboard.dismiss()}
+        returnKeyType="done"
+        submitBehavior="blurAndSubmit"
         style={styles.input}
         value={note}
       />

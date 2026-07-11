@@ -49,6 +49,11 @@ vi.mock("react-native-safe-area-context", () => ({
     createElement(Fragment, null, children),
 }));
 
+vi.mock("expo-router", () => ({
+  Link: ({ children }: PropsWithChildren) =>
+    createElement(Fragment, null, children),
+}));
+
 const riley = MOBILE_STAFF_FIXTURES.find(
   (staff) => staff.email === "riley@egit.com.au",
 );

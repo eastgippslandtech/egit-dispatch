@@ -21,6 +21,7 @@ vi.mock("react-native", () => ({
     createElement(Fragment, null, children),
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
+  TextInput: "TextInput",
   View: "View",
 }));
 

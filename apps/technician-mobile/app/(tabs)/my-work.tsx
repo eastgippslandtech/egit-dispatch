@@ -1,4 +1,12 @@
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Link, type Href } from "expo-router";
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { MobileJob } from "../../src/contracts/mobile";
@@ -35,7 +43,19 @@ export default function MyWorkRoute() {
               </View>
               {section.jobs.length ? (
                 section.jobs.map((job) => (
-                  <JobCard compact key={`${section.title}-${job.id}`} job={job} />
+                  <Link
+                    asChild
+                    href={`/job/${job.id}` as Href}
+                    key={`${section.title}-${job.id}`}
+                  >
+                    <Pressable
+                      accessibilityLabel={`Open ${job.title}`}
+                      accessibilityRole="button"
+                      testID={`work-job-card-${section.title}-${job.id}`}
+                    >
+                      <JobCard compact job={job} />
+                    </Pressable>
+                  </Link>
                 ))
               ) : (
                 <Text style={styles.emptyCopy}>{section.emptyCopy}</Text>

@@ -31,6 +31,10 @@ export function RootNavigator() {
         </Stack.Protected>
         <Stack.Protected guard={isApproved}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="job/[jobId]"
+            options={{ headerBackTitle: "Jobs", title: "Job" }}
+          />
         </Stack.Protected>
       </Stack>
     </>

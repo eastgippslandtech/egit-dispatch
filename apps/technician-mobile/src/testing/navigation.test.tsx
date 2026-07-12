@@ -31,6 +31,7 @@ import { MOBILE_STAFF_FIXTURES } from "./fixtures";
 
 const navigationHarness = vi.hoisted(() => ({
   routes: {} as Record<string, ComponentType>,
+  stackOptions: {} as Record<string, Record<string, unknown>>,
   tabBarActiveTintColor: "",
   tabBarStyle: {} as Record<string, unknown>,
   tabIcons: [] as ReactElement[],
@@ -71,7 +72,14 @@ vi.mock("expo-router", () => {
   }: PropsWithChildren<{ guard: boolean }>) {
     return guard ? createElement(Fragment, null, children) : null;
   };
-  Stack.Screen = function Screen({ name }: { name: string }) {
+  Stack.Screen = function Screen({
+    name,
+    options,
+  }: {
+    name: string;
+    options?: Record<string, unknown>;
+  }) {
+    navigationHarness.stackOptions[name] = options ?? {};
     const Route = navigationHarness.routes[name];
     return Route ? createElement(Route) : null;
   };
@@ -207,6 +215,7 @@ function renderTechnicianRouter(
 
   testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
   latestRepository = undefined;
+  navigationHarness.stackOptions = {};
   navigationHarness.tabBarStyle = {};
   navigationHarness.tabBarActiveTintColor = "";
   navigationHarness.tabIcons = [];
@@ -371,5 +380,14 @@ describe("technician navigation", () => {
         size: 23,
       });
     }
+  });
+
+  it("uses a human job-detail back label instead of exposing the tabs route group", () => {
+    renderTechnicianRouter(approvedRileySession);
+
+    expect(navigationHarness.stackOptions["job/[jobId]"]).toMatchObject({
+      headerBackTitle: "Jobs",
+      title: "Job",
+    });
   });
 });

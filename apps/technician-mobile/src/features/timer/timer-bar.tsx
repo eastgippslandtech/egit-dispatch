@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { ActiveTimer } from "../../contracts/mobile";
@@ -15,12 +16,26 @@ export function TimerBar({
   onStop: () => void;
   timer: ActiveTimer;
 }) {
+  const [currentTime, setCurrentTime] = useState(now);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1_000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [timer.id, timer.startedAt]);
+
   return (
     <View style={styles.bar}>
       <View>
         <Text style={styles.label}>Timer running</Text>
         <Text style={styles.title}>{jobTitle}</Text>
-        <Text style={styles.elapsed}>{formatElapsed(elapsedSeconds(timer, now))}</Text>
+        <Text style={styles.elapsed}>
+          {formatElapsed(elapsedSeconds(timer, currentTime))}
+        </Text>
       </View>
       <Pressable
         accessibilityLabel="Stop timer"

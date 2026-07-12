@@ -23,10 +23,13 @@ export type TechnicianSession =
   | { status: "signed-out" }
   | { status: "approved"; staff: MobileStaff };
 
+export const REVIEWER_DEMO_CODE = "EGIT-REVIEW-2026";
+
 interface SessionContextValue {
   isSigningIn: boolean;
   signInError: string | null;
   session: TechnicianSession;
+  signInWithReviewerDemo: (code: string) => boolean;
   signInWithZoho: () => Promise<void>;
   signOut: () => void;
 }
@@ -135,6 +138,15 @@ export function AppProviders({
         } finally {
           setIsSigningIn(false);
         }
+      },
+      signInWithReviewerDemo: (code: string) => {
+        setSignInError(null);
+        if (code.trim() !== REVIEWER_DEMO_CODE) {
+          return false;
+        }
+
+        setSession({ status: "approved", staff: approvedMockStaff });
+        return true;
       },
       signOut: () => {
         setSignInError(null);

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
   Image,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
   type ImageSourcePropType,
 } from "react-native";
@@ -16,20 +18,60 @@ const brandMark: ImageSourcePropType =
   typeof brandMarkImage === "string" ? { uri: brandMarkImage } : brandMarkImage;
 
 export default function SignInRoute() {
-  const { isSigningIn, signInError, signInWithZoho } = useSession();
+  const {
+    isSigningIn,
+    signInError,
+    signInWithReviewerDemo,
+    signInWithZoho,
+  } = useSession();
+  const [, setReviewerTapCount] = useState(0);
+  const [isReviewerDemoVisible, setIsReviewerDemoVisible] = useState(false);
+  const [reviewerDemoCode, setReviewerDemoCode] = useState("");
+  const [reviewerDemoError, setReviewerDemoError] = useState<string | null>(
+    null,
+  );
+
+  function handleBrandPress() {
+    if (isReviewerDemoVisible) {
+      return;
+    }
+
+    setReviewerTapCount((currentCount) => {
+      const nextCount = currentCount + 1;
+      if (nextCount >= 5) {
+        setIsReviewerDemoVisible(true);
+      }
+      return nextCount;
+    });
+  }
+
+  function handleReviewerDemoOpen() {
+    if (!signInWithReviewerDemo(reviewerDemoCode)) {
+      setReviewerDemoError("Reviewer demo code not recognised.");
+      return;
+    }
+
+    setReviewerDemoError(null);
+  }
 
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={styles.safeArea}>
       <View style={styles.content}>
         <View style={styles.identity}>
           <View style={styles.brandLockup}>
-            <Image
+            <Pressable
               accessibilityLabel="Command Centre brand mark"
-              accessibilityRole="image"
-              alt="Command Centre brand mark"
-              source={brandMark}
-              style={styles.brandMark}
-            />
+              accessibilityRole="imagebutton"
+              onPress={handleBrandPress}
+            >
+              <Image
+                accessibilityElementsHidden
+                alt="Command Centre brand mark"
+                importantForAccessibility="no-hide-descendants"
+                source={brandMark}
+                style={styles.brandMark}
+              />
+            </Pressable>
             <View style={styles.wordmarkGroup}>
               <Text style={styles.eyebrow}>COMMAND CENTRE</Text>
               <View accessibilityElementsHidden style={styles.accentLine}>
@@ -68,6 +110,45 @@ export default function SignInRoute() {
           <Text accessibilityRole="alert" style={styles.errorText}>
             {signInError}
           </Text>
+        ) : null}
+        {isReviewerDemoVisible ? (
+          <View
+            accessibilityLabel="Reviewer demo access"
+            style={styles.reviewerDemoPanel}
+          >
+            <Text style={styles.reviewerDemoTitle}>Reviewer demo access</Text>
+            <Text style={styles.reviewerDemoDescription}>
+              Enter the review code supplied in App Review notes to open the
+              sandbox technician workspace.
+            </Text>
+            <TextInput
+              accessibilityLabel="Reviewer demo code"
+              autoCapitalize="characters"
+              onChangeText={setReviewerDemoCode}
+              placeholder="Review code"
+              placeholderTextColor={colours.muted}
+              style={styles.reviewerDemoInput}
+              value={reviewerDemoCode}
+            />
+            <Pressable
+              accessibilityLabel="Open reviewer demo"
+              accessibilityRole="button"
+              onPress={handleReviewerDemoOpen}
+              style={({ pressed }) => [
+                styles.reviewerDemoButton,
+                pressed && styles.signInButtonPressed,
+              ]}
+            >
+              <Text style={styles.reviewerDemoButtonText}>
+                Open reviewer demo
+              </Text>
+            </Pressable>
+            {reviewerDemoError ? (
+              <Text accessibilityRole="alert" style={styles.errorText}>
+                {reviewerDemoError}
+              </Text>
+            ) : null}
+          </View>
         ) : null}
       </View>
     </SafeAreaView>
@@ -146,6 +227,48 @@ const styles = StyleSheet.create({
   signInButtonText: {
     color: colours.textOnWarm,
     fontSize: 17,
+    fontWeight: "700",
+  },
+  reviewerDemoPanel: {
+    backgroundColor: colours.surface,
+    borderColor: colours.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 12,
+    marginTop: 16,
+    padding: 16,
+  },
+  reviewerDemoTitle: {
+    color: colours.text,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  reviewerDemoDescription: {
+    color: colours.muted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  reviewerDemoInput: {
+    borderColor: colours.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    color: colours.text,
+    fontSize: 15,
+    minHeight: 48,
+    paddingHorizontal: 14,
+  },
+  reviewerDemoButton: {
+    alignItems: "center",
+    borderColor: colours.primary,
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 16,
+  },
+  reviewerDemoButtonText: {
+    color: colours.primary,
+    fontSize: 15,
     fontWeight: "700",
   },
   errorText: {

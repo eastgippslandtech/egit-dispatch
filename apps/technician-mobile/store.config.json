@@ -2,12 +2,36 @@
   "configVersion": 0,
   "apple": {
     "version": "1.0",
+    "copyright": "2026 East Gippsland IT",
+    "categories": ["BUSINESS", "PRODUCTIVITY"],
     "release": {
       "automaticRelease": true
+    },
+    "review": {
+      "firstName": "Simeon",
+      "lastName": "Weller",
+      "email": "hello@egit.com.au",
+      "phone": "+611300492206",
+      "demoRequired": false,
+      "notes": "EGIT Command Centre is a business operations app for approved East Gippsland IT staff. The normal production sign-in path uses Zoho. For App Review, no external Zoho account is required: on the sign-in screen, tap the EGIT Command Centre app icon five times, enter review code EGIT-REVIEW-2026, then tap Open reviewer demo. This opens a sandbox technician workspace with sample jobs, notes, evidence, timers, schedule navigation, and offline sync queues. The reviewer demo mode does not access real customer or EGIT production data."
     },
     "info": {
       "en-US": {
         "title": "EGIT Command Centre",
+        "subtitle": "Field jobs for EGIT teams",
+        "description": "EGIT Command Centre gives approved East Gippsland IT technicians a focused mobile workspace for daily field operations.\n\nTechnicians can review today's schedule, open assigned jobs, record job notes, capture evidence, track time, and keep working with an offline cache when reception is poor. The app is designed for internal EGIT workflows and connects to Command Centre services using secure Zoho sign-in.\n\nKey capabilities include:\n- Today's technician schedule\n- My Work job list and job detail screens\n- Job notes, evidence capture, and timer tracking\n- Offline SQLite cache and queued updates\n- Sync status visibility for field work\n\nAccess is limited to approved East Gippsland IT staff accounts.",
+        "keywords": [
+          "EGIT",
+          "Command Centre",
+          "field service",
+          "technician",
+          "jobs",
+          "dispatch",
+          "work orders",
+          "IT support"
+        ],
+        "releaseNotes": "Initial production release for approved EGIT technicians, including job screens, schedule navigation, offline cache, mutation queue, timer persistence, and Zoho session refresh.",
+        "supportUrl": "https://egit.com.au/contact-us",
         "privacyPolicyUrl": "https://eastgippsland.tech/privacy-policy"
       }
     },

@@ -59,6 +59,7 @@ vi.mock("react-native", () => ({
   StatusBar: "StatusBar",
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
+  TextInput: "TextInput",
   View: "View",
 }));
 
@@ -314,6 +315,18 @@ function buttonsNamed(root: ReactTestInstance, name: string) {
   );
 }
 
+function elementsNamed(root: ReactTestInstance, name: string) {
+  return root.findAll((node) => node.props.accessibilityLabel === name);
+}
+
+function textFieldsNamed(root: ReactTestInstance, name: string) {
+  return root.findAll(
+    (node) =>
+      String(node.type) === "TextInput" &&
+      node.props.accessibilityLabel === name,
+  );
+}
+
 function redirectTarget(root: ReactTestInstance) {
   return root.find(
     (node) => node.props.accessibilityLabel === "Redirect target",
@@ -333,6 +346,22 @@ async function pressButtonAsync(rendered: ReactTestRenderer, name: string) {
   expect(buttons).toHaveLength(1);
   await act(async () => {
     await buttons[0].props.onPress();
+  });
+}
+
+function pressElement(rendered: ReactTestRenderer, name: string) {
+  const elements = elementsNamed(rendered.root, name);
+  expect(elements).toHaveLength(1);
+  act(() => {
+    elements[0].props.onPress();
+  });
+}
+
+function changeText(rendered: ReactTestRenderer, name: string, value: string) {
+  const fields = textFieldsNamed(rendered.root, name);
+  expect(fields).toHaveLength(1);
+  act(() => {
+    fields[0].props.onChangeText(value);
   });
 }
 
@@ -359,6 +388,35 @@ describe("technician navigation", () => {
     ).toHaveLength(1);
     expect(textValues(rendered.root)).not.toContain("My Work");
     expect(redirectTarget(rendered.root)).toBe("/sign-in");
+  });
+
+  it("unlocks a disclosed reviewer demo session after the brand gesture and review code", () => {
+    const rendered = renderTechnicianRouter({ status: "signed-out" });
+
+    for (let taps = 0; taps < 5; taps += 1) {
+      pressElement(rendered, "Command Centre brand mark");
+    }
+    changeText(rendered, "Reviewer demo code", "EGIT-REVIEW-2026");
+    pressButton(rendered, "Open reviewer demo");
+
+    expect(textValues(rendered.root)).toEqual(
+      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+    );
+    expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
+    expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("keeps reviewer demo access locked when the review code is wrong", () => {
+    const rendered = renderTechnicianRouter({ status: "signed-out" });
+
+    for (let taps = 0; taps < 5; taps += 1) {
+      pressElement(rendered, "Command Centre brand mark");
+    }
+    changeText(rendered, "Reviewer demo code", "WRONG-CODE");
+    pressButton(rendered, "Open reviewer demo");
+
+    expect(redirectTarget(rendered.root)).toBe("/sign-in");
+    expect(textValues(rendered.root)).toContain("Reviewer demo code not recognised.");
   });
 
   it("shows technician tabs when a mock session is approved", () => {

@@ -20,7 +20,7 @@ describe("native auth session", () => {
     expect(JSON.stringify(request)).not.toContain("client_secret");
   });
 
-  it("asks Zoho for an explicit consent prompt and offline refresh support", () => {
+  it("asks Zoho for offline refresh support without forcing repeated consent", () => {
     const request = buildZohoAuthorizationRequest({
       clientId: "zoho-native-client",
       redirectUri: "egitcommand://auth/callback",
@@ -29,7 +29,7 @@ describe("native auth session", () => {
     });
 
     expect(request.accessType).toBe("offline");
-    expect(request.prompt).toBe("consent");
+    expect(request.prompt).toBeUndefined();
   });
 
   it("keeps the native callback aligned with the registered iOS URL scheme", () => {

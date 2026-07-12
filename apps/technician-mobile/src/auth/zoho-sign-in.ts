@@ -60,7 +60,7 @@ export async function performZohoSignIn({
     codeChallengeMethod: AuthSession.CodeChallengeMethod.S256,
     extraParams: {
       access_type: zohoRequest.accessType,
-      prompt: zohoRequest.prompt,
+      ...(zohoRequest.prompt ? { prompt: zohoRequest.prompt } : {}),
     },
     redirectUri: zohoRequest.redirectUri,
     responseType: AuthSession.ResponseType.Code,

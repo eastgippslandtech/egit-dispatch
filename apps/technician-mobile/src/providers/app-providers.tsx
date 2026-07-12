@@ -1,11 +1,16 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type PropsWithChildren,
 } from "react";
 
+import {
+  clearMobileSession,
+  restoreMobileSession,
+} from "../auth/session-store";
 import { performZohoSignIn, type ZohoSignInResult } from "../auth/zoho-sign-in";
 import type { MobileStaff } from "../contracts/mobile";
 import { MockTechnicianRepository } from "../data/mock-technician-repository";
@@ -54,6 +59,37 @@ export function AppProviders({
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [injectedRepository] = useState(repository);
+  useEffect(() => {
+    let isMounted = true;
+
+    if (initialSession.status === "approved") {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    restoreMobileSession()
+      .then((restoredSession) => {
+        if (!isMounted || !restoredSession) {
+          return;
+        }
+
+        const restoredStaff = MOBILE_STAFF_FIXTURES.find(
+          (staff) => staff.email === restoredSession.staffEmail,
+        );
+        if (restoredStaff) {
+          setSession({ status: "approved", staff: restoredStaff });
+        }
+      })
+      .catch(() => {
+        // A failed restore should not block the normal sign-in path.
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [initialSession.status]);
+
   const effectiveStaffEmail =
     session.status === "approved"
       ? session.staff.email
@@ -85,6 +121,7 @@ export function AppProviders({
       },
       signOut: () => {
         setSignInError(null);
+        void clearMobileSession();
         setSession({ status: "signed-out" });
       },
     }),

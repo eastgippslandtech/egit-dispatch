@@ -16,7 +16,7 @@ export interface ZohoAuthorizationRequest {
   authorizationEndpoint: string;
   clientId: string;
   codeChallengeMethod: "S256";
-  prompt: "consent";
+  prompt?: "consent";
   redirectUri: string;
   responseType: "code";
   scopes: string[];
@@ -35,7 +35,6 @@ export function buildZohoAuthorizationRequest({
     authorizationEndpoint: "https://accounts.zoho.com.au/oauth/v2/auth",
     clientId,
     codeChallengeMethod: "S256",
-    prompt: "consent",
     redirectUri,
     responseType: "code",
     scopes,

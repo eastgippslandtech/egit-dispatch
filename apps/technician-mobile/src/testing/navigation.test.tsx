@@ -12,7 +12,7 @@ import TestRenderer, {
   type ReactTestRenderer,
 } from "react-test-renderer";
 import { Pressable } from "react-native";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RootNavigator } from "../../app/_layout";
 import TabsLayout from "../../app/(tabs)/_layout";
@@ -38,6 +38,13 @@ const navigationHarness = vi.hoisted(() => ({
 }));
 
 let latestRepository: TechnicianRepository | undefined;
+
+const sessionStoreMock = vi.hoisted(() => ({
+  clearMobileSession: vi.fn(),
+  restoreMobileSession: vi.fn(),
+}));
+
+vi.mock("../auth/session-store", () => sessionStoreMock);
 
 vi.mock("react-native", () => ({
   Image: "Image",
@@ -242,6 +249,50 @@ function renderTechnicianRouter(
   return rendered;
 }
 
+async function renderTechnicianRouterAsync(
+  session: TechnicianSession,
+  signInWithZoho = approvedRileyZohoSignIn,
+) {
+  let rendered: ReactTestRenderer | undefined;
+  const testGlobal = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const consoleError = vi.spyOn(console, "error").mockImplementation((message) => {
+    if (!String(message).includes("react-test-renderer is deprecated")) {
+      throw new Error(`Unexpected render error: ${String(message)}`);
+    }
+  });
+
+  testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  latestRepository = undefined;
+  navigationHarness.stackOptions = {};
+  navigationHarness.tabBarStyle = {};
+  navigationHarness.tabBarActiveTintColor = "";
+  navigationHarness.tabIcons = [];
+  try {
+    await act(async () => {
+      rendered = TestRenderer.create(
+        <AppProviders
+          initialSession={session}
+          signInWithZoho={signInWithZoho}
+        >
+          <RootNavigator />
+          <ProviderProbe />
+        </AppProviders>,
+      );
+      await Promise.resolve();
+    });
+  } finally {
+    consoleError.mockRestore();
+  }
+
+  if (!rendered) {
+    throw new Error("The technician router did not render.");
+  }
+
+  return rendered;
+}
+
 function textValues(root: ReactTestInstance) {
   return root
     .findAll((node) => String(node.type) === "Text")
@@ -279,6 +330,12 @@ async function pressButtonAsync(rendered: ReactTestRenderer, name: string) {
 }
 
 describe("technician navigation", () => {
+  beforeEach(() => {
+    sessionStoreMock.clearMobileSession.mockReset();
+    sessionStoreMock.restoreMobileSession.mockReset();
+    sessionStoreMock.restoreMobileSession.mockResolvedValue(null);
+  });
+
   it("shows the native Zoho sign-in command when signed out", () => {
     const rendered = renderTechnicianRouter({ status: "signed-out" });
 
@@ -315,11 +372,31 @@ describe("technician navigation", () => {
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
 
+  it("restores the saved mobile session without asking for Zoho again", async () => {
+    sessionStoreMock.restoreMobileSession.mockResolvedValue({
+      accessToken: "access-riley",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      refreshToken: "refresh-riley",
+      staffEmail: riley.email,
+    });
+    const signInWithZoho = vi.fn(approvedRileyZohoSignIn);
+
+    const rendered = await renderTechnicianRouterAsync(
+      { status: "signed-out" },
+      signInWithZoho,
+    );
+
+    expect(signInWithZoho).not.toHaveBeenCalled();
+    expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
+    expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
   it("returns to signed-out protection when the session signs out", () => {
     const rendered = renderTechnicianRouter(approvedRileySession);
 
     pressButton(rendered, "Test sign out");
 
+    expect(sessionStoreMock.clearMobileSession).toHaveBeenCalledTimes(1);
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(1);
     expect(textValues(rendered.root)).not.toContain("My Work");
     expect(redirectTarget(rendered.root)).toBe("/sign-in");

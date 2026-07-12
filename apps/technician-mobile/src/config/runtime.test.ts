@@ -9,6 +9,12 @@ describe("mobile runtime config", () => {
     );
   });
 
+  it("keeps production Zoho sign-in configured with the public client ID", () => {
+    expect(
+      getMobileRuntimeConfig({}, { isDevelopment: false }).zohoClientId,
+    ).toBe("1000.JW3AY19TI2SGLRCGOWJ1TSUW6T681P");
+  });
+
   it("does not allow mock auth in production builds", () => {
     expect(
       getMobileRuntimeConfig(

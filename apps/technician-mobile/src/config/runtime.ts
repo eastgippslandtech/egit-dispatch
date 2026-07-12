@@ -1,5 +1,6 @@
 const DEFAULT_API_BASE_URL = "https://command.egit.com.au";
 const DEFAULT_AUTH_MODE = "zoho";
+const DEFAULT_ZOHO_CLIENT_ID = "1000.JW3AY19TI2SGLRCGOWJ1TSUW6T681P";
 
 export interface MobileRuntimeConfig {
   apiBaseUrl: string;
@@ -25,7 +26,8 @@ export function getMobileRuntimeConfig(
     mobileApiBaseUrl: apiBaseUrl.endsWith("/api/mobile/v1")
       ? apiBaseUrl
       : `${apiBaseUrl}/api/mobile/v1`,
-    zohoClientId: env.EXPO_PUBLIC_ZOHO_CLIENT_ID?.trim() ?? "",
+    zohoClientId:
+      env.EXPO_PUBLIC_ZOHO_CLIENT_ID?.trim() || DEFAULT_ZOHO_CLIENT_ID,
   };
 }
 

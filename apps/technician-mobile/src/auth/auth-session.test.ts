@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildZohoAuthorizationRequest } from "./auth-session";
+import {
+  MOBILE_AUTH_REDIRECT_URI,
+  buildZohoAuthorizationRequest,
+} from "./auth-session";
 
 describe("native auth session", () => {
   it("uses authorization code with PKCE S256 and no client secret", () => {
@@ -26,5 +29,9 @@ describe("native auth session", () => {
 
     expect(request.accessType).toBe("offline");
     expect(request.prompt).toBe("consent");
+  });
+
+  it("keeps the native callback aligned with the registered iOS URL scheme", () => {
+    expect(MOBILE_AUTH_REDIRECT_URI).toBe("egitcommand://auth/callback");
   });
 });

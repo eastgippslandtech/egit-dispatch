@@ -1,13 +1,18 @@
+import * as WebBrowser from "expo-web-browser";
+
 import type { MobileStaff } from "../contracts/mobile";
 import { getMobileRuntimeConfig } from "../config/runtime";
 import { MOBILE_STAFF_FIXTURES } from "../testing/fixtures";
 
 import {
+  MOBILE_AUTH_REDIRECT_URI,
   buildAuthExchangePayload,
   buildZohoAuthorizationRequest,
 } from "./auth-session";
 import type { MobileSession } from "./session-store";
 import { saveMobileSession } from "./session-store";
+
+WebBrowser.maybeCompleteAuthSession();
 
 export interface ZohoSignInResult {
   session: MobileSession;
@@ -42,7 +47,7 @@ export async function performZohoSignIn({
   }
 
   const AuthSession = await import("expo-auth-session");
-  const redirectUri = "egitcommand://auth/callback";
+  const redirectUri = MOBILE_AUTH_REDIRECT_URI;
   const zohoRequest = buildZohoAuthorizationRequest({
     clientId: config.zohoClientId,
     redirectUri,

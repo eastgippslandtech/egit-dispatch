@@ -1,3 +1,5 @@
+export const MOBILE_AUTH_REDIRECT_URI = "egitcommand://auth/callback";
+
 export interface ZohoAuthorizationRequestInput {
   clientId: string;
   redirectUri: string;

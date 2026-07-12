@@ -5,7 +5,7 @@ import {
   type ReactNode,
 } from "react";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import MyWorkRoute from "../../../app/(tabs)/my-work";
 import TodayRoute from "../../../app/(tabs)/today";
@@ -110,7 +110,17 @@ function indexOfText(rendered: ReactTestRenderer, value: string) {
 }
 
 describe("native schedule screens", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-12T01:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows only Riley's chronological jobs for the selected day", async () => {
+    vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
     const rendered = await renderScreen("today");
 
     expect(indexOfText(rendered, "Firewall firmware window")).toBeLessThan(
@@ -120,6 +130,7 @@ describe("native schedule screens", () => {
   });
 
   it("labels Outlook-only events as read-only", async () => {
+    vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
     const rendered = await renderScreen("today");
 
     expect(textValues(rendered)).toContain("Outlook Read Only");
@@ -128,7 +139,80 @@ describe("native schedule screens", () => {
     );
   });
 
+  it("starts the Today screen on the real current day", async () => {
+    const rendered = await renderScreen("today");
+    const texts = textValues(rendered);
+
+    expect(texts).toContain("Today");
+    expect(texts).toContain("Sunday, 12 July");
+    expect(texts).not.toContain("Thursday, 9 July");
+  });
+
+  it("can move forward to tomorrow and keeps that date selected", async () => {
+    const rendered = await renderScreen("today");
+    const nextButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Next day",
+    );
+
+    await act(async () => {
+      nextButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    const texts = textValues(rendered);
+    expect(texts).toContain("Tomorrow");
+    expect(texts).toContain("Monday, 13 July");
+  });
+
+  it("can move backward to yesterday and keeps that date selected", async () => {
+    const rendered = await renderScreen("today");
+    const previousButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Previous day",
+    );
+
+    await act(async () => {
+      previousButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    const texts = textValues(rendered);
+    expect(texts).toContain("Yesterday");
+    expect(texts).toContain("Saturday, 11 July");
+  });
+
+  it("shows a Today button away from today and returns to the current schedule", async () => {
+    const rendered = await renderScreen("today");
+    const nextButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Next day",
+    );
+
+    expect(
+      rendered.root.findAll(
+        (node) => node.props.accessibilityLabel === "Show today's schedule",
+      ),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      nextButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    const todayButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Show today's schedule",
+    );
+
+    await act(async () => {
+      todayButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    const texts = textValues(rendered);
+    expect(texts).toContain("Today");
+    expect(texts).toContain("Sunday, 12 July");
+  });
+
   it("groups My Work into operational workload sections", async () => {
+    vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
     const rendered = await renderScreen("my-work");
     const texts = textValues(rendered);
 

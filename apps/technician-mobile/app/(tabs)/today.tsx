@@ -13,33 +13,51 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { JobCard } from "../../src/features/jobs/job-card";
 import { useSchedule } from "../../src/features/jobs/use-schedule";
+import {
+  displayDateLabel,
+  relativeDateTitle,
+  shiftDateKey,
+  todayDateKey,
+} from "../../src/features/schedule/date-keys";
 import { colours } from "../../src/theme/tokens";
 
 export default function TodayRoute() {
-  const [selectedDate, setSelectedDate] = useState("2026-07-09");
+  const today = todayDateKey();
+  const [selectedDate, setSelectedDate] = useState(today);
   const schedule = useSchedule({ from: selectedDate, to: selectedDate });
+  const isToday = selectedDate === today;
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>Field schedule</Text>
-          <Text style={styles.title}>Today</Text>
-          <Text style={styles.subtitle}>{displayDate(selectedDate)}</Text>
+          <Text style={styles.title}>{relativeDateTitle(selectedDate)}</Text>
+          <Text style={styles.subtitle}>{displayDateLabel(selectedDate)}</Text>
         </View>
         <View style={styles.dateControls}>
           <Pressable
             accessibilityLabel="Previous day"
             accessibilityRole="button"
-            onPress={() => setSelectedDate(shiftDate(selectedDate, -1))}
+            onPress={() => setSelectedDate((date) => shiftDateKey(date, -1))}
             style={styles.dateButton}
           >
             <Text style={styles.dateButtonText}>‹</Text>
           </Pressable>
+          {!isToday ? (
+            <Pressable
+              accessibilityLabel="Show today's schedule"
+              accessibilityRole="button"
+              onPress={() => setSelectedDate(todayDateKey())}
+              style={styles.todayButton}
+            >
+              <Text style={styles.todayButtonText}>Today</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityLabel="Next day"
             accessibilityRole="button"
-            onPress={() => setSelectedDate(shiftDate(selectedDate, 1))}
+            onPress={() => setSelectedDate((date) => shiftDateKey(date, 1))}
             style={styles.dateButton}
           >
             <Text style={styles.dateButtonText}>›</Text>
@@ -88,21 +106,6 @@ export default function TodayRoute() {
       )}
     </SafeAreaView>
   );
-}
-
-function shiftDate(date: string, days: number): string {
-  const next = new Date(`${date}T00:00:00+10:00`);
-  next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
-}
-
-function displayDate(date: string): string {
-  return new Intl.DateTimeFormat("en-AU", {
-    day: "numeric",
-    month: "long",
-    timeZone: "Australia/Melbourne",
-    weekday: "long",
-  }).format(new Date(`${date}T00:00:00+10:00`));
 }
 
 const styles = StyleSheet.create({
@@ -179,5 +182,18 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontWeight: "900",
     letterSpacing: -0.6,
+  },
+  todayButton: {
+    alignItems: "center",
+    backgroundColor: colours.primary,
+    borderRadius: 18,
+    height: 44,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  todayButtonText: {
+    color: colours.textOnWarm,
+    fontSize: 14,
+    fontWeight: "900",
   },
 });

@@ -12,13 +12,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { MobileJob } from "../../src/contracts/mobile";
 import { JobCard } from "../../src/features/jobs/job-card";
 import { useSchedule } from "../../src/features/jobs/use-schedule";
+import { todayDateKey } from "../../src/features/schedule/date-keys";
 import { colours } from "../../src/theme/tokens";
 
-const TODAY = "2026-07-09";
-
 export default function MyWorkRoute() {
-  const schedule = useSchedule({ from: TODAY, to: "2026-08-31" });
-  const sections = buildSections(schedule.jobs);
+  const today = todayDateKey();
+  const schedule = useSchedule({ from: today, to: "2026-08-31" });
+  const sections = buildSections(schedule.jobs, today);
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -68,17 +68,17 @@ export default function MyWorkRoute() {
   );
 }
 
-function buildSections(jobs: MobileJob[]) {
+function buildSections(jobs: MobileJob[], today: string) {
   const activeJobs = jobs.filter((job) => job.status !== "Completed");
   return [
     {
       emptyCopy: "No work is scheduled for today.",
-      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) === TODAY),
+      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) === today),
       title: "Today",
     },
     {
       emptyCopy: "No upcoming assigned jobs are waiting.",
-      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) > TODAY),
+      jobs: activeJobs.filter((job) => job.startAt.slice(0, 10) > today),
       title: "Upcoming",
     },
     {

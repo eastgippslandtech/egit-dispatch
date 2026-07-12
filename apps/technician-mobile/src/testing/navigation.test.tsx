@@ -42,9 +42,16 @@ let latestRepository: TechnicianRepository | undefined;
 const sessionStoreMock = vi.hoisted(() => ({
   clearMobileSession: vi.fn(),
   restoreMobileSession: vi.fn(),
+  saveMobileSession: vi.fn(),
 }));
 
 vi.mock("../auth/session-store", () => sessionStoreMock);
+
+const sessionRefreshMock = vi.hoisted(() => ({
+  refreshMobileSession: vi.fn(),
+}));
+
+vi.mock("../auth/session-refresh", () => sessionRefreshMock);
 
 vi.mock("react-native", () => ({
   Image: "Image",
@@ -333,7 +340,12 @@ describe("technician navigation", () => {
   beforeEach(() => {
     sessionStoreMock.clearMobileSession.mockReset();
     sessionStoreMock.restoreMobileSession.mockReset();
+    sessionStoreMock.saveMobileSession.mockReset();
     sessionStoreMock.restoreMobileSession.mockResolvedValue(null);
+    sessionRefreshMock.refreshMobileSession.mockReset();
+    sessionRefreshMock.refreshMobileSession.mockImplementation((session) =>
+      Promise.resolve(session),
+    );
   });
 
   it("shows the native Zoho sign-in command when signed out", () => {
@@ -373,12 +385,14 @@ describe("technician navigation", () => {
   });
 
   it("restores the saved mobile session without asking for Zoho again", async () => {
-    sessionStoreMock.restoreMobileSession.mockResolvedValue({
+    const restoredSession = {
       accessToken: "access-riley",
       expiresAt: "2030-01-01T00:00:00.000Z",
       refreshToken: "refresh-riley",
       staffEmail: riley.email,
-    });
+    };
+    sessionStoreMock.restoreMobileSession.mockResolvedValue(restoredSession);
+    sessionRefreshMock.refreshMobileSession.mockResolvedValue(restoredSession);
     const signInWithZoho = vi.fn(approvedRileyZohoSignIn);
 
     const rendered = await renderTechnicianRouterAsync(
@@ -389,6 +403,60 @@ describe("technician navigation", () => {
     expect(signInWithZoho).not.toHaveBeenCalled();
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("refreshes an expired saved mobile session without asking for Zoho again", async () => {
+    const restoredSession = {
+      accessToken: "old-access-riley",
+      expiresAt: "2026-07-12T05:00:00.000Z",
+      refreshToken: "refresh-riley",
+      staffEmail: riley.email,
+    };
+    const refreshedSession = {
+      accessToken: "new-access-riley",
+      expiresAt: "2026-07-12T06:00:00.000Z",
+      refreshToken: "new-refresh-riley",
+      staffEmail: riley.email,
+    };
+    sessionStoreMock.restoreMobileSession.mockResolvedValue(restoredSession);
+    sessionRefreshMock.refreshMobileSession.mockResolvedValue(refreshedSession);
+    const signInWithZoho = vi.fn(approvedRileyZohoSignIn);
+
+    const rendered = await renderTechnicianRouterAsync(
+      { status: "signed-out" },
+      signInWithZoho,
+    );
+
+    expect(signInWithZoho).not.toHaveBeenCalled();
+    expect(sessionRefreshMock.refreshMobileSession).toHaveBeenCalledWith(
+      restoredSession,
+    );
+    expect(sessionStoreMock.saveMobileSession).toHaveBeenCalledWith(
+      refreshedSession,
+    );
+    expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
+    expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("clears a saved mobile session when the refresh token has expired", async () => {
+    sessionStoreMock.restoreMobileSession.mockResolvedValue({
+      accessToken: "old-access-riley",
+      expiresAt: "2026-07-12T05:00:00.000Z",
+      refreshToken: "expired-refresh-riley",
+      staffEmail: riley.email,
+    });
+    sessionRefreshMock.refreshMobileSession.mockResolvedValue(null);
+    const signInWithZoho = vi.fn(approvedRileyZohoSignIn);
+
+    const rendered = await renderTechnicianRouterAsync(
+      { status: "signed-out" },
+      signInWithZoho,
+    );
+
+    expect(signInWithZoho).not.toHaveBeenCalled();
+    expect(sessionStoreMock.clearMobileSession).toHaveBeenCalledTimes(1);
+    expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(1);
+    expect(redirectTarget(rendered.root)).toBe("/sign-in");
   });
 
   it("returns to signed-out protection when the session signs out", () => {

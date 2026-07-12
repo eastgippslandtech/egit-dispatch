@@ -10,7 +10,9 @@ import {
 import {
   clearMobileSession,
   restoreMobileSession,
+  saveMobileSession,
 } from "../auth/session-store";
+import { refreshMobileSession } from "../auth/session-refresh";
 import { performZohoSignIn, type ZohoSignInResult } from "../auth/zoho-sign-in";
 import type { MobileStaff } from "../contracts/mobile";
 import { MockTechnicianRepository } from "../data/mock-technician-repository";
@@ -74,12 +76,27 @@ export function AppProviders({
           return;
         }
 
-        const restoredStaff = MOBILE_STAFF_FIXTURES.find(
-          (staff) => staff.email === restoredSession.staffEmail,
-        );
-        if (restoredStaff) {
-          setSession({ status: "approved", staff: restoredStaff });
-        }
+        return refreshMobileSession(restoredSession).then((currentSession) => {
+          if (!isMounted) {
+            return;
+          }
+
+          if (!currentSession) {
+            void clearMobileSession();
+            return;
+          }
+
+          if (currentSession !== restoredSession) {
+            void saveMobileSession(currentSession);
+          }
+
+          const restoredStaff = MOBILE_STAFF_FIXTURES.find(
+            (staff) => staff.email === currentSession.staffEmail,
+          );
+          if (restoredStaff) {
+            setSession({ status: "approved", staff: restoredStaff });
+          }
+        });
       })
       .catch(() => {
         // A failed restore should not block the normal sign-in path.

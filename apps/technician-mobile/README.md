@@ -10,7 +10,7 @@ pnpm --dir apps/technician-mobile ios
 pnpm --dir apps/technician-mobile android
 ```
 
-The simulator build uses deterministic mock technician data by default so Today, My Work, Sync, Profile, job detail, timers, work notes, Outlook read-only handling, evidence, parts, sign-off, ETA, and offline queue behaviours can be exercised without production credentials.
+The simulator build can use deterministic mock technician data by setting `EXPO_PUBLIC_AUTH_MODE=mock` in a local-only environment. Production and TestFlight builds always fail closed to Zoho sign-in so they cannot silently enter the Riley mock session.
 
 ## Quality gate
 

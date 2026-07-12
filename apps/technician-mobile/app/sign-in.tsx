@@ -16,7 +16,7 @@ const brandMark: ImageSourcePropType =
   typeof brandMarkImage === "string" ? { uri: brandMarkImage } : brandMarkImage;
 
 export default function SignInRoute() {
-  const { signInWithZoho } = useSession();
+  const { isSigningIn, signInError, signInWithZoho } = useSession();
 
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={styles.safeArea}>
@@ -47,17 +47,28 @@ export default function SignInRoute() {
         </View>
 
         <Pressable
-          accessibilityHint="Signs in with the approved mock technician session"
+          accessibilityHint="Opens Zoho so you can choose and approve your EGIT account"
           accessibilityLabel="Sign in with Zoho"
           accessibilityRole="button"
-          onPress={signInWithZoho}
+          disabled={isSigningIn}
+          onPress={() => {
+            void signInWithZoho();
+          }}
           style={({ pressed }) => [
             styles.signInButton,
+            isSigningIn && styles.signInButtonDisabled,
             pressed && styles.signInButtonPressed,
           ]}
         >
-          <Text style={styles.signInButtonText}>Sign in with Zoho</Text>
+          <Text style={styles.signInButtonText}>
+            {isSigningIn ? "Opening Zoho…" : "Sign in with Zoho"}
+          </Text>
         </Pressable>
+        {signInError ? (
+          <Text accessibilityRole="alert" style={styles.errorText}>
+            {signInError}
+          </Text>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -129,10 +140,20 @@ const styles = StyleSheet.create({
   signInButtonPressed: {
     opacity: 0.8,
   },
+  signInButtonDisabled: {
+    opacity: 0.6,
+  },
   signInButtonText: {
     color: colours.textOnWarm,
     fontSize: 17,
     fontWeight: "700",
+  },
+  errorText: {
+    color: colours.critical,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 12,
+    textAlign: "center",
   },
   title: {
     color: colours.text,

@@ -1,4 +1,5 @@
-import { getMobileJob, rileyMobileAuth } from "@/server/mobile-api/service";
+import { requireMobileAuth } from "@/server/mobile-api/auth";
+import { getMobileJob } from "@/server/mobile-api/service";
 import { mobileError, mobileOk } from "@/server/mobile-api/responses";
 
 export async function GET(
@@ -8,14 +9,14 @@ export async function GET(
   try {
     return mobileOk(
       await getMobileJob({
-        auth: rileyMobileAuth,
+        auth: requireMobileAuth(_request),
         jobId: (await params).jobId,
       }),
     );
   } catch (error) {
     return mobileError(
       statusFrom(error),
-      "NOT_FOUND",
+      codeFrom(error),
       error instanceof Error ? error.message : "Mobile job was not found.",
     );
   }
@@ -28,4 +29,13 @@ function statusFrom(error: unknown): number {
     typeof error.status === "number"
     ? error.status
     : 500;
+}
+
+function codeFrom(error: unknown): "NOT_FOUND" | "UNAUTHORIZED" {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "UNAUTHORIZED"
+    ? "UNAUTHORIZED"
+    : "NOT_FOUND";
 }

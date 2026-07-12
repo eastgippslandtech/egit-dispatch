@@ -6,6 +6,7 @@ import {
   type PropsWithChildren,
 } from "react";
 
+import { performZohoSignIn, type ZohoSignInResult } from "../auth/zoho-sign-in";
 import type { MobileStaff } from "../contracts/mobile";
 import { MockTechnicianRepository } from "../data/mock-technician-repository";
 import type { TechnicianRepository } from "../data/technician-repository";
@@ -16,14 +17,17 @@ export type TechnicianSession =
   | { status: "approved"; staff: MobileStaff };
 
 interface SessionContextValue {
+  isSigningIn: boolean;
+  signInError: string | null;
   session: TechnicianSession;
-  signInWithZoho: () => void;
+  signInWithZoho: () => Promise<void>;
   signOut: () => void;
 }
 
 interface AppProvidersProps extends PropsWithChildren {
   initialSession?: TechnicianSession;
   repository?: TechnicianRepository;
+  signInWithZoho?: () => Promise<ZohoSignInResult>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -44,8 +48,11 @@ export function AppProviders({
   children,
   initialSession = { status: "signed-out" },
   repository,
+  signInWithZoho = performZohoSignIn,
 }: AppProvidersProps) {
   const [session, setSession] = useState<TechnicianSession>(initialSession);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const [injectedRepository] = useState(repository);
   const effectiveStaffEmail =
     session.status === "approved"
@@ -59,12 +66,29 @@ export function AppProviders({
   );
   const sessionValue = useMemo<SessionContextValue>(
     () => ({
+      isSigningIn,
+      signInError,
       session,
-      signInWithZoho: () =>
-        setSession({ status: "approved", staff: approvedMockStaff }),
-      signOut: () => setSession({ status: "signed-out" }),
+      signInWithZoho: async () => {
+        setIsSigningIn(true);
+        setSignInError(null);
+        try {
+          const result = await signInWithZoho();
+          setSession({ status: "approved", staff: result.staff });
+        } catch (error) {
+          setSignInError(
+            error instanceof Error ? error.message : "Zoho sign-in failed.",
+          );
+        } finally {
+          setIsSigningIn(false);
+        }
+      },
+      signOut: () => {
+        setSignInError(null);
+        setSession({ status: "signed-out" });
+      },
     }),
-    [session],
+    [isSigningIn, session, signInError, signInWithZoho],
   );
 
   return (
@@ -93,3 +117,5 @@ export function useSession(): SessionContextValue {
   }
   return session;
 }
+
+export type { ZohoSignInResult };

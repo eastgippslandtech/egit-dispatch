@@ -96,7 +96,7 @@ describe("technician mobile scaffold", () => {
 
     const env = readFileSync(envPath, "utf8");
     expect(env).toContain("EXPO_PUBLIC_API_BASE_URL=https://command.egit.com.au");
-    expect(env).toContain("EXPO_PUBLIC_AUTH_MODE=mock");
+    expect(env).toContain("EXPO_PUBLIC_AUTH_MODE=zoho");
     expect(env).toContain("EXPO_PUBLIC_ZOHO_CLIENT_ID=");
     expect(env).not.toMatch(/SECRET/i);
   });

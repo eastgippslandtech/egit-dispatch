@@ -21,6 +21,7 @@ import SignInRoute from "../../app/sign-in";
 import {
   AppProviders,
   type TechnicianSession,
+  type ZohoSignInResult,
   useSession,
   useTechnicianRepository,
 } from "../providers/app-providers";
@@ -151,6 +152,16 @@ const approvedRileySession: TechnicianSession = {
   staff: riley,
 };
 
+const approvedRileyZohoSignIn = async (): Promise<ZohoSignInResult> => ({
+  session: {
+    accessToken: "access-riley",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+    refreshToken: "refresh-riley",
+    staffEmail: riley.email,
+  },
+  staff: riley,
+});
+
 const matt = MOBILE_STAFF_FIXTURES.find(
   (staff) => staff.email === "mattd@egit.com.au",
 );
@@ -180,7 +191,10 @@ function ProviderProbe() {
   );
 }
 
-function renderTechnicianRouter(session: TechnicianSession) {
+function renderTechnicianRouter(
+  session: TechnicianSession,
+  signInWithZoho = approvedRileyZohoSignIn,
+) {
   let rendered: ReactTestRenderer | undefined;
   const testGlobal = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -199,7 +213,10 @@ function renderTechnicianRouter(session: TechnicianSession) {
   try {
     act(() => {
       rendered = TestRenderer.create(
-        <AppProviders initialSession={session}>
+        <AppProviders
+          initialSession={session}
+          signInWithZoho={signInWithZoho}
+        >
           <RootNavigator />
           <ProviderProbe />
         </AppProviders>,
@@ -244,6 +261,14 @@ function pressButton(rendered: ReactTestRenderer, name: string) {
   });
 }
 
+async function pressButtonAsync(rendered: ReactTestRenderer, name: string) {
+  const buttons = buttonsNamed(rendered.root, name);
+  expect(buttons).toHaveLength(1);
+  await act(async () => {
+    await buttons[0].props.onPress();
+  });
+}
+
 describe("technician navigation", () => {
   it("shows the native Zoho sign-in command when signed out", () => {
     const rendered = renderTechnicianRouter({ status: "signed-out" });
@@ -269,10 +294,10 @@ describe("technician navigation", () => {
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
 
-  it("moves from the Zoho action into the protected technician tabs", () => {
+  it("moves from the Zoho action into the protected technician tabs", async () => {
     const rendered = renderTechnicianRouter({ status: "signed-out" });
 
-    pressButton(rendered, "Sign in with Zoho");
+    await pressButtonAsync(rendered, "Sign in with Zoho");
 
     expect(textValues(rendered.root)).toEqual(
       expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
@@ -291,17 +316,28 @@ describe("technician navigation", () => {
     expect(redirectTarget(rendered.root)).toBe("/sign-in");
   });
 
-  it("selects Riley's repository after Matt signs out and signs in", async () => {
-    const rendered = renderTechnicianRouter({ status: "approved", staff: matt });
+  it("uses the Zoho-approved staff after sign-in instead of defaulting to Riley", async () => {
+    const rendered = renderTechnicianRouter(
+      { status: "approved", staff: riley },
+      async () => ({
+        session: {
+          accessToken: "access-matt",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+          refreshToken: "refresh-matt",
+          staffEmail: matt.email,
+        },
+        staff: matt,
+      }),
+    );
 
     pressButton(rendered, "Test sign out");
-    pressButton(rendered, "Sign in with Zoho");
+    await pressButtonAsync(rendered, "Sign in with Zoho");
 
     if (!latestRepository) {
       throw new Error("The repository probe did not receive a repository.");
     }
     const currentStaff = await latestRepository.getCurrentStaff();
-    expect(currentStaff.email).toBe("riley@egit.com.au");
+    expect(currentStaff.email).toBe("mattd@egit.com.au");
   });
 
   it("leaves native tab sizing to the inset-aware navigator", () => {

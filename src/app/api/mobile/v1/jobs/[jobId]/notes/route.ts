@@ -1,4 +1,5 @@
-import { saveMobileWorklog, rileyMobileAuth } from "@/server/mobile-api/service";
+import { requireMobileAuth } from "@/server/mobile-api/auth";
+import { saveMobileWorklog } from "@/server/mobile-api/service";
 import { mobileError, mobileOk } from "@/server/mobile-api/responses";
 
 export async function POST(
@@ -8,7 +9,7 @@ export async function POST(
   try {
     return mobileOk(
       await saveMobileWorklog({
-        auth: rileyMobileAuth,
+        auth: requireMobileAuth(request),
         command: await request.json(),
         jobId: (await params).jobId,
       }),
@@ -31,11 +32,18 @@ function statusFrom(error: unknown): number {
     : 500;
 }
 
-function codeFrom(error: unknown): "BAD_REQUEST" | "READ_ONLY_SOURCE" {
+function codeFrom(
+  error: unknown,
+): "BAD_REQUEST" | "READ_ONLY_SOURCE" | "UNAUTHORIZED" {
   return typeof error === "object" &&
     error !== null &&
     "code" in error &&
     error.code === "READ_ONLY_SOURCE"
     ? "READ_ONLY_SOURCE"
+    : typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "UNAUTHORIZED"
+      ? "UNAUTHORIZED"
     : "BAD_REQUEST";
 }

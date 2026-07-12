@@ -15,4 +15,16 @@ describe("native auth session", () => {
     expect(request.codeChallengeMethod).toBe("S256");
     expect(JSON.stringify(request)).not.toContain("client_secret");
   });
+
+  it("asks Zoho for an explicit consent prompt and offline refresh support", () => {
+    const request = buildZohoAuthorizationRequest({
+      clientId: "zoho-native-client",
+      redirectUri: "egitcommand://auth/callback",
+      scopes: ["AaaServer.profile.READ"],
+      state: "state-1",
+    });
+
+    expect(request.accessType).toBe("offline");
+    expect(request.prompt).toBe("consent");
+  });
 });

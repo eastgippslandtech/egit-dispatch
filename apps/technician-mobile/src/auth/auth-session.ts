@@ -6,9 +6,11 @@ export interface ZohoAuthorizationRequestInput {
 }
 
 export interface ZohoAuthorizationRequest {
+  accessType: "offline";
   authorizationEndpoint: string;
   clientId: string;
   codeChallengeMethod: "S256";
+  prompt: "consent";
   redirectUri: string;
   responseType: "code";
   scopes: string[];
@@ -23,9 +25,11 @@ export function buildZohoAuthorizationRequest({
   state,
 }: ZohoAuthorizationRequestInput): ZohoAuthorizationRequest {
   return {
+    accessType: "offline",
     authorizationEndpoint: "https://accounts.zoho.com.au/oauth/v2/auth",
     clientId,
     codeChallengeMethod: "S256",
+    prompt: "consent",
     redirectUri,
     responseType: "code",
     scopes,

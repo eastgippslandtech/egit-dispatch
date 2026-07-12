@@ -225,4 +225,24 @@ describe("native schedule screens", () => {
     expect(texts).toContain("Remote payroll support");
     expect(texts).not.toContain("File server disk expansion");
   });
+
+  it("makes My Work section counts large and obvious inside each section", async () => {
+    vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
+    const rendered = await renderScreen("my-work");
+
+    const countBadges = rendered.root.findAll(
+      (node) =>
+        String(node.type) === "Text" &&
+        /^\d+$/.test(node.children.join("")) &&
+        node.props.style?.minWidth >= 56,
+    );
+
+    expect(countBadges).toHaveLength(6);
+    for (const badge of countBadges) {
+      expect(badge.props.style).toMatchObject({
+        fontSize: 34,
+        textAlign: "center",
+      });
+    }
+  });
 });

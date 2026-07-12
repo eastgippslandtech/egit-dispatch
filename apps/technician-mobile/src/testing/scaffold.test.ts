@@ -20,7 +20,7 @@ describe("technician mobile scaffold", () => {
     );
 
     expect(exp).toMatchObject({
-      name: "Command Centre",
+      name: "EGIT Command Centre",
       slug: "egit-command-centre-technician",
       scheme: "egitcommand",
       version: "0.1.0",

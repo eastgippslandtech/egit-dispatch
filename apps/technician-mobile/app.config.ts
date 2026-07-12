@@ -1,7 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
 const config: ExpoConfig = {
-  name: "Command Centre",
+  name: "EGIT Command Centre",
   owner: "eastgippslandtechs-team",
   slug: "egit-command-centre-technician",
   scheme: "egitcommand",

@@ -177,6 +177,7 @@ export interface MutationReceipt {
 export type StartTimerCommand = MutationEnvelope;
 
 export interface StopTimerCommand extends MutationEnvelope {
+  startedAt?: string;
   timerId: string;
 }
 

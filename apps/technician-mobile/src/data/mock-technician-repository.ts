@@ -98,7 +98,8 @@ export class MockTechnicianRepository implements TechnicianRepository {
     if (replay) return replay;
 
     this.requireWritableCommand(command);
-    const timer = this.activeTimer;
+    const timer =
+      this.activeTimer ?? this.restoredTimerFromStopCommand(command);
     if (
       !timer ||
       timer.id !== command.timerId ||
@@ -127,6 +128,24 @@ export class MockTechnicianRepository implements TechnicianRepository {
     this.activeTimer = null;
 
     return this.recordTimer("timer-stop", command, stopped);
+  }
+
+  private restoredTimerFromStopCommand(
+    command: StopTimerCommand,
+  ): ActiveTimer | null {
+    if (!command.startedAt) {
+      return null;
+    }
+
+    requireTimestamp(command.startedAt, "Timer start time");
+    return {
+      accumulatedPausedSeconds: 0,
+      id: command.timerId,
+      jobId: command.jobId,
+      pausedAt: null,
+      startedAt: command.startedAt,
+      technicianId: this.requireStaff().id,
+    };
   }
 
   async saveWorklog(command: SaveWorklogCommand): Promise<MutationReceipt> {

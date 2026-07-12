@@ -99,6 +99,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
         installationId: "local-simulator",
         jobId: job.id,
         occurredAt: new Date().toISOString(),
+        startedAt: activeTimer.startedAt,
         timerId: activeTimer.id,
       })
       .then((stopped) => {

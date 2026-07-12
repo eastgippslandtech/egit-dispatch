@@ -1,8 +1,9 @@
 import { Fragment, createElement, type PropsWithChildren } from "react";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MockTechnicianRepository } from "../../data/mock-technician-repository";
+import type { TechnicianRepository } from "../../data/technician-repository";
 import { AppProviders } from "../../providers/app-providers";
 import { MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
 import type { MobileStaff } from "../../contracts/mobile";
@@ -30,6 +31,20 @@ vi.mock("react-native-safe-area-context", () => ({
     createElement(Fragment, null, children),
 }));
 
+const secureStore = vi.hoisted(() => ({
+  values: new Map<string, string>(),
+}));
+
+vi.mock("expo-secure-store", () => ({
+  deleteItemAsync: vi.fn(async (key: string) => {
+    secureStore.values.delete(key);
+  }),
+  getItemAsync: vi.fn(async (key: string) => secureStore.values.get(key) ?? null),
+  setItemAsync: vi.fn(async (key: string, value: string) => {
+    secureStore.values.set(key, value);
+  }),
+}));
+
 const rileyFixture = MOBILE_STAFF_FIXTURES.find(
   (staff) => staff.email === "riley@egit.com.au",
 ) as MobileStaff | undefined;
@@ -40,7 +55,12 @@ if (!rileyFixture) {
 
 const riley: MobileStaff = rileyFixture;
 
-async function renderJobDetail(jobId: string) {
+async function renderJobDetail(
+  jobId: string,
+  repository: TechnicianRepository = new MockTechnicianRepository({
+    staffEmail: "riley@egit.com.au",
+  }),
+) {
   let rendered: ReactTestRenderer | undefined;
   const consoleError = vi.spyOn(console, "error").mockImplementation((message) => {
     if (!String(message).includes("react-test-renderer is deprecated")) {
@@ -57,9 +77,7 @@ async function renderJobDetail(jobId: string) {
       rendered = TestRenderer.create(
         <AppProviders
           initialSession={{ status: "approved", staff: riley }}
-          repository={
-            new MockTechnicianRepository({ staffEmail: "riley@egit.com.au" })
-          }
+          repository={repository}
         >
           <JobDetail jobId={jobId} />
         </AppProviders>,
@@ -83,14 +101,29 @@ function textValues(rendered: ReactTestRenderer) {
 }
 
 function button(rendered: ReactTestRenderer, label: string) {
-  return rendered.root.find(
+  return rendered.root.findAll(
     (node) =>
       node.props.accessibilityRole === "button" &&
       node.props.accessibilityLabel === label,
-  );
+  )[0];
+}
+
+async function pressButton(rendered: ReactTestRenderer, label: string) {
+  await act(async () => {
+    button(rendered, label).props.onPress();
+    await Promise.resolve();
+  });
 }
 
 describe("job detail", () => {
+  beforeEach(() => {
+    secureStore.values.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("disables write actions for Outlook-only events", async () => {
     const rendered = await renderJobDetail("outlook-block-riley");
 
@@ -104,6 +137,26 @@ describe("job detail", () => {
 
     expect(button(rendered, "Call contact").props.disabled).toBe(false);
     expect(button(rendered, "Open in Maps").props.disabled).toBe(false);
+  });
+
+  it("stops a timer restored after the app was closed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-12T01:00:00.000Z"));
+    const firstOpen = await renderJobDetail("firewall-riley");
+
+    await pressButton(firstOpen, "Start timer");
+    act(() => {
+      firstOpen.unmount();
+    });
+
+    vi.setSystemTime(new Date("2026-07-12T01:16:10.000Z"));
+    const reopened = await renderJobDetail("firewall-riley");
+
+    expect(textValues(reopened)).toContain("Timer running");
+
+    await pressButton(reopened, "Stop timer");
+
+    expect(textValues(reopened)).toContain("Timer stopped: 30 minutes queued");
   });
 });
 

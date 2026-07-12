@@ -1,5 +1,9 @@
 export const MOBILE_AUTH_REDIRECT_URI = "egitcommand://auth/callback";
 
+export function mobileZohoCallbackUriFor(mobileApiBaseUrl: string) {
+  return `${mobileApiBaseUrl.replace(/\/+$/, "")}/auth/callback`;
+}
+
 export interface ZohoAuthorizationRequestInput {
   clientId: string;
   redirectUri: string;

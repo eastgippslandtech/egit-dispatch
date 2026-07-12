@@ -8,6 +8,7 @@ import {
   MOBILE_AUTH_REDIRECT_URI,
   buildAuthExchangePayload,
   buildZohoAuthorizationRequest,
+  mobileZohoCallbackUriFor,
 } from "./auth-session";
 import type { MobileSession } from "./session-store";
 import { saveMobileSession } from "./session-store";
@@ -47,10 +48,10 @@ export async function performZohoSignIn({
   }
 
   const AuthSession = await import("expo-auth-session");
-  const redirectUri = MOBILE_AUTH_REDIRECT_URI;
+  const zohoRedirectUri = mobileZohoCallbackUriFor(config.mobileApiBaseUrl);
   const zohoRequest = buildZohoAuthorizationRequest({
     clientId: config.zohoClientId,
-    redirectUri,
+    redirectUri: zohoRedirectUri,
     scopes: ["AaaServer.profile.READ"],
     state: createState(),
   });
@@ -67,10 +68,19 @@ export async function performZohoSignIn({
     state: zohoRequest.state,
     usePKCE: zohoRequest.usePKCE,
   });
-  const result = await request.promptAsync(
-    { authorizationEndpoint: zohoRequest.authorizationEndpoint },
+  const authUrl = await request.makeAuthUrlAsync({
+    authorizationEndpoint: zohoRequest.authorizationEndpoint,
+  });
+  const browserResult = await WebBrowser.openAuthSessionAsync(
+    authUrl,
+    MOBILE_AUTH_REDIRECT_URI,
     { preferEphemeralSession: true },
   );
+  if (browserResult.type !== "success") {
+    throw new Error("Zoho sign-in was cancelled.");
+  }
+
+  const result = request.parseReturnUrl(browserResult.url);
 
   if (result.type !== "success") {
     throw new Error("Zoho sign-in was cancelled.");
@@ -86,7 +96,7 @@ export async function performZohoSignIn({
       ...buildAuthExchangePayload({
         code,
         codeVerifier: request.codeVerifier,
-        redirectUri,
+        redirectUri: zohoRedirectUri,
       }),
       accountsServer: result.params["accounts-server"],
     }),

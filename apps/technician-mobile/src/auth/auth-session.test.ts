@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MOBILE_AUTH_REDIRECT_URI,
   buildZohoAuthorizationRequest,
+  mobileZohoCallbackUriFor,
 } from "./auth-session";
 
 describe("native auth session", () => {
@@ -33,5 +34,11 @@ describe("native auth session", () => {
 
   it("keeps the native callback aligned with the registered iOS URL scheme", () => {
     expect(MOBILE_AUTH_REDIRECT_URI).toBe("egitcommand://auth/callback");
+  });
+
+  it("uses the Command Centre API callback as the Zoho redirect URL", () => {
+    expect(
+      mobileZohoCallbackUriFor("https://command.egit.com.au/api/mobile/v1"),
+    ).toBe("https://command.egit.com.au/api/mobile/v1/auth/callback");
   });
 });

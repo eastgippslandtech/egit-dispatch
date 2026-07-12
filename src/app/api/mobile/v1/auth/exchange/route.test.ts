@@ -28,7 +28,7 @@ describe("mobile auth exchange route", () => {
         body: JSON.stringify({
           code: "expired-code",
           codeVerifier: "pkce-verifier",
-          redirectUri: "egitcommandcentre://auth/zoho",
+          redirectUri: "https://command.egit.com.au/api/mobile/v1/auth/callback",
         }),
         method: "POST",
       }),

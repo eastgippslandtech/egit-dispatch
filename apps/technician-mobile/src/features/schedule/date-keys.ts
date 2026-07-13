@@ -65,14 +65,14 @@ function partValue(
 }
 
 function parseDateKey(dateKey: string) {
-  const match = /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/.exec(dateKey);
-  if (!match?.groups) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) {
     throw new Error(`Invalid date key: ${dateKey}`);
   }
 
   return {
-    day: Number(match.groups.day),
-    month: Number(match.groups.month),
-    year: Number(match.groups.year),
+    day: Number(match[3]),
+    month: Number(match[2]),
+    year: Number(match[1]),
   };
 }

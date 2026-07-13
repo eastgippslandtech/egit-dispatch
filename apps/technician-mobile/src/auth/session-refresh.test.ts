@@ -72,6 +72,30 @@ describe("mobile session refresh", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps the saved session when the refresh service is temporarily unavailable", async () => {
+    const fetcher = vi.fn(async () => new Response("{}", { status: 503 }));
+
+    await expect(
+      refreshMobileSession(savedSession, {
+        fetcher,
+        now: () => new Date("2026-07-12T05:00:00.000Z"),
+      }),
+    ).resolves.toEqual(savedSession);
+  });
+
+  it("keeps the saved session when the refresh request cannot reach the server", async () => {
+    const fetcher = vi.fn(async () => {
+      throw new TypeError("Network request failed");
+    });
+
+    await expect(
+      refreshMobileSession(savedSession, {
+        fetcher,
+        now: () => new Date("2026-07-12T05:00:00.000Z"),
+      }),
+    ).resolves.toEqual(savedSession);
+  });
+
   it("treats sessions inside the safety window as expiring", () => {
     expect(
       isMobileSessionExpiring(savedSession, {

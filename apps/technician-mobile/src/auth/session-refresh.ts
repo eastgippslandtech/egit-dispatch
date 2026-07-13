@@ -36,17 +36,22 @@ export async function refreshMobileSession(
   }
 
   const config = getMobileRuntimeConfig();
-  const response = await fetcher(`${config.mobileApiBaseUrl}/auth/refresh`, {
-    body: JSON.stringify({ refreshToken: session.refreshToken }),
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
+  let response: Response;
+  try {
+    response = await fetcher(`${config.mobileApiBaseUrl}/auth/refresh`, {
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+  } catch {
+    return session;
+  }
 
   if (!response.ok) {
-    return null;
+    return isRefreshTokenRejected(response.status) ? null : session;
   }
 
   const envelope = (await response.json()) as RefreshMobileSessionEnvelope;
@@ -57,7 +62,7 @@ export async function refreshMobileSession(
     !refreshed.expiresAt ||
     !refreshed.refreshToken
   ) {
-    return null;
+    return session;
   }
 
   return {
@@ -66,4 +71,8 @@ export async function refreshMobileSession(
     refreshToken: refreshed.refreshToken,
     staffEmail: session.staffEmail,
   };
+}
+
+function isRefreshTokenRejected(status: number) {
+  return status === 400 || status === 401 || status === 403;
 }

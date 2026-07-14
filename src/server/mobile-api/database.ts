@@ -254,7 +254,22 @@ function selectJobRows(
       ) as "staff",
       coalesce(logs.notes, '[]'::jsonb) as "notes"
     from public.dispatch_links dl
-    join public.staff_profiles sp on sp.id = dl.technician_id
+    left join public.technicians t on t.id = dl.technician_id
+    join public.staff_profiles sp on sp.id = ${staffId}::uuid
+      and (
+        sp.id = dl.technician_id
+        or (
+          t.id is not null
+          and (
+            lower(sp.outlook_email) = lower(t.outlook_email)
+            or (
+              sp.msp_central_technician_id is not null
+              and t.sdp_technician_id is not null
+              and sp.msp_central_technician_id = t.sdp_technician_id
+            )
+          )
+        )
+      )
     left join lateral (
       select jsonb_agg(
         jsonb_build_object(
@@ -275,7 +290,7 @@ function selectJobRows(
         limit 5
       ) latest
     ) logs on true
-    where dl.technician_id = ${staffId}::uuid
+    where true
       ${extraWhere}
     order by coalesce(dl.scheduled_start, dl.updated_at), dl.sdp_request_number
   `;

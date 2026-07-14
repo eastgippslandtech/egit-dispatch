@@ -24,14 +24,14 @@ export const metadata: Metadata = {
     title: "Command Centre",
   },
   icons: {
-    icon: "/assets/command-centre-logo-header.png",
-    apple: "/assets/command-centre-logo.png",
+    icon: "/assets/command-centre/favicon.svg",
+    apple: "/assets/command-centre/app-icon-1024.png",
   },
 };
 
 export const viewport: Viewport = {
   initialScale: 1,
-  themeColor: "#07111f",
+  themeColor: "#071526",
   viewportFit: "cover",
   width: "device-width",
 };

@@ -359,6 +359,7 @@ export function scheduleRequest({
     siteTown: request.siteTown,
     start: slot.start,
     end: slot.end,
+    bookingType: request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite"),
     status: "tentative",
     source: "linked",
   };

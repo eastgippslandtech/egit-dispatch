@@ -4,6 +4,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { getCommandCentreAccess } from "@/server/auth/session";
 
 import CommandCentrePage from "./page";
+import { bookingCardPriorityClass } from "./prototype";
 
 vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
@@ -43,6 +44,14 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
   expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
+});
+
+test("maps booking urgency to full-card priority colours", () => {
+  expect(bookingCardPriorityClass("Critical")).toContain("bg-rose");
+  expect(bookingCardPriorityClass("High")).toContain("bg-amber");
+  expect(bookingCardPriorityClass("Medium")).toContain("bg-emerald");
+  expect(bookingCardPriorityClass("Low")).toContain("bg-sky");
+  expect(bookingCardPriorityClass(null)).toContain("bg-slate");
 });
 
 test("updates the detail drawer from queue and appointment selections", async () => {

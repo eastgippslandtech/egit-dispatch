@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 import { AccessNotApproved } from "@/app/auth/auth-screen";
 import { getCommandCentreAccess } from "@/server/auth/session";
-import { getDispatchDashboardData } from "@/server/dispatch/provider";
+import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
 
 import { CommandCentrePrototype } from "./prototype";
 
@@ -17,7 +17,7 @@ export async function ProtectedCommandCentreScreen() {
     return <AccessNotApproved email={access.email} name={access.name} />;
   }
 
-  const data = await getDispatchDashboardData();
+  const data = await getTestSyncedDispatchDashboardData();
 
   return <CommandCentrePrototype authDisabled={access.authDisabled} data={data} />;
 }

@@ -23,6 +23,7 @@ import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 
 import type {
   Appointment,
+  BookingType,
   DispatchDashboardData,
   DispatchRequest,
   HealthItem,
@@ -115,6 +116,22 @@ const HEALTH_SHORT_LABELS: Record<string, string> = {
   unscheduled: "Unscheduled",
 };
 
+const BOOKING_PRIORITY_CARD_CLASSES: Record<DispatchRequest["priority"], string> = {
+  Critical: "border-rose-300/75 bg-rose-500/48 text-rose-50 shadow-rose-950/35",
+  High: "border-amber-300/75 bg-amber-400/42 text-amber-50 shadow-amber-950/30",
+  Medium:
+    "border-emerald-300/65 bg-emerald-500/30 text-emerald-50 shadow-emerald-950/25",
+  Low: "border-sky-300/65 bg-sky-500/28 text-sky-50 shadow-sky-950/25",
+};
+
+export function bookingCardPriorityClass(
+  priority?: DispatchRequest["priority"] | null,
+) {
+  return priority
+    ? BOOKING_PRIORITY_CARD_CLASSES[priority]
+    : "border-slate-400/30 bg-slate-500/18 text-slate-100 shadow-slate-950/20";
+}
+
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
 type SearchState = "dimmed" | "match" | "normal";
@@ -159,6 +176,30 @@ type PendingSchedule =
       travel?: TravelEstimate;
       warnings: ScheduleWarning[];
     };
+
+type DispatchTestSyncEventPayload = {
+  appointmentId?: string;
+  bookingType?: BookingType;
+  date?: string;
+  end?: string;
+  eventType: "scheduled" | "rescheduled" | "cancelled" | "notes_updated" | "work_logged";
+  notes?: string;
+  payload?: {
+    travel?: TravelEstimate;
+    workLog?: {
+      billable: boolean;
+      minutesSpent: number;
+      notes: string;
+      status?: DispatchRequest["status"];
+      visibility: "Customer-facing" | "Internal";
+      workType: BookingType;
+    };
+  };
+  priority?: DispatchRequest["priority"];
+  requestId?: string;
+  start?: string;
+  technicianId?: string;
+};
 
 export function CommandCentrePrototype({
   authDisabled = false,
@@ -809,7 +850,7 @@ export function CommandCentrePrototype({
     endDrag();
   }
 
-  function confirmPendingSchedule() {
+  async function confirmPendingSchedule() {
     if (!pendingSchedule) {
       return;
     }
@@ -824,6 +865,28 @@ export function CommandCentrePrototype({
       }
 
       const appointmentId = `mock-${request.id}-${Date.now()}`;
+      const bookingType = bookingTypeForRequest(request);
+
+      try {
+        await publishDispatchTestSyncEvent({
+          appointmentId,
+          bookingType,
+          date: pendingSchedule.date,
+          end: pendingSchedule.end,
+          eventType: "scheduled",
+          priority: request.priority,
+          requestId: request.id,
+          start: pendingSchedule.start,
+          technicianId: pendingSchedule.technicianId,
+          payload: {
+            travel: pendingSchedule.travel,
+          },
+        });
+      } catch (error) {
+        setToast(testSyncErrorMessage(error));
+        return;
+      }
+
       const appointments = scheduleRequest({
         appointmentId,
         appointments: dashboard.appointments,
@@ -842,6 +905,7 @@ export function CommandCentrePrototype({
           candidate.id === request.id
             ? {
                 ...candidate,
+                bookingType,
                 status: "Scheduled",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
@@ -870,6 +934,37 @@ export function CommandCentrePrototype({
       });
       setToast(`${request.requestNumber} scheduled in mock mode.`);
     } else {
+      const currentAppointment = dashboard.appointments.find(
+        (appointment) => appointment.id === pendingSchedule.appointmentId,
+      );
+      const request = currentAppointment?.requestId
+        ? dashboard.requests.find(
+            (candidate) => candidate.id === currentAppointment.requestId,
+          )
+        : undefined;
+      const bookingType =
+        currentAppointment?.bookingType ?? (request ? bookingTypeForRequest(request) : undefined);
+
+      try {
+        await publishDispatchTestSyncEvent({
+          appointmentId: pendingSchedule.appointmentId,
+          bookingType,
+          date: pendingSchedule.date,
+          end: pendingSchedule.end,
+          eventType: "rescheduled",
+          priority: request?.priority,
+          requestId: currentAppointment?.requestId,
+          start: pendingSchedule.start,
+          technicianId: pendingSchedule.technicianId,
+          payload: {
+            travel: pendingSchedule.travel,
+          },
+        });
+      } catch (error) {
+        setToast(testSyncErrorMessage(error));
+        return;
+      }
+
       const movedAppointments = moveAppointment({
         appointmentId: pendingSchedule.appointmentId,
         appointments: dashboard.appointments,
@@ -1312,6 +1407,36 @@ export function CommandCentrePrototype({
       </div>
     </main>
   );
+}
+
+async function publishDispatchTestSyncEvent(
+  event: DispatchTestSyncEventPayload,
+) {
+  const response = await fetch("/api/internal/dispatch/test-sync/events", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(body?.error ?? "Dispatcher test sync failed.");
+  }
+}
+
+function testSyncErrorMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Dispatcher test sync failed.";
+
+  return `Mock schedule did not save: ${message}`;
+}
+
+function bookingTypeForRequest(request: DispatchRequest): BookingType {
+  return request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite");
 }
 
 function ScheduleConfirmModal({
@@ -2855,6 +2980,7 @@ function TimelineAppointment({
 }) {
   const warning = Boolean(appointment.syncIssue);
   const segments = getTimelineAppointmentSegments(appointment);
+  const priorityClass = bookingCardPriorityClass(request?.priority);
   return (
     <>
       <TravelSideExtension
@@ -2878,9 +3004,9 @@ function TimelineAppointment({
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
             ? "z-20 border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange shadow-[0_0_0_1px_rgba(255,130,58,0.34),0_18px_42px_rgba(255,130,58,0.22)]"
-            : warning
-              ? "z-10 border-amber-300/50 bg-amber-300/15 text-amber-50"
-              : "z-10 border-sky-300/40 bg-sky-300/12 text-sky-50"
+            : `z-10 ${priorityClass} ${
+                warning ? "ring-1 ring-amber-200/70" : ""
+              }`
         } ${
           searchState === "dimmed" ? "opacity-35 grayscale" : ""
         } ${

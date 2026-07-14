@@ -1,6 +1,7 @@
 export type Severity = "critical" | "warning" | "info" | "healthy";
 export type SlaState = "overdue" | "due-soon" | "normal";
 export type Priority = "Critical" | "High" | "Medium" | "Low";
+export type BookingType = "Remote" | "Onsite" | "In house";
 export type RequestStatus =
   | "Open"
   | "Ready for Scheduling"
@@ -69,6 +70,7 @@ export type DispatchRequest = {
   contact: string;
   priority: Priority;
   status: RequestStatus;
+  bookingType?: BookingType;
   technicianId?: string;
   scheduledStart?: string;
   scheduledEnd?: string;
@@ -102,6 +104,7 @@ export type Appointment = {
   travelWarning?: string;
   start: string;
   end: string;
+  bookingType?: BookingType;
   status: "confirmed" | "tentative" | "busy" | "sdp-only";
   source: "outlook" | "linked" | "sdp";
   syncIssue?: "double-booked" | "missing-calendar" | "time-mismatch" | "past-open";

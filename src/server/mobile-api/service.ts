@@ -11,11 +11,25 @@ import type {
   MobileJobStatus,
   MobilePriority,
   MobileStaff,
+  MobileTravelContext,
   MutationReceipt,
   SyncState,
 } from "../../../apps/technician-mobile/src/contracts/mobile";
 
 import type { MobileAuthContext, MobileWorklogCommand } from "./contracts";
+import { mockIsoTime } from "@/server/dispatch/date-scope";
+import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
+import {
+  applyDispatchTestSyncEvents,
+  listDispatchTestSyncEvents,
+} from "@/server/dispatch/test-sync";
+import type {
+  Appointment,
+  DispatchDashboardData,
+  DispatchRequest,
+  Technician,
+  TravelCalculatedFrom,
+} from "@/server/dispatch/types";
 import {
   getConfiguredMobileDatabase,
   type DatabaseJobNoteRow,
@@ -65,8 +79,13 @@ export async function listMobileJobs({
       staffId: staff.id,
       to,
     });
+    const testJobs = await listTestSyncedMobileJobs({ auth, from, to });
 
-    return { jobs: jobs.map(mapDatabaseJob) };
+    return {
+      jobs: [...jobs.map(mapDatabaseJob), ...testJobs].sort((left, right) =>
+        left.startAt.localeCompare(right.startAt),
+      ),
+    };
   }
 
   return {
@@ -95,6 +114,11 @@ export async function getMobileJob({
     const staff = await requireDatabaseStaff(database, auth.email);
     const job = await database.findJobForStaff({ jobId, staffId: staff.id });
     if (!job) {
+      const testJob = await findTestSyncedMobileJob({ auth, jobId });
+      if (testJob) {
+        return { job: testJob };
+      }
+
       throw Object.assign(new Error("Mobile job was not found."), {
         code: "NOT_FOUND",
         status: 404,
@@ -345,6 +369,225 @@ const WRITABLE_PERMISSIONS: MobileJobPermissions = {
   canWriteWorklog: true,
   readOnlyReason: null,
 };
+
+async function listTestSyncedMobileJobs({
+  auth,
+  from,
+  to,
+}: {
+  auth: MobileAuthContext;
+  from: string;
+  to: string;
+}) {
+  const dashboard = await getTestSyncedMockDashboard();
+  if (!dashboard) {
+    return [];
+  }
+
+  return dashboard.appointments
+    .map((appointment) => mapTestSyncedAppointment(dashboard, appointment))
+    .filter((job): job is MobileJob => Boolean(job))
+    .filter(
+      (job) =>
+        job.technician.email.toLowerCase() === auth.email.toLowerCase() &&
+        job.startAt.slice(0, 10) >= from &&
+        job.startAt.slice(0, 10) <= to,
+    );
+}
+
+async function findTestSyncedMobileJob({
+  auth,
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  jobId: string;
+}) {
+  const dashboard = await getTestSyncedMockDashboard();
+  if (!dashboard) {
+    return null;
+  }
+
+  return (
+    dashboard.appointments
+      .map((appointment) => mapTestSyncedAppointment(dashboard, appointment))
+      .find(
+        (job): job is MobileJob =>
+          job !== null &&
+          job.id === jobId &&
+          job.technician.email.toLowerCase() === auth.email.toLowerCase(),
+      ) ?? null
+  );
+}
+
+async function getTestSyncedMockDashboard() {
+  try {
+    const events = await listDispatchTestSyncEvents();
+    if (!events.length) {
+      return null;
+    }
+
+    return applyDispatchTestSyncEvents(getDispatchDesignMockData(), events);
+  } catch (error) {
+    console.error("Mobile test-sync overlay failed", error);
+    return null;
+  }
+}
+
+function mapTestSyncedAppointment(
+  dashboard: DispatchDashboardData,
+  appointment: Appointment,
+): MobileJob | null {
+  const technician = dashboard.technicians.find(
+    (candidate) => candidate.id === appointment.technicianId,
+  );
+  if (!technician || !appointment.date) {
+    return null;
+  }
+
+  const request = appointment.requestId
+    ? dashboard.requests.find((candidate) => candidate.id === appointment.requestId)
+    : undefined;
+  const priority = request?.priority ?? null;
+  const previousNotes: MobileJobNote[] = [];
+
+  if (request?.notes) {
+    previousNotes.push({
+      id: `${appointment.id}-request-note`,
+      localId: null,
+      visibility: "external",
+      body: request.notes,
+      authorName: "Command Centre",
+      createdAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
+      updatedAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
+      syncState: "synced",
+      canEdit: false,
+      canDelete: false,
+    });
+  }
+
+  if (appointment.bodyPreview) {
+    previousNotes.push({
+      id: `${appointment.id}-appointment-note`,
+      localId: null,
+      visibility: "internal",
+      body: appointment.bodyPreview,
+      authorName: "Command Centre",
+      createdAt: mockIsoTime(appointment.date, appointment.start),
+      updatedAt: mockIsoTime(appointment.date, appointment.start),
+      syncState: "synced",
+      canEdit: false,
+      canDelete: false,
+    });
+  }
+
+  return {
+    id: appointment.id,
+    source: "mock",
+    requestNumber: request?.requestNumber ?? null,
+    outlookEventId: appointment.outlookEventId ?? null,
+    outlookWebLink: appointment.outlookWebLink ?? null,
+    version: `test-sync-${appointment.id}-${appointment.date}-${appointment.start}-${appointment.end}`,
+    title: request?.subject ?? appointment.title,
+    description:
+      request?.notes ??
+      appointment.bodyPreview ??
+      "Dispatcher-created Command Centre test schedule.",
+    priority,
+    status: mobileStatusForRequest(request),
+    bookingType:
+      appointment.bookingType ??
+      request?.bookingType ??
+      (request?.onsite === false ? "Remote" : "Onsite"),
+    startAt: mockIsoTime(appointment.date, appointment.start),
+    endAt: mockIsoTime(appointment.date, appointment.end),
+    timezone: "Australia/Melbourne",
+    isAllDay: Boolean(appointment.isAllDay),
+    slaDueAt: request?.dueAt ?? null,
+    customerName: request?.customer ?? appointment.customer,
+    siteName: request?.siteName ?? request?.site ?? null,
+    siteAddress: request?.siteAddress ?? appointment.siteAddress ?? null,
+    siteTown: request?.siteTown ?? appointment.siteTown ?? null,
+    contactName: request?.requester ?? null,
+    contactPhone: request?.contact ?? null,
+    contactEmail: null,
+    technician: mapDispatchTechnician(technician),
+    tags: [
+      ...(request?.warnings ?? []),
+      appointment.travelWarning,
+      priority === "Critical" || priority === "High" ? "SLA risk" : undefined,
+    ].filter((tag): tag is string => Boolean(tag)),
+    travel: mapMobileTravel(appointment),
+    previousNotes,
+    parts: [],
+    attachments: [],
+    customerSignOff: null,
+    permissions: WRITABLE_PERMISSIONS,
+    syncState: "pending",
+    updatedAt: mockIsoTime(appointment.date, appointment.start),
+  };
+}
+
+function mapDispatchTechnician(technician: Technician): MobileStaff {
+  const email =
+    technician.zohoEmail ??
+    technician.outlookUserPrincipalName ??
+    technician.outlookEmail ??
+    technician.mspCentralEmail ??
+    "";
+
+  return {
+    id: technician.id,
+    displayName: technician.displayName,
+    email,
+    zohoEmail: technician.zohoEmail ?? email,
+    outlookEmail: technician.outlookEmail ?? email,
+    outlookUserPrincipalName: technician.outlookUserPrincipalName ?? email,
+    mspCentralEmail: technician.mspCentralEmail ?? email,
+    mspCentralTechnicianId: technician.mspCentralTechnicianId ?? null,
+    role: technician.role === "admin" ? "admin" : "technician",
+    baseOffice: technician.baseOfficeId === "sale" ? "Sale" : "Bairnsdale",
+    active: technician.active,
+  };
+}
+
+function mapMobileTravel(appointment: Appointment): MobileJob["travel"] {
+  if (
+    appointment.travelToSiteMinutes === undefined &&
+    appointment.travelBackToOfficeMinutes === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    mode: appointment.travelMode ?? "office_to_site_and_back",
+    calculatedFrom: mobileTravelCalculatedFrom(
+      appointment.travelCalculatedFrom ?? "technician_base_office",
+    ),
+    calculationReason:
+      appointment.travelCalculationReason ?? "Estimated from technician base office",
+    baseOfficeName: appointment.officeOriginName ?? null,
+    baseOfficeAddress: appointment.officeOriginAddress ?? null,
+    travelToSiteMinutes: appointment.travelToSiteMinutes ?? 0,
+    travelBackToOfficeMinutes: appointment.travelBackToOfficeMinutes ?? 0,
+    estimated: appointment.travelEstimated ?? false,
+  };
+}
+
+function mobileTravelCalculatedFrom(
+  calculatedFrom: TravelCalculatedFrom,
+): MobileTravelContext["calculatedFrom"] {
+  return calculatedFrom === "manual_override" ? "manual" : calculatedFrom;
+}
+
+function mobileStatusForRequest(request?: DispatchRequest): MobileJobStatus {
+  if (request?.status === "Resolved") {
+    return "Completed";
+  }
+  if (request?.status === "Open" || request?.status === "Ready for Scheduling") {
+    return "Needs Follow-up";
+  }
+  return "Scheduled";
+}
 
 function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
   const summaries = payloadSummaries(row);

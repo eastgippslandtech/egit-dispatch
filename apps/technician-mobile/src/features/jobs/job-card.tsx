@@ -13,11 +13,12 @@ export function JobCard({ compact = false, job }: JobCardProps) {
     ? "Outlook Read Only"
     : null;
   const priorityColour = colourForPriority(job.priority);
+  const cardTone = cardToneForPriority(job.priority);
 
   return (
     <View
       accessibilityLabel={`${job.title} job card`}
-      style={[styles.card, compact && styles.compactCard]}
+      style={[styles.card, cardTone, compact && styles.compactCard]}
     >
       <View style={styles.cardHeader}>
         <Text style={styles.time}>{timeRange(job)}</Text>
@@ -103,6 +104,21 @@ function colourForPriority(priority: MobilePriority | null): string {
   }
 }
 
+function cardToneForPriority(priority: MobilePriority | null) {
+  switch (priority) {
+    case "Critical":
+      return styles.criticalCard;
+    case "High":
+      return styles.highCard;
+    case "Medium":
+      return styles.mediumCard;
+    case "Low":
+      return styles.lowCard;
+    default:
+      return styles.outlookCard;
+  }
+}
+
 const styles = StyleSheet.create({
   badge: {
     borderRadius: 999,
@@ -136,6 +152,18 @@ const styles = StyleSheet.create({
   compactCard: {
     padding: 14,
   },
+  criticalCard: {
+    backgroundColor: "rgba(242, 31, 49, 0.28)",
+    borderColor: "rgba(251, 113, 133, 0.72)",
+  },
+  highCard: {
+    backgroundColor: "rgba(245, 158, 11, 0.24)",
+    borderColor: "rgba(251, 191, 36, 0.72)",
+  },
+  lowCard: {
+    backgroundColor: "rgba(14, 165, 233, 0.22)",
+    borderColor: "rgba(56, 189, 248, 0.68)",
+  },
   meta: {
     color: colours.muted,
     fontSize: 14,
@@ -144,11 +172,19 @@ const styles = StyleSheet.create({
   outlookBadge: {
     backgroundColor: colours.outlook,
   },
+  outlookCard: {
+    backgroundColor: colours.surfaceRaised,
+    borderColor: colours.border,
+  },
   priority: {
     fontSize: 12,
     fontWeight: "800",
     letterSpacing: 0.8,
     textTransform: "uppercase",
+  },
+  mediumCard: {
+    backgroundColor: "rgba(16, 185, 129, 0.22)",
+    borderColor: "rgba(52, 211, 153, 0.68)",
   },
   slaBadge: {
     backgroundColor: colours.borderWarm,

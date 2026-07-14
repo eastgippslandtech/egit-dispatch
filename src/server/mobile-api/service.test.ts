@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { listDispatchTestSyncEvents } from "@/server/dispatch/test-sync";
 import {
   completeMobileJob,
   listMobileJobs,
@@ -8,6 +9,18 @@ import {
   saveMobileWorklog,
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
+
+vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/dispatch/test-sync")>();
+
+  return {
+    ...actual,
+    listDispatchTestSyncEvents: vi.fn(),
+  };
+});
+
+const listDispatchTestSyncEventsMock = vi.mocked(listDispatchTestSyncEvents);
 
 const dbStaff: DatabaseStaffRow = {
   active: true,
@@ -95,6 +108,10 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
 }
 
 describe("mobile API service", () => {
+  beforeEach(() => {
+    listDispatchTestSyncEventsMock.mockResolvedValue([]);
+  });
+
   it("returns only jobs for the authenticated staff profile", async () => {
     const response = await listMobileJobs({
       auth: rileyMobileAuth,
@@ -146,6 +163,65 @@ describe("mobile API service", () => {
       "Imported request snapshot.",
     ]);
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
+  });
+
+  it("adds dispatcher test-sync schedules to the technician mobile job list", async () => {
+    listDispatchTestSyncEventsMock.mockResolvedValueOnce([
+      {
+        appointmentId: "mock-100284-test",
+        bookingType: "Onsite",
+        createdAt: "2026-07-14T01:00:00.000Z",
+        date: "2026-07-14",
+        end: "14:00",
+        eventType: "scheduled",
+        id: "event-100284",
+        payload: {
+          travel: {
+            officeOriginAddress: "137 Main Street, Bairnsdale VIC 3875",
+            officeOriginId: "bairnsdale",
+            officeOriginName: "Bairnsdale",
+            travelBackToOfficeMinutes: 10,
+            travelCalculatedFrom: "technician_base_office",
+            travelCalculationReason: "Estimated from technician base office",
+            travelEstimated: false,
+            travelMode: "office_to_site_and_back",
+            travelToSiteMinutes: 10,
+          },
+        },
+        priority: "Critical",
+        requestId: "100284",
+        start: "12:45",
+        technicianId: "tech-riley",
+      },
+    ]);
+
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [];
+        },
+      }),
+      from: "2026-07-14",
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toContainEqual(
+      expect.objectContaining({
+        id: "mock-100284-test",
+        priority: "Critical",
+        requestNumber: "REQ-100284",
+        source: "mock",
+        technician: expect.objectContaining({
+          email: "riley@egit.com.au",
+        }),
+        title: "Packhouse label printer offline",
+        travel: expect.objectContaining({
+          travelBackToOfficeMinutes: 10,
+          travelToSiteMinutes: 10,
+        }),
+      }),
+    );
   });
 
   it("returns a single real database job with latest notes and request description", async () => {

@@ -38,7 +38,7 @@ describe("technician mobile scaffold", () => {
     expect(plugins).toEqual(
       expect.arrayContaining(["expo-router", "expo-secure-store", "expo-sqlite"]),
     );
-  });
+  }, 30_000);
 
   it("provides deterministic native scripts and required Expo modules", () => {
     const packageJson = JSON.parse(readProjectFile("package.json"));

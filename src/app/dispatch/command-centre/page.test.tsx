@@ -54,6 +54,31 @@ test("maps booking urgency to full-card priority colours", () => {
   expect(bookingCardPriorityClass(null)).toContain("bg-slate");
 });
 
+test("week planner keeps technician rows compact and reveals overflow jobs", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(screen.getByRole("button", { name: "week" }));
+
+  const viewport = screen.getByTestId("week-calendar-viewport");
+  expect(viewport).toHaveClass("overflow-hidden");
+  expect(screen.getByText("Riley")).toBeInTheDocument();
+  expect(screen.getByText("Simeon")).toBeInTheDocument();
+
+  const jervyWednesday = screen.getByTestId("week-cell-tech-jervy-2026-07-08");
+  expect(within(jervyWednesday).getAllByTestId("week-appointment-card")).toHaveLength(1);
+
+  const moreButton = within(jervyWednesday).getByRole("button", {
+    name: /Show 1 more Jervy bookings on Wed, 8 July/,
+  });
+  expect(moreButton).toHaveTextContent("+1");
+
+  fireEvent.click(moreButton);
+
+  const reveal = screen.getByTestId("week-overflow-reveal");
+  expect(within(reveal).getByText("Jervy · Wed, 8 July")).toBeInTheDocument();
+  expect(within(reveal).getAllByTestId("week-overflow-appointment")).toHaveLength(2);
+});
+
 test("updates the detail drawer from queue and appointment selections", async () => {
   render(await CommandCentrePage());
 

@@ -2541,6 +2541,19 @@ function WeekPlanner({
   weekDays: ReturnType<typeof getWeekRange>;
 }) {
   const grouped = groupWeekAppointments(appointments, technicians, weekDays);
+  const [expandedCell, setExpandedCell] = useState<
+    { dateKey: string; technicianId: string } | undefined
+  >();
+  const expandedTechnician = expandedCell
+    ? technicians.find((technician) => technician.id === expandedCell.technicianId)
+    : undefined;
+  const expandedDay = expandedCell
+    ? weekDays.find((day) => day.dateKey === expandedCell.dateKey)
+    : undefined;
+  const expandedAppointments =
+    expandedCell && expandedTechnician && expandedDay
+      ? grouped[expandedCell.technicianId]?.[expandedCell.dateKey] ?? []
+      : [];
 
   return (
     <div
@@ -2578,9 +2591,9 @@ function WeekPlanner({
         {technicians.map((technician) => (
           <div
             key={technician.id}
-            className="grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
+            className="grid min-h-[96px] grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
           >
-            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-4 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
+            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-3 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-slate-50">
                   {technician.displayName}
@@ -2601,17 +2614,20 @@ function WeekPlanner({
             </div>
             {weekDays.map((day) => {
               const cellAppointments = grouped[technician.id][day.dateKey];
+              const visibleAppointments = cellAppointments.slice(0, 1);
+              const hiddenAppointments = cellAppointments.slice(1);
               const isToday = day.dateKey === todayDateKey;
               return (
                 <div
                   key={`${technician.id}-${day.dateKey}`}
-                  className={`min-h-[132px] border-l p-1.5 ${
+                  className={`relative min-h-[96px] border-l p-1.5 ${
                     isToday
                       ? "border-cc-orange/20 bg-cc-orange/[0.045]"
                       : "border-white/[0.06] bg-cc-surface-1"
                   } ${
                     dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                   }`}
+                  data-testid={`week-cell-${technician.id}-${day.dateKey}`}
                   onDragOver={(event) => {
                     if (!dragPayload) {
                       return;
@@ -2628,12 +2644,13 @@ function WeekPlanner({
                     onWeekDrop(dragPayload, technician.id, day.dateKey);
                   }}
                 >
-                  <div className="space-y-2">
-                    {cellAppointments.map((appointment) => (
+                  <div className="space-y-1.5">
+                    {visibleAppointments.map((appointment) => (
                       <WeekAppointmentCard
                         key={appointment.id}
                         active={selectedAppointmentId === appointment.id}
                         appointment={appointment}
+                        dataTestId="week-appointment-card"
                         request={requests.find(
                           (request) => request.id === appointment.requestId,
                         )}
@@ -2643,6 +2660,21 @@ function WeekPlanner({
                       />
                     ))}
                   </div>
+                  {hiddenAppointments.length > 0 ? (
+                    <button
+                      aria-label={`Show ${hiddenAppointments.length} more ${technician.displayName} bookings on ${day.shortLabel}`}
+                      className="mt-1.5 w-full rounded-md border border-cc-orange/20 bg-cc-orange/10 px-2 py-1 text-center text-[11px] font-bold text-cc-orange transition hover:border-cc-orange/45 hover:bg-cc-orange/16"
+                      type="button"
+                      onClick={() =>
+                        setExpandedCell({
+                          dateKey: day.dateKey,
+                          technicianId: technician.id,
+                        })
+                      }
+                    >
+                      +{hiddenAppointments.length}
+                    </button>
+                  ) : null}
                   {cellAppointments.length === 0 ? (
                     <div className="rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-[11px] text-slate-500">
                       Drop here
@@ -2654,6 +2686,53 @@ function WeekPlanner({
           </div>
         ))}
       </div>
+      {expandedCell && expandedTechnician && expandedDay ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-6">
+          <section
+            aria-label={`${expandedTechnician.displayName} bookings on ${expandedDay.shortLabel}`}
+            className="max-h-[72vh] w-full max-w-xl overflow-hidden rounded-lg border border-cc-orange/25 bg-cc-surface-1 shadow-2xl"
+            data-testid="week-overflow-reveal"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+                  Week bookings
+                </p>
+                <h3 className="mt-0.5 text-base font-semibold text-slate-50">
+                  {expandedTechnician.displayName} · {expandedDay.shortLabel}
+                </h3>
+              </div>
+              <button
+                aria-label="Close week bookings"
+                className="rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-200 hover:border-white/25"
+                type="button"
+                onClick={() => setExpandedCell(undefined)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[calc(72vh-76px)] space-y-2 overflow-auto p-3">
+              {expandedAppointments.map((appointment) => (
+                <WeekAppointmentCard
+                  key={appointment.id}
+                  active={selectedAppointmentId === appointment.id}
+                  appointment={appointment}
+                  dataTestId="week-overflow-appointment"
+                  request={requests.find(
+                    (request) => request.id === appointment.requestId,
+                  )}
+                  onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
+                  onDragEnd={onDragEnd}
+                  onSelect={() => {
+                    onSelectAppointment(appointment);
+                    setExpandedCell(undefined);
+                  }}
+                />
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2661,6 +2740,7 @@ function WeekPlanner({
 function WeekAppointmentCard({
   active,
   appointment,
+  dataTestId,
   onBeginDrag,
   onDragEnd,
   onSelect,
@@ -2668,6 +2748,7 @@ function WeekAppointmentCard({
 }: {
   active: boolean;
   appointment: Appointment;
+  dataTestId?: string;
   onBeginDrag: () => void;
   onDragEnd: () => void;
   onSelect: () => void;
@@ -2679,8 +2760,9 @@ function WeekAppointmentCard({
     <button
       aria-label={`${appointment.title} ${appointment.customer}`}
       aria-pressed={active}
+      data-testid={dataTestId}
       draggable
-      className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${
+      className={`w-full cursor-pointer rounded-md border px-2 py-1.5 text-left text-xs transition hover:-translate-y-0.5 ${
         active
           ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
           : warning

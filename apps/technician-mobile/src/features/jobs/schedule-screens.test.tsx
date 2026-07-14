@@ -214,7 +214,7 @@ describe("native schedule screens", () => {
     expect(texts).toContain("Sunday, 12 July");
   });
 
-  it("groups My Work into operational workload sections", async () => {
+  it("shows My Work as category cards before drilling into related jobs", async () => {
     vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
     const rendered = await renderScreen("my-work");
     const texts = textValues(rendered);
@@ -225,8 +225,24 @@ describe("native schedule screens", () => {
     expect(texts).toContain("SLA risk");
     expect(texts).toContain("Waiting on me");
     expect(texts).toContain("Recently completed");
-    expect(texts).toContain("Remote payroll support");
+    expect(texts).not.toContain("Remote payroll support");
     expect(texts).not.toContain("File server disk expansion");
+
+    const upcomingCard = rendered.root.find(
+      (node) =>
+        node.props.accessibilityRole === "button" &&
+        node.props.accessibilityLabel === "Open Upcoming jobs",
+    );
+
+    await act(async () => {
+      upcomingCard.props.onPress();
+      await Promise.resolve();
+    });
+
+    const drilldownTexts = textValues(rendered);
+    expect(drilldownTexts).toContain("Upcoming jobs");
+    expect(drilldownTexts).toContain("Remote payroll support");
+    expect(drilldownTexts).not.toContain("File server disk expansion");
   });
 
   it("makes My Work section counts large and obvious inside each section", async () => {

@@ -163,4 +163,92 @@ describe("MSP Central request mappers", () => {
       expect.objectContaining({ displayName: "Jervy", id: "tech-jervy" }),
     ]);
   });
+
+  it("auto-assigns Advanced Works and Viridian IT requests by site proximity", () => {
+    const bairnsdaleRequest = mapMspCentralRequest(
+      {
+        account: { name: "Advanced Works" },
+        request_number: "REQ-AW-BAIRNSDALE",
+        site: {
+          address: "Bairnsdale VIC 3875",
+          city: "Bairnsdale",
+          name: "Bairnsdale client site",
+        },
+        technician: null,
+      },
+      { now },
+    );
+    const saleRequest = mapMspCentralRequest(
+      {
+        account: { name: "Viridian IT" },
+        request_number: "REQ-VIRIDIAN-SALE",
+        site: {
+          address: "Sale VIC 3850",
+          city: "Sale",
+          name: "Sale client site",
+        },
+        technician: null,
+      },
+      { now },
+    );
+
+    expect(bairnsdaleRequest.technicianId).toBe("tech-jervy");
+    expect(bairnsdaleRequest.warnings).toContain(
+      "Auto-assigned by Advanced Works/Viridian IT site proximity.",
+    );
+    expect(saleRequest.technicianId).toBe("tech-matt");
+    expect(saleRequest.warnings).toContain(
+      "Auto-assigned by Advanced Works/Viridian IT site proximity.",
+    );
+  });
+
+  it("does not override an explicitly assigned Advanced Works technician", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: { name: "Advanced Works" },
+        request_number: "REQ-AW-ASSIGNED",
+        site: {
+          address: "Sale VIC 3850",
+          city: "Sale",
+          name: "Sale client site",
+        },
+        technician: {
+          email: "jervy@egit.com.au",
+          id: "msp-tech-jervy",
+          name: "Jervy",
+        },
+      },
+      { now },
+    );
+
+    expect(request.technicianId).toBe("tech-jervy");
+    expect(request.warnings).not.toContain(
+      "Auto-assigned by Advanced Works/Viridian IT site proximity.",
+    );
+  });
+
+  it("uses request subject and description when Advanced Works location is not in the site fields", () => {
+    const subjectLocation = mapMspCentralRequest(
+      {
+        account: { name: "Advanced Works" },
+        request_number: "REQ-AW-SUBJECT",
+        subject: "Printer offline at Lakes Entrance office",
+        technician: null,
+      },
+      { now },
+    );
+    const descriptionLocation = mapMspCentralRequest(
+      {
+        account: { name: "Viridian IT" },
+        description: "POS terminal needs onsite work in Sale showroom.",
+        request_number: "REQ-VIRIDIAN-DESCRIPTION",
+        subject: "POS issue",
+        technician: null,
+      },
+      { now },
+    );
+
+    expect(subjectLocation.technicianId).toBe("tech-jervy");
+    expect(descriptionLocation.technicianId).toBe("tech-matt");
+  });
 });

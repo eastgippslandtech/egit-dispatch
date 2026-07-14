@@ -1,11 +1,17 @@
 import { Stack } from "expo-router";
-import { StatusBar } from "react-native";
+import { type PropsWithChildren } from "react";
+import { StatusBar, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import {
   AppProviders,
   useSession,
+  useTechnicianRepository,
 } from "../src/providers/app-providers";
+import {
+  ActiveTimerProvider,
+  GlobalTimerBanner,
+} from "../src/features/timer/active-timer-provider";
 import { colours } from "../src/theme/tokens";
 
 export function RootNavigator() {
@@ -13,11 +19,12 @@ export function RootNavigator() {
   const isApproved = session.status === "approved";
 
   return (
-    <>
+    <View style={styles.shell}>
       <StatusBar
         backgroundColor={colours.canvas}
         barStyle="light-content"
       />
+      {isApproved ? <GlobalTimerBanner /> : null}
       <Stack
         screenOptions={{
           contentStyle: { backgroundColor: colours.canvas },
@@ -37,7 +44,16 @@ export function RootNavigator() {
           />
         </Stack.Protected>
       </Stack>
-    </>
+    </View>
+  );
+}
+
+function ActiveTimerProviderBridge({ children }: PropsWithChildren) {
+  const repository = useTechnicianRepository();
+  return (
+    <ActiveTimerProvider repository={repository}>
+      {children}
+    </ActiveTimerProvider>
   );
 }
 
@@ -45,8 +61,17 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppProviders>
-        <RootNavigator />
+        <ActiveTimerProviderBridge>
+          <RootNavigator />
+        </ActiveTimerProviderBridge>
       </AppProviders>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  shell: {
+    backgroundColor: colours.canvas,
+    flex: 1,
+  },
+});

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import type { ActiveTimer, MobileJob } from "../../contracts/mobile";
+import type { MobileJob } from "../../contracts/mobile";
+import { AppButton } from "../../components/app-button";
 import { useTechnicianRepository } from "../../providers/app-providers";
 import { colours } from "../../theme/tokens";
-import { TimerBar } from "../timer/timer-bar";
+import { useActiveTimer } from "../timer/active-timer-provider";
 import { WorklogForm } from "../worklogs/worklog-form";
 import { JobCard } from "./job-card";
 import { createNativeActions } from "./native-actions";
@@ -16,11 +17,16 @@ interface JobDetailProps {
 
 export function JobDetail({ jobId }: JobDetailProps) {
   const repository = useTechnicianRepository();
+  const {
+    activeTimer,
+    isTimerForJob,
+    startTimerForJob,
+    stopActiveTimer,
+    timerMessage,
+  } = useActiveTimer();
   const actions = useMemo(() => createNativeActions(), []);
-  const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<MobileJob | null>(null);
-  const [timerMessage, setTimerMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,12 +36,6 @@ export function JobDetail({ jobId }: JobDetailProps) {
         if (!cancelled) {
           setJob(nextJob);
           setError(null);
-          void restoreActiveTimerSnapshot(nextJob.id).then((timer) => {
-            if (!cancelled && timer) {
-              setActiveTimer(timer);
-              setTimerMessage("Timer running");
-            }
-          });
         }
       })
       .catch((jobError: unknown) => {
@@ -68,49 +68,8 @@ export function JobDetail({ jobId }: JobDetailProps) {
   }
 
   const readOnly = Boolean(job.permissions.readOnlyReason);
-  const startJobTimer = () => {
-    void repository
-      .startTimer({
-        baseVersion: job.version,
-        clientMutationId: `timer-start-${job.id}-${Date.now()}`,
-        installationId: "local-simulator",
-        jobId: job.id,
-        occurredAt: new Date().toISOString(),
-      })
-      .then((timer) => {
-        setActiveTimer(timer);
-        setTimerMessage("Timer running");
-        void saveActiveTimerSnapshot(timer);
-      })
-      .catch((timerError: unknown) =>
-        setTimerMessage(
-          timerError instanceof Error
-            ? timerError.message
-            : "Timer could not start.",
-        ),
-      );
-  };
-  const stopJobTimer = () => {
-    if (!activeTimer) return;
-    void repository
-      .stopTimer({
-        baseVersion: job.version,
-        clientMutationId: `timer-stop-${job.id}-${Date.now()}`,
-        installationId: "local-simulator",
-        jobId: job.id,
-        occurredAt: new Date().toISOString(),
-        startedAt: activeTimer.startedAt,
-        timerId: activeTimer.id,
-      })
-      .then((stopped) => {
-        setActiveTimer(null);
-        setTimerMessage(`Timer stopped: ${stopped.roundedMinutes} minutes queued`);
-        void clearActiveTimerSnapshot();
-      })
-      .catch((timerError: unknown) =>
-        handleTimerStopFailure(timerError, activeTimer, setActiveTimer, setTimerMessage),
-      );
-  };
+  const activeForThisJob = isTimerForJob(job.id);
+  const timerRunningElsewhere = Boolean(activeTimer && !activeForThisJob);
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -120,14 +79,6 @@ export function JobDetail({ jobId }: JobDetailProps) {
           {job.title}
         </Text>
         {readOnly ? <Text style={styles.readOnly}>Outlook Read Only</Text> : null}
-        {activeTimer ? (
-          <TimerBar
-            jobTitle={job.title}
-            now={new Date()}
-            onStop={stopJobTimer}
-            timer={activeTimer}
-          />
-        ) : null}
         {timerMessage ? <Text style={styles.muted}>{timerMessage}</Text> : null}
         <JobCard job={job} />
 
@@ -156,9 +107,11 @@ export function JobDetail({ jobId }: JobDetailProps) {
           ) : null}
           <View style={styles.actionGrid}>
             <ActionButton
-              disabled={!job.permissions.canStartTimer}
-              label={activeTimer ? "Stop timer" : "Start timer"}
-              onPress={activeTimer ? stopJobTimer : startJobTimer}
+              disabled={!job.permissions.canStartTimer || timerRunningElsewhere}
+              label={activeForThisJob ? "Stop timer" : "Start timer"}
+              onPress={() => {
+                void (activeForThisJob ? stopActiveTimer() : startTimerForJob(job));
+              }}
             />
             <ActionButton
               disabled={!job.permissions.canComplete}
@@ -247,92 +200,18 @@ function ActionButton({
   onPress: () => void;
 }) {
   return (
-    <Pressable
+    <AppButton
       accessibilityLabel={label}
-      accessibilityRole="button"
       disabled={disabled}
+      label={label}
       onPress={onPress}
-      style={[styles.actionButton, disabled && styles.actionButtonDisabled]}
-    >
-      <Text style={styles.actionText}>{label}</Text>
-    </Pressable>
+    />
   );
 }
 
-const ACTIVE_TIMER_KEY = "command-centre.active-timer.v1";
-
-async function saveActiveTimerSnapshot(timer: ActiveTimer): Promise<void> {
-  const secureStore = await loadSecureStore();
-  await secureStore?.setItemAsync(ACTIVE_TIMER_KEY, JSON.stringify(timer));
-}
-
-async function restoreActiveTimerSnapshot(
-  jobId: string,
-): Promise<ActiveTimer | null> {
-  const secureStore = await loadSecureStore();
-  const raw = await secureStore?.getItemAsync(ACTIVE_TIMER_KEY);
-  if (!raw) return null;
-  const timer = JSON.parse(raw) as ActiveTimer;
-  return timer.jobId === jobId ? timer : null;
-}
-
-async function clearActiveTimerSnapshot(): Promise<void> {
-  const secureStore = await loadSecureStore();
-  await secureStore?.deleteItemAsync(ACTIVE_TIMER_KEY);
-}
-
-function handleTimerStopFailure(
-  timerError: unknown,
-  activeTimer: ActiveTimer,
-  setActiveTimer: (timer: ActiveTimer | null) => void,
-  setTimerMessage: (message: string) => void,
-): void {
-  const message =
-    timerError instanceof Error ? timerError.message : "Timer could not stop.";
-  if (message.includes("active timer does not match")) {
-    setActiveTimer(null);
-    setTimerMessage("Timer stopped: restored timer queued");
-    void clearActiveTimerSnapshot();
-    return;
-  }
-  setTimerMessage(message);
-}
-
-async function loadSecureStore(): Promise<
-  | {
-      deleteItemAsync(key: string): Promise<void>;
-      getItemAsync(key: string): Promise<string | null>;
-      setItemAsync(key: string, value: string): Promise<void>;
-    }
-  | null
-> {
-  try {
-    return await import("expo-secure-store");
-  } catch {
-    return null;
-  }
-}
-
 const styles = StyleSheet.create({
-  actionButton: {
-    backgroundColor: colours.primary,
-    borderRadius: 14,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  actionButtonDisabled: {
-    backgroundColor: colours.surfaceRaised,
-    opacity: 0.55,
-  },
   actionGrid: {
     gap: 10,
-  },
-  actionText: {
-    color: colours.textOnWarm,
-    fontSize: 15,
-    fontWeight: "800",
-    textAlign: "center",
   },
   content: {
     gap: 14,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 
+import { AppButton } from "../../components/app-button";
 import type { ActiveTimer } from "../../contracts/mobile";
 import { colours } from "../../theme/tokens";
 import { elapsedSeconds } from "./timer-service";
@@ -37,14 +38,12 @@ export function TimerBar({
           {formatElapsed(elapsedSeconds(timer, currentTime))}
         </Text>
       </View>
-      <Pressable
+      <AppButton
         accessibilityLabel="Stop timer"
-        accessibilityRole="button"
+        label="Stop"
         onPress={onStop}
-        style={styles.stopButton}
-      >
-        <Text style={styles.stopText}>Stop</Text>
-      </Pressable>
+        variant="navy"
+      />
     </View>
   );
 }
@@ -61,38 +60,30 @@ function formatElapsed(totalSeconds: number): string {
 const styles = StyleSheet.create({
   bar: {
     alignItems: "center",
-    backgroundColor: colours.surfaceWarm,
-    borderColor: colours.borderWarm,
-    borderRadius: 22,
-    borderWidth: 1,
+    backgroundColor: colours.primary,
+    borderBottomColor: colours.borderWarm,
+    borderBottomWidth: 1,
     flexDirection: "row",
+    gap: 14,
     justifyContent: "space-between",
-    padding: 14,
-  },
-  elapsed: {
-    color: colours.primary,
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  label: {
-    color: colours.muted,
-    fontSize: 12,
-    fontWeight: "800",
-    textTransform: "uppercase",
-  },
-  stopButton: {
-    backgroundColor: colours.critical,
-    borderRadius: 14,
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  stopText: {
-    color: colours.text,
+  elapsed: {
+    color: colours.brandNavy,
+    fontSize: 24,
     fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  label: {
+    color: colours.brandNavy,
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
   },
   title: {
-    color: colours.text,
+    color: colours.brandNavy,
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "900",
   },
 });

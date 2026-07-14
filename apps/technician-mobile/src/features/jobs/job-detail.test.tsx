@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockTechnicianRepository } from "../../data/mock-technician-repository";
 import type { TechnicianRepository } from "../../data/technician-repository";
 import { AppProviders } from "../../providers/app-providers";
+import {
+  ActiveTimerProvider,
+  GlobalTimerBanner,
+} from "../timer/active-timer-provider";
 import { MOBILE_JOB_FIXTURES, MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
 import type { MobileJob, MobileStaff } from "../../contracts/mobile";
 
@@ -79,7 +83,10 @@ async function renderJobDetail(
           initialSession={{ status: "approved", staff: riley }}
           repository={repository}
         >
-          <JobDetail jobId={jobId} />
+          <ActiveTimerProvider repository={repository}>
+            <GlobalTimerBanner now={new Date()} />
+            <JobDetail jobId={jobId} />
+          </ActiveTimerProvider>
         </AppProviders>,
       );
       await Promise.resolve();

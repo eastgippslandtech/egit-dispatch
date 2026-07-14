@@ -14,6 +14,7 @@ import {
 } from "../src/features/timer/active-timer-provider";
 import { createApiClient } from "../src/api/client";
 import { getMobileRuntimeConfig } from "../src/config/runtime";
+import { enableWhileUsingLocation as requestWhileUsingLocation } from "../src/features/location/foreground-location";
 import { FirstLoginPermissionGate } from "../src/features/onboarding/first-login-permission-prompt";
 import { createPushRegistration } from "../src/features/notifications/register-device";
 import { colours } from "../src/theme/tokens";
@@ -110,10 +111,7 @@ async function enableJobNotifications(
 
 async function enableWhileUsingLocation(): Promise<string> {
   const location = await import("expo-location");
-  const permission = await location.requestForegroundPermissionsAsync();
-  return permission.status === "granted"
-    ? "Location enabled while using"
-    : "Location permission not granted";
+  return requestWhileUsingLocation(location);
 }
 
 function ActiveTimerProviderBridge({ children }: PropsWithChildren) {

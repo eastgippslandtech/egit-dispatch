@@ -1,10 +1,13 @@
 import Constants from "expo-constants";
 import * as Device from "expo-device";
+import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AppButton } from "../../src/components/app-button";
+import { enableWhileUsingLocation } from "../../src/features/location/foreground-location";
 import { createPushRegistration } from "../../src/features/notifications/register-device";
 import { createApiClient } from "../../src/api/client";
 import { getMobileRuntimeConfig } from "../../src/config/runtime";
@@ -13,6 +16,7 @@ import { colours } from "../../src/theme/tokens";
 
 export default function ProfileRoute() {
   const { session, signOut } = useSession();
+  const [locationStatus, setLocationStatus] = useState("Not enabled");
   const [notificationStatus, setNotificationStatus] = useState("Not enabled");
   const staff =
     session.status === "approved"
@@ -55,6 +59,9 @@ export default function ProfileRoute() {
         : "Permission not granted",
     );
   };
+  const enableLocation = async () => {
+    setLocationStatus(await enableWhileUsingLocation(Location));
+  };
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -71,15 +78,31 @@ export default function ProfileRoute() {
         <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.0"}</Text>
         <Text style={styles.label}>Notifications</Text>
         <Text style={styles.value}>{notificationStatus}</Text>
+        <Text style={styles.label}>Location</Text>
+        <Text style={styles.value}>{locationStatus}</Text>
       </View>
 
-      <Pressable onPress={enableNotifications} style={styles.primaryButton}>
-        <Text style={styles.primaryButtonText}>Enable job notifications</Text>
-      </Pressable>
+      <AppButton
+        label="Enable job notifications"
+        onPress={() => {
+          void enableNotifications();
+        }}
+      />
 
-      <Pressable onPress={signOut} style={styles.secondaryButton}>
-        <Text style={styles.secondaryButtonText}>Sign out</Text>
-      </Pressable>
+      <View style={styles.buttonGap}>
+        <AppButton
+          accessibilityLabel="Enable location while using"
+          label="Enable location while using"
+          onPress={() => {
+            void enableLocation();
+          }}
+          variant="secondary"
+        />
+      </View>
+
+      <View style={styles.buttonGap}>
+        <AppButton label="Sign out" onPress={signOut} variant="secondary" />
+      </View>
     </SafeAreaView>
   );
 }
@@ -103,24 +126,10 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   label: { color: colours.muted, fontSize: 12, fontWeight: "800", marginTop: 8 },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: colours.primary,
-    borderRadius: 18,
+  buttonGap: {
     marginTop: 20,
-    padding: 16,
   },
-  primaryButtonText: { color: "#111827", fontSize: 16, fontWeight: "900" },
   screen: { backgroundColor: colours.canvas, flex: 1, padding: 20 },
-  secondaryButton: {
-    alignItems: "center",
-    borderColor: colours.border,
-    borderRadius: 18,
-    borderWidth: 1,
-    marginTop: 12,
-    padding: 16,
-  },
-  secondaryButtonText: { color: colours.text, fontSize: 16, fontWeight: "800" },
   title: { color: colours.text, fontSize: 34, fontWeight: "900", marginTop: 8 },
   value: { color: colours.text, fontSize: 17, fontWeight: "800" },
 });

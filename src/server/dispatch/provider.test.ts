@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { readDispatchConfig } from "./env";
 import { getDispatchDashboardData } from "./provider";
+import type { DispatchDashboardDatabase } from "./database";
 
 describe("dispatch dashboard provider", () => {
   it("serves the locked Command Centre from mock data by default", async () => {
@@ -53,5 +54,82 @@ describe("dispatch dashboard provider", () => {
       requestNumber: "REQ-MSP-1001",
     });
     expect(data.appointments).toEqual([]);
+  });
+
+  it("serves dispatch from the existing Command Centre database source", async () => {
+    const database: DispatchDashboardDatabase = {
+      async getDashboardData() {
+        return {
+          appointments: [
+            {
+              customer: "Gippsland Legal",
+              date: "2026-07-14",
+              end: "11:00",
+              id: "appointment-db-1",
+              requestId: "request-db-1",
+              source: "linked",
+              start: "10:00",
+              status: "confirmed",
+              technicianId: "tech-riley",
+              title: "VPN outage follow-up",
+            },
+          ],
+          requests: [
+            {
+              ageHours: 2,
+              billable: true,
+              contact: "Alex Morgan",
+              customer: "Gippsland Legal",
+              dueAt: "2026-07-14T17:00:00.000Z",
+              id: "request-db-1",
+              notes: "Real Command Centre database request description.",
+              priority: "High",
+              readyToBook: false,
+              requester: "Alex Morgan",
+              requestNumber: "REQ-100900",
+              scheduledEnd: "2026-07-14T11:00:00.000Z",
+              scheduledStart: "2026-07-14T10:00:00.000Z",
+              site: "Bairnsdale Office",
+              slaState: "normal",
+              sourceSystem: "command-centre-db",
+              status: "Scheduled",
+              subject: "VPN outage follow-up",
+              technicianId: "tech-riley",
+              warnings: [],
+            },
+          ],
+          technicians: [
+            {
+              active: true,
+              displayName: "Riley",
+              mappingStatus: "mapped",
+              outlookEmail: "riley@egit.com.au",
+              storeLocation: "Bairnsdale",
+              id: "tech-riley",
+            },
+          ],
+        };
+      },
+    };
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        DATABASE_URL: "postgresql://command-centre-db",
+        DISPATCH_DATA_SOURCE: "command-centre-db",
+      }),
+      { database },
+    );
+
+    expect(data.dispatchDataSource).toBe("command-centre-db");
+    expect(data.requests[0]).toMatchObject({
+      notes: "Real Command Centre database request description.",
+      requestNumber: "REQ-100900",
+      sourceSystem: "command-centre-db",
+    });
+    expect(data.appointments[0]).toMatchObject({
+      requestId: "request-db-1",
+      source: "linked",
+      technicianId: "tech-riley",
+    });
   });
 });

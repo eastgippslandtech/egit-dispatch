@@ -2,7 +2,11 @@ type DispatchEnv = Record<string, string | undefined>;
 
 export type DispatchRuntimeMode = "mock" | "live";
 export type CalendarDataSource = "mock" | "outlook";
-export type DispatchDataSource = "mock" | "msp-central-fixture" | "msp-central";
+export type DispatchDataSource =
+  | "mock"
+  | "msp-central-fixture"
+  | "msp-central"
+  | "command-centre-db";
 
 export type DispatchConfig = {
   calendarDataSource: CalendarDataSource;
@@ -80,7 +84,11 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
 }
 
 function readDispatchDataSource(value?: string): DispatchDataSource {
-  if (value === "msp-central-fixture" || value === "msp-central") {
+  if (
+    value === "msp-central-fixture" ||
+    value === "msp-central" ||
+    value === "command-centre-db"
+  ) {
     return value;
   }
 

@@ -49,7 +49,7 @@ export type DispatchRequest = {
   id: string;
   requestNumber: string;
   subject: string;
-  sourceSystem?: "mock" | "msp-central-fixture" | "msp-central";
+  sourceSystem?: "mock" | "msp-central-fixture" | "msp-central" | "command-centre-db";
   helpdeskUrl?: string;
   notes?: string;
   updatedAt?: string;
@@ -150,7 +150,7 @@ export type DispatchDashboardData = {
   calendarError?: string;
   calendarReadOnly?: boolean;
   calendarStatusLabel?: string;
-  dispatchDataSource?: "mock" | "msp-central-fixture" | "msp-central";
+  dispatchDataSource?: "mock" | "msp-central-fixture" | "msp-central" | "command-centre-db";
   selectedDateLabel: string;
   timezone: string;
   technicians: Technician[];

@@ -21,6 +21,16 @@ describe("dispatch runtime config", () => {
     expect(config.mode).toBe("mock");
   });
 
+  it("can select the existing Command Centre database dispatch source", () => {
+    const config = readDispatchConfig({
+      DATABASE_URL: "postgresql://command-centre-db",
+      DISPATCH_DATA_SOURCE: "command-centre-db",
+    });
+
+    expect(config.dispatchDataSource).toBe("command-centre-db");
+    expect(config.databaseUrl).toBe("postgresql://command-centre-db");
+  });
+
   it("can enable Outlook calendar reads without enabling MSP Central live mode", () => {
     const config = readDispatchConfig({
       CALENDAR_DATA_SOURCE: "outlook",

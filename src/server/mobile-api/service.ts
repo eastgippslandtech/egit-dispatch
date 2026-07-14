@@ -147,6 +147,7 @@ export async function saveMobileWorklog({
     }
 
     const saved = await database.saveWorklog({
+      billable: command.billable,
       body,
       clientMutationId: command.clientMutationId,
       durationMinutes: command.durationMinutes,
@@ -157,6 +158,7 @@ export async function saveMobileWorklog({
       startedAt: command.startedAt,
       timerSessionId: command.timerSessionId,
       visibility: command.visibility,
+      workType: command.workType,
     });
 
     return {
@@ -192,6 +194,100 @@ export async function saveMobileWorklog({
       clientMutationId: command.clientMutationId,
       resourceId: `note-${command.clientMutationId}`,
       resourceVersion: `${job.version}-note`,
+      status: "applied" as const,
+    },
+  };
+}
+
+export async function completeMobileJob({
+  auth,
+  command,
+  database = getConfiguredMobileDatabase(),
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  command: MobileWorklogCommand;
+  database?: MobileDatabase | null;
+  jobId: string;
+}) {
+  if (database) {
+    const staff = await requireDatabaseStaff(database, auth.email);
+    const job = await database.findJobForStaff({ jobId, staffId: staff.id });
+    if (!job) {
+      throw Object.assign(new Error("Mobile job was not found."), {
+        code: "NOT_FOUND",
+        status: 404,
+      });
+    }
+
+    const mobileJob = mapDatabaseJob(job);
+    if (!mobileJob.permissions.canComplete) {
+      throw Object.assign(
+        new Error(mobileJob.permissions.readOnlyReason ?? "This source is read-only."),
+        { code: "READ_ONLY_SOURCE", status: 409 },
+      );
+    }
+
+    const body = worklogBody(command);
+    if (!body) {
+      throw Object.assign(new Error("Completion worklog body is required."), {
+        code: "BAD_REQUEST",
+        status: 400,
+      });
+    }
+
+    const targetStatus = command.followUpNeeded ? "Needs Follow-up" : "Resolved";
+    const saved = await database.saveWorklog({
+      action: "mobile_completion",
+      billable: command.billable,
+      body,
+      clientMutationId: command.clientMutationId,
+      durationMinutes: command.durationMinutes,
+      endedAt: command.endedAt,
+      followUpNeeded: command.followUpNeeded,
+      installationId: command.installationId,
+      job,
+      occurredAt: command.occurredAt,
+      startedAt: command.startedAt,
+      targetStatus,
+      timerSessionId: command.timerSessionId,
+      visibility: command.visibility,
+      workType: command.workType,
+    });
+
+    return {
+      receipt: {
+        clientMutationId: command.clientMutationId,
+        mode: "database",
+        resourceId: saved.resourceId,
+        resourceVersion: saved.resourceVersion,
+        status: "pending",
+        recordedAt: saved.recordedAt,
+      } satisfies MutationReceipt,
+    };
+  }
+
+  const job = findOwnedJob(auth, jobId);
+  if (!job.permissions.canComplete) {
+    throw Object.assign(
+      new Error(job.permissions.readOnlyReason ?? "This source is read-only."),
+      { code: "READ_ONLY_SOURCE", status: 409 },
+    );
+  }
+
+  const body = worklogBody(command);
+  if (!body) {
+    throw Object.assign(new Error("Completion worklog body is required."), {
+      code: "BAD_REQUEST",
+      status: 400,
+    });
+  }
+
+  return {
+    receipt: {
+      clientMutationId: command.clientMutationId,
+      resourceId: `complete-${command.clientMutationId}`,
+      resourceVersion: `${job.version}-complete`,
       status: "applied" as const,
     },
   };

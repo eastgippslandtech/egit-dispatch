@@ -50,16 +50,21 @@ export interface DatabaseJobRow {
 }
 
 export interface SaveDatabaseWorklogInput {
+  action?: "mobile_completion" | "mobile_worklog";
+  billable?: boolean;
   body: string;
   clientMutationId: string;
   durationMinutes?: number;
   endedAt?: string;
+  followUpNeeded?: boolean;
   installationId: string;
   job: DatabaseJobRow;
   occurredAt?: string;
   startedAt?: string;
+  targetStatus?: "Needs Follow-up" | "Resolved";
   timerSessionId?: string | null;
   visibility: NoteVisibility;
+  workType?: "billable" | "non_billable" | "internal";
 }
 
 export interface SaveDatabaseWorklogResult {
@@ -155,20 +160,25 @@ export function createPostgresMobileDatabase({
           ${input.job.sdpRequestId},
           ${input.job.outlookEventId},
           ${input.job.technicianId}::uuid,
-          'mobile_worklog',
+          ${input.action ?? 'mobile_worklog'},
           'success',
           ${input.body},
           ${sql.json({
+            action: input.action ?? "mobile_worklog",
+            billable: input.billable,
             body: input.body,
             clientMutationId: input.clientMutationId,
             durationMinutes: input.durationMinutes,
             endedAt: input.endedAt,
+            followUpNeeded: input.followUpNeeded,
             installationId: input.installationId,
             occurredAt: input.occurredAt,
             source: "technician-mobile",
             startedAt: input.startedAt,
+            targetStatus: input.targetStatus,
             timerSessionId: input.timerSessionId,
             visibility: input.visibility,
+            workType: input.workType,
           })}
         )
         returning id::text as "id", created_at as "recordedAt"
@@ -257,16 +267,13 @@ function selectJobRows(
     left join public.technicians t on t.id = dl.technician_id
     join public.staff_profiles sp on sp.id = ${staffId}::uuid
       and (
-        sp.id = dl.technician_id
-        or (
-          t.id is not null
-          and (
-            lower(sp.outlook_email) = lower(t.outlook_email)
-            or (
-              sp.msp_central_technician_id is not null
-              and t.sdp_technician_id is not null
-              and sp.msp_central_technician_id = t.sdp_technician_id
-            )
+        t.id is not null
+        and (
+          lower(sp.outlook_email) = lower(t.outlook_email)
+          or (
+            sp.msp_central_technician_id is not null
+            and t.sdp_technician_id is not null
+            and sp.msp_central_technician_id = t.sdp_technician_id
           )
         )
       )

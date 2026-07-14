@@ -99,6 +99,82 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
   ).toHaveAttribute("title", "Outlook writeback is not enabled yet.");
 });
 
+test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {
+  render(await CommandCentrePage());
+
+  const drawer = screen.getByTestId("command-centre-drawer");
+  fireEvent.click(within(drawer).getByRole("button", { name: "Work Log" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(within(dialog).getByRole("heading", { name: "Work Log" })).toBeInTheDocument();
+  expect(within(dialog).getByText("Latest job information")).toBeInTheDocument();
+  expect(within(dialog).getByText("Request number")).toBeInTheDocument();
+  expect(within(dialog).getByText("REQ-100284")).toBeInTheDocument();
+  expect(within(dialog).getByText("Packhouse label printer offline")).toBeInTheDocument();
+  expect(within(dialog).getByText("Customer/site")).toBeInTheDocument();
+  expect(within(dialog).getByText("Status")).toBeInTheDocument();
+  expect(within(dialog).getByText("Priority")).toBeInTheDocument();
+  expect(within(dialog).getByText("Technician")).toBeInTheDocument();
+  expect(within(dialog).getByText("Scheduled time")).toBeInTheDocument();
+  expect(within(dialog).getByText("Due time")).toBeInTheDocument();
+  expect(within(dialog).getByText("Contact")).toBeInTheDocument();
+  expect(within(dialog).getByText("Site/address")).toBeInTheDocument();
+  expect(within(dialog).getByText("Current/latest notes")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Customer-facing")).toBeChecked();
+  expect(within(dialog).getByLabelText("Internal")).not.toBeChecked();
+  expect(within(dialog).getByLabelText("Work Log notes")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Time spent")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Billable")).toBeChecked();
+  expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("button", { name: "Save and complete ticket" }),
+  ).toBeInTheDocument();
+});
+
+test("saves Work Log locally and save-and-complete marks the request resolved", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  let dialog = screen.getByRole("dialog", { name: "Work Log" });
+  fireEvent.change(within(dialog).getByLabelText("Work Log notes"), {
+    target: { value: "Replaced failed switch and verified labels print." },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Time spent"), {
+    target: { value: "45" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Work type"), {
+    target: { value: "non_billable" },
+  });
+  fireEvent.click(within(dialog).getByLabelText("Internal"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save Work Log" }));
+
+  expect(screen.queryByRole("dialog", { name: "Work Log" })).not.toBeInTheDocument();
+  expect(screen.getByText("Work Log saved locally for test sync.")).toBeInTheDocument();
+
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+  dialog = screen.getByRole("dialog", { name: "Work Log" });
+  fireEvent.change(within(dialog).getByLabelText("Work Log notes"), {
+    target: { value: "Ticket completed after verification." },
+  });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Save and complete ticket" }),
+  );
+
+  const drawer = screen.getByTestId("command-centre-drawer");
+  expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
+  expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+});
+
 test("renders overlapping timeline appointments as an inspectable stack", async () => {
   render(await CommandCentrePage());
 

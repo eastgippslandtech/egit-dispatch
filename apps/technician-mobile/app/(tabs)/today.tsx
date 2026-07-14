@@ -34,6 +34,9 @@ export default function TodayRoute() {
           <Text style={styles.eyebrow}>Field schedule</Text>
           <Text style={styles.title}>{relativeDateTitle(selectedDate)}</Text>
           <Text style={styles.subtitle}>{displayDateLabel(selectedDate)}</Text>
+          <Text style={styles.syncLine}>
+            {syncLabel(schedule.connectionState, schedule.lastSyncedAt)}
+          </Text>
         </View>
         <View style={styles.dateControls}>
           <Pressable
@@ -177,6 +180,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginTop: 4,
   },
+  syncLine: {
+    color: colours.muted,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 6,
+  },
   title: {
     color: colours.text,
     fontSize: 34,
@@ -197,3 +206,20 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 });
+
+function syncLabel(
+  connectionState: "connected" | "connecting" | "error",
+  lastSyncedAt: string | null,
+) {
+  if (connectionState === "error") return "Connection issue";
+  if (connectionState === "connecting") return "Syncing with Command Centre…";
+  return `Connected · Last sync ${formatSyncTime(lastSyncedAt)}`;
+}
+
+function formatSyncTime(value: string | null) {
+  if (!value) return "not yet";
+  return new Intl.DateTimeFormat("en-AU", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}

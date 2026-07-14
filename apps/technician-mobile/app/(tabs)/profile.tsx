@@ -6,6 +6,8 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { createPushRegistration } from "../../src/features/notifications/register-device";
+import { createApiClient } from "../../src/api/client";
+import { getMobileRuntimeConfig } from "../../src/config/runtime";
 import { useSession } from "../../src/providers/app-providers";
 import { colours } from "../../src/theme/tokens";
 
@@ -21,10 +23,24 @@ export default function ProfileRoute() {
           email: "riley@egit.com.au",
           role: "technician",
         };
+  const mobileSession =
+    session.status === "approved" ? session.mobileSession : undefined;
 
   const enableNotifications = async () => {
+    const config = getMobileRuntimeConfig();
     const registration = createPushRegistration({
       notifications: Notifications,
+      registerToken:
+        mobileSession
+          ? (payload) =>
+              createApiClient({
+                accessToken: mobileSession.accessToken,
+                baseUrl: config.mobileApiBaseUrl,
+              }).request("/devices/push-token", {
+                body: payload,
+                method: "PUT",
+              })
+          : undefined,
     });
     const result = await registration.enableJobNotifications({
       appVersion: Constants.expoConfig?.version ?? "0.1.0",

@@ -185,6 +185,7 @@ export function CommandCentrePrototype({
   const [pendingSchedule, setPendingSchedule] = useState<
     PendingSchedule | undefined
   >();
+  const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
   const [toast, setToast] = useState<string | undefined>();
 
   const selectedDateLabel = formatSelectedDateLabel(selectedDateKey);
@@ -361,6 +362,71 @@ export function CommandCentrePrototype({
     setSelection({ kind: "request", requestId: data.selectedRequestId });
     setPendingSchedule(undefined);
     setDropPreview(undefined);
+  }
+
+  function saveWorkLog({
+    billable,
+    complete,
+    minutes,
+    notes,
+    visibility,
+    workType,
+  }: {
+    billable: boolean;
+    complete: boolean;
+    minutes: string;
+    notes: string;
+    visibility: "external" | "internal";
+    workType: string;
+  }) {
+    const requestId = workLogRequestId;
+    if (!requestId) return;
+
+    const trimmedNotes = notes.trim();
+    if (!trimmedNotes) {
+      setToast("Work Log notes are required.");
+      return;
+    }
+
+    setDashboard((current) => {
+      const requests = current.requests.map((request) => {
+        if (request.id !== requestId) {
+          return request;
+        }
+
+        const metadata = [
+          `${minutes || "0"} min`,
+          workTypeLabel(workType),
+          visibility === "external" ? "customer-facing" : "internal",
+          billable ? "billable" : "non-billable",
+          "mock/test-sync only",
+        ].join(" · ");
+
+        return {
+          ...request,
+          notes: request.notes
+            ? `${request.notes}\n\n${trimmedNotes} (${metadata})`
+            : `${trimmedNotes} (${metadata})`,
+          readyToBook: complete ? false : request.readyToBook,
+          status: complete ? ("Resolved" as const) : request.status,
+          warnings: complete
+            ? request.warnings.filter((warning) => warning !== "Ready to book")
+            : request.warnings,
+        };
+      });
+
+      return {
+        ...current,
+        requests,
+      };
+    });
+
+    setWorkLogRequestId(undefined);
+    setToast(
+      complete
+        ? "Work Log saved and ticket resolved locally for test sync."
+        : "Work Log saved locally for test sync.",
+    );
   }
 
   function buildWarnings({
@@ -1192,6 +1258,7 @@ export function CommandCentrePrototype({
 
           <DetailDrawer
             appointment={selectedAppointment}
+            onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
             request={selectedRequest}
             selectionKind={selection.kind}
             technician={technicianLabel(
@@ -1210,6 +1277,23 @@ export function CommandCentrePrototype({
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
             onTechnicianChange={updatePendingTechnician}
+          />
+        ) : null}
+        {workLogRequestId ? (
+          <WorkLogModal
+            appointment={dashboard.appointments.find(
+              (appointment) => appointment.requestId === workLogRequestId,
+            )}
+            onCancel={() => setWorkLogRequestId(undefined)}
+            onSave={saveWorkLog}
+            request={dashboard.requests.find(
+              (request) => request.id === workLogRequestId,
+            )}
+            technician={technicianLabel(
+              dashboard.technicians,
+              dashboard.requests.find((request) => request.id === workLogRequestId)
+                ?.technicianId,
+            )}
           />
         ) : null}
         {toast ? (
@@ -1442,6 +1526,225 @@ function ScheduleConfirmModal({
             onClick={onConfirm}
           >
             Confirm mock schedule
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WorkLogModal({
+  appointment,
+  onCancel,
+  onSave,
+  request,
+  technician,
+}: {
+  appointment?: Appointment;
+  onCancel: () => void;
+  onSave: (input: {
+    billable: boolean;
+    complete: boolean;
+    minutes: string;
+    notes: string;
+    visibility: "external" | "internal";
+    workType: string;
+  }) => void;
+  request?: DispatchRequest;
+  technician: string;
+}) {
+  const [billable, setBillable] = useState(request?.billable ?? true);
+  const [minutes, setMinutes] = useState("");
+  const [notes, setNotes] = useState("");
+  const [visibility, setVisibility] = useState<"external" | "internal">(
+    "external",
+  );
+  const [workType, setWorkType] = useState("billable");
+
+  if (!request) {
+    return null;
+  }
+
+  const scheduledTime = appointment
+    ? `${appointment.start}-${appointment.end}`
+    : request.scheduledStart
+      ? `${formatTime(request.scheduledStart)}-${formatTime(request.scheduledEnd ?? request.scheduledStart)}`
+      : "Not scheduled";
+  const bookingType =
+    request.onsite === true ? "Onsite" : request.onsite === false ? "Remote" : "Not set";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+      <section
+        aria-labelledby="work-log-title"
+        aria-modal="true"
+        className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg border border-cyan-300/20 bg-[#0b1628] p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+              Mock/test-sync only
+            </p>
+            <h2 id="work-log-title" className="mt-2 text-xl font-semibold">
+              Work Log
+            </h2>
+          </div>
+          <button
+            aria-label="Close Work Log"
+            className="rounded-md border border-white/10 bg-white/5 p-2 text-slate-200"
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <section className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
+          <h3 className="text-sm font-semibold text-slate-50">
+            Latest job information
+          </h3>
+          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <DetailInline label="Request number" value={request.requestNumber} />
+            <DetailInline label="Subject" value={request.subject} />
+            <DetailInline
+              label="Customer/site"
+              value={`${request.customer} / ${request.site}`}
+            />
+            <DetailInline label="Status" value={request.status} />
+            <DetailInline label="Priority" value={request.priority} />
+            <DetailInline label="Technician" value={technician} />
+            <DetailInline label="Scheduled time" value={scheduledTime} />
+            <DetailInline label="Due time" value={formatDateTime(request.dueAt)} />
+            <DetailInline label="Booking type" value={bookingType} />
+            <DetailInline
+              label="Contact"
+              value={`${request.requester} / ${request.contact}`}
+            />
+            <DetailInline
+              label="Site/address"
+              value={request.siteAddress || request.site}
+            />
+            <DetailInline
+              label="Current/latest notes"
+              value={
+                request.notes ??
+                "No current notes recorded in Command Centre yet."
+              }
+            />
+          </div>
+        </section>
+
+        <div className="mt-5 grid gap-4">
+          <label className="block text-sm font-semibold text-slate-200">
+            Work Log notes
+            <textarea
+              aria-label="Work Log notes"
+              className="mt-2 min-h-28 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </label>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-200">
+              Time spent
+              <input
+                aria-label="Time spent"
+                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+                min="0"
+                placeholder="Minutes"
+                type="number"
+                value={minutes}
+                onChange={(event) => setMinutes(event.target.value)}
+              />
+            </label>
+            <label className="block text-sm font-semibold text-slate-200">
+              Work type
+              <select
+                aria-label="Work type"
+                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+                value={workType}
+                onChange={(event) => setWorkType(event.target.value)}
+              >
+                <option value="billable">Billable</option>
+                <option value="non_billable">Non-billable</option>
+                <option value="internal">Internal</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset className="rounded-md border border-white/10 p-3">
+            <legend className="px-1 text-sm font-semibold text-slate-200">
+              Visibility
+            </legend>
+            <div className="mt-2 flex flex-wrap gap-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  aria-label="Customer-facing"
+                  checked={visibility === "external"}
+                  name="worklog-visibility"
+                  type="radio"
+                  value="external"
+                  onChange={() => setVisibility("external")}
+                />
+                Customer-facing
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  aria-label="Internal"
+                  checked={visibility === "internal"}
+                  name="worklog-visibility"
+                  type="radio"
+                  value="internal"
+                  onChange={() => setVisibility("internal")}
+                />
+                Internal
+              </label>
+            </div>
+          </fieldset>
+
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+            <input
+              aria-label="Billable"
+              checked={billable}
+              type="checkbox"
+              onChange={(event) => setBillable(event.target.checked)}
+            />
+            Billable
+          </label>
+        </div>
+
+        <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+          MSP Central live Work Log writeback is not enabled here. These actions
+          are local/test-sync only and do not use Zoho login tokens for MSP API calls.
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100"
+            type="button"
+            onClick={() =>
+              onSave({ billable, complete: false, minutes, notes, visibility, workType })
+            }
+          >
+            Save Work Log
+          </button>
+          <button
+            className="rounded-md bg-cyan-400 px-4 py-2 text-sm font-semibold text-[#07111f]"
+            type="button"
+            onClick={() =>
+              onSave({ billable, complete: true, minutes, notes, visibility, workType })
+            }
+          >
+            Save and complete ticket
           </button>
         </div>
       </section>
@@ -2751,11 +3054,13 @@ function TravelSideExtension({
 
 function DetailDrawer({
   appointment,
+  onOpenWorkLog,
   request,
   selectionKind,
   technician,
 }: {
   appointment?: Appointment;
+  onOpenWorkLog: (requestId: string) => void;
   request?: DispatchRequest;
   selectionKind: Selection["kind"];
   technician: string;
@@ -2889,6 +3194,19 @@ function DetailDrawer({
         <DrawerSection title="Actions">
           <div className="grid gap-2">
             <ActionButton
+              disabled={!request}
+              icon={<Clock3 className="h-4 w-4" />}
+              onClick={() => request && onOpenWorkLog(request.id)}
+              primary={Boolean(request)}
+              title={
+                request
+                  ? "Record a local/test-sync Work Log for this request-backed ticket."
+                  : "Work Log requires a linked helpdesk request."
+              }
+            >
+              Work Log
+            </ActionButton>
+            <ActionButton
               disabled={!helpdeskUrl}
               href={helpdeskUrl}
               icon={<ExternalLink className="h-4 w-4" />}
@@ -3020,6 +3338,7 @@ function ActionButton({
   disabled = false,
   href,
   icon,
+  onClick,
   primary = false,
   title,
 }: {
@@ -3027,6 +3346,7 @@ function ActionButton({
   disabled?: boolean;
   href?: string;
   icon: React.ReactNode;
+  onClick?: () => void;
   primary?: boolean;
   title?: string;
 }) {
@@ -3057,6 +3377,7 @@ function ActionButton({
     <button
       className={className}
       disabled={disabled}
+      onClick={onClick}
       title={title}
       type="button"
     >
@@ -3067,6 +3388,10 @@ function ActionButton({
 }
 
 function requestSourceLabel(request: DispatchRequest) {
+  if (request.sourceSystem === "command-centre-db") {
+    return "Command Centre DB";
+  }
+
   if (request.sourceSystem === "msp-central") {
     return "MSP Central";
   }
@@ -3076,6 +3401,18 @@ function requestSourceLabel(request: DispatchRequest) {
   }
 
   return "Mock";
+}
+
+function workTypeLabel(value: string) {
+  if (value === "non_billable") {
+    return "non-billable";
+  }
+
+  if (value === "internal") {
+    return "internal";
+  }
+
+  return "billable";
 }
 
 function outlookWarnings(appointment?: Appointment) {

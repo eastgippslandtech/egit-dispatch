@@ -28,6 +28,9 @@ export default function MyWorkRoute() {
         <Text style={styles.subtitle}>
           Jobs, calendar blocks, SLA risk, and waiting items.
         </Text>
+        <Text style={styles.syncLine}>
+          {syncLabel(schedule.connectionState, schedule.lastSyncedAt)}
+        </Text>
       </View>
 
       {schedule.error ? <Text style={styles.error}>{schedule.error}</Text> : null}
@@ -66,6 +69,23 @@ export default function MyWorkRoute() {
       )}
     </SafeAreaView>
   );
+}
+
+function syncLabel(
+  connectionState: "connected" | "connecting" | "error",
+  lastSyncedAt: string | null,
+) {
+  if (connectionState === "error") return "Connection issue";
+  if (connectionState === "connecting") return "Syncing with Command Centre…";
+  return `Connected · Last sync ${formatSyncTime(lastSyncedAt)}`;
+}
+
+function formatSyncTime(value: string | null) {
+  if (!value) return "not yet";
+  return new Intl.DateTimeFormat("en-AU", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function buildSections(jobs: MobileJob[], today: string) {
@@ -174,6 +194,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     marginTop: 6,
+  },
+  syncLine: {
+    color: colours.muted,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 8,
   },
   title: {
     color: colours.text,

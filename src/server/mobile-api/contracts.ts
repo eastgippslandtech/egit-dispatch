@@ -30,14 +30,17 @@ export interface MobileAuthContext {
 
 export interface MobileWorklogCommand {
   baseVersion: string;
+  billable?: boolean;
   body?: string;
   clientMutationId: string;
   durationMinutes?: number;
   endedAt?: string;
+  followUpNeeded?: boolean;
   installationId: string;
   occurredAt?: string;
   startedAt?: string;
   summary?: string;
   timerSessionId?: string | null;
   visibility: "external" | "internal";
+  workType?: "billable" | "non_billable" | "internal";
 }

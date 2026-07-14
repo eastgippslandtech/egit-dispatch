@@ -175,6 +175,68 @@ describe("job detail", () => {
     );
   });
 
+  it("shows latest job information before native work log entry and defaults visibility to customer-facing", async () => {
+    const job: MobileJob = {
+      ...MOBILE_JOB_FIXTURES[0],
+      bookingType: "Onsite",
+      contactName: "Alex Morgan",
+      customerName: "Gippsland Legal",
+      description: "Investigate VPN outage.",
+      previousNotes: [
+        {
+          id: "latest-note",
+          localId: null,
+          visibility: "external",
+          body: "Customer confirmed VPN still drops.",
+          authorName: "Command Centre",
+          createdAt: "2026-07-14T01:15:00.000Z",
+          updatedAt: "2026-07-14T01:15:00.000Z",
+          syncState: "synced",
+          canEdit: false,
+          canDelete: false,
+        },
+      ],
+      priority: "High",
+      requestNumber: "REQ-100900",
+      siteAddress: "14 Main Street, Bairnsdale VIC 3875",
+      siteName: "Bairnsdale Office",
+      slaDueAt: "2026-07-14T17:00:00.000Z",
+      status: "Scheduled",
+      title: "VPN outage follow-up",
+    };
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+
+    const rendered = await renderJobDetail(job.id, repository);
+    const text = textValues(rendered);
+
+    expect(text.indexOf("Latest job information")).toBeLessThan(
+      text.indexOf("Work Log notes"),
+    );
+    expect(text).toContain("Work Log");
+    expect(text).toContain("Request number: REQ-100900");
+    expect(text).toContain("Subject: VPN outage follow-up");
+    expect(text).toContain("Customer/site: Gippsland Legal / Bairnsdale Office");
+    expect(text).toContain("Status: Scheduled");
+    expect(text).toContain("Priority: High");
+    expect(text).toContain("Technician: Riley");
+    expect(text).toContain("Booking type: Onsite");
+    expect(text).toContain("Contact: Alex Morgan");
+    expect(text).toContain("Site/address: 14 Main Street, Bairnsdale VIC 3875");
+    expect(text).toContain("Current/latest notes: Customer confirmed VPN still drops.");
+    expect(text).toContain("Customer-facing");
+    expect(text).toContain("Internal");
+
+    const customerFacing = rendered.root.findAll(
+      (node) => node.props.accessibilityLabel === "Customer-facing",
+    )[0];
+    expect(customerFacing.props.accessibilityState).toMatchObject({
+      selected: true,
+    });
+  });
+
   it("stops a timer restored after the app was closed", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-12T01:00:00.000Z"));

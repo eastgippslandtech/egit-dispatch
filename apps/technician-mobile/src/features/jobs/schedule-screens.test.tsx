@@ -17,6 +17,9 @@ import { MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
 
 vi.mock("react-native", () => ({
   ActivityIndicator: "ActivityIndicator",
+  AppState: {
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+  },
   FlatList: ({
     data,
     ListEmptyComponent,

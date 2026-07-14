@@ -12,6 +12,7 @@ export type MobileJobStatus =
 export type SyncState = "synced" | "pending" | "failed" | "conflict";
 export type NoteVisibility = "internal" | "external";
 export type EvidenceKind = "photo" | "document";
+export type WorkLogType = "billable" | "non_billable" | "internal";
 
 export interface DateRange {
   from: string;
@@ -170,7 +171,7 @@ export interface MutationReceipt {
   mode: "database" | "mock";
   resourceId: string;
   resourceVersion: string;
-  status: "pending";
+  status: "applied" | "pending";
   recordedAt: string;
 }
 
@@ -182,12 +183,14 @@ export interface StopTimerCommand extends MutationEnvelope {
 }
 
 export interface SaveWorklogCommand extends MutationEnvelope {
+  billable?: boolean;
   startedAt: string;
   endedAt: string;
   durationMinutes: number;
   summary: string;
   timerSessionId: string | null;
   visibility: NoteVisibility;
+  workType?: WorkLogType;
 }
 
 export interface UpdateStatusCommand extends MutationEnvelope {
@@ -219,7 +222,10 @@ export interface SaveSignOffCommand extends MutationEnvelope {
 }
 
 export interface CompleteJobCommand extends MutationEnvelope {
+  billable?: boolean;
+  durationMinutes?: number;
   summary: string;
   visibility: NoteVisibility;
   followUpNeeded: boolean;
+  workType?: WorkLogType;
 }

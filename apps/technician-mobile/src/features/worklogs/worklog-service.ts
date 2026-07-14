@@ -2,13 +2,19 @@ import type {
   MobileJob,
   MobileJobStatus,
   NoteVisibility,
+  MutationReceipt,
+  SaveWorklogCommand,
+  WorkLogType,
 } from "../../contracts/mobile";
 
 export interface WorklogDraft {
   jobId: string;
+  billable: boolean;
+  durationMinutes: number;
   note: string;
   technicianId: string;
   visibility: NoteVisibility;
+  workType: WorkLogType;
 }
 
 export function createWorklogDraftStore() {
@@ -30,16 +36,24 @@ export async function saveWorklogWithDraft({
   draftStore,
   job,
   note,
+  billable = true,
+  durationMinutes = 0,
   simulateFailure,
+  submit,
   technicianId,
   visibility,
+  workType = "billable",
 }: {
+  billable?: boolean;
   draftStore: ReturnType<typeof createWorklogDraftStore>;
+  durationMinutes?: number;
   job: MobileJob;
   note: string;
   simulateFailure?: boolean;
+  submit?: (command: SaveWorklogCommand) => Promise<MutationReceipt>;
   technicianId: string;
   visibility: NoteVisibility;
+  workType?: WorkLogType;
 }) {
   if (!job.permissions.canWriteWorklog) {
     throw new Error(job.permissions.readOnlyReason ?? "Worklogs are read-only.");
@@ -49,15 +63,36 @@ export async function saveWorklogWithDraft({
   }
 
   const draft: WorklogDraft = {
+    billable,
+    durationMinutes,
     jobId: job.id,
     note: note.trim(),
     technicianId,
     visibility,
+    workType,
   };
   await draftStore.save(draft);
 
   if (simulateFailure) {
     return { draft, status: "queued-for-retry" as const };
+  }
+
+  if (submit) {
+    await submit({
+      baseVersion: job.version,
+      billable,
+      clientMutationId: `worklog-${job.id}-${Date.now()}`,
+      durationMinutes: Math.max(1, durationMinutes),
+      endedAt: new Date().toISOString(),
+      installationId: "local-simulator",
+      jobId: job.id,
+      occurredAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      summary: note.trim(),
+      timerSessionId: null,
+      visibility,
+      workType,
+    });
   }
 
   await draftStore.remove(technicianId, job.id);

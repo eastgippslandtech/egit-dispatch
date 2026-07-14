@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  completeMobileJob,
   listMobileJobs,
   getMobileJob,
   rileyMobileAuth,
@@ -178,12 +179,14 @@ describe("mobile API service", () => {
         clientMutationId: "note-1",
         durationMinutes: 30,
         endedAt: "2026-07-14T02:00:00.000Z",
+        billable: true,
         installationId: "phone-1",
         occurredAt: "2026-07-14T02:00:00.000Z",
         startedAt: "2026-07-14T01:30:00.000Z",
         summary: "Rebooted router and verified VPN.",
         timerSessionId: null,
         visibility: "external",
+        workType: "billable",
       },
       database: createDatabase({ saveWorklog: saved }),
       jobId: "link-100900",
@@ -192,14 +195,62 @@ describe("mobile API service", () => {
     expect(saved).toHaveBeenCalledWith(
       expect.objectContaining({
         body: "Rebooted router and verified VPN.",
+        billable: true,
         job: dbJob,
         visibility: "external",
+        workType: "billable",
       }),
     );
     expect(response.receipt).toMatchObject({
       clientMutationId: "note-1",
       mode: "database",
       resourceId: "log-mobile-note-1",
+      status: "pending",
+    });
+  });
+
+  it("records native save-and-complete as a Command Centre completion sync intent", async () => {
+    const saved = vi.fn(async () => ({
+      recordedAt: "2026-07-14T02:05:00.000Z",
+      resourceId: "log-mobile-complete-1",
+      resourceVersion: "db-link-100900-log-mobile-complete-1",
+    }));
+
+    const response = await completeMobileJob({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        billable: false,
+        clientMutationId: "complete-1",
+        durationMinutes: 45,
+        followUpNeeded: false,
+        installationId: "phone-1",
+        occurredAt: "2026-07-14T02:05:00.000Z",
+        summary: "Completed VPN follow-up and confirmed with Alex.",
+        visibility: "external",
+        workType: "non_billable",
+      },
+      database: createDatabase({ saveWorklog: saved }),
+      jobId: "link-100900",
+    });
+
+    expect(saved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "mobile_completion",
+        billable: false,
+        body: "Completed VPN follow-up and confirmed with Alex.",
+        durationMinutes: 45,
+        followUpNeeded: false,
+        job: dbJob,
+        targetStatus: "Resolved",
+        visibility: "external",
+        workType: "non_billable",
+      }),
+    );
+    expect(response.receipt).toMatchObject({
+      clientMutationId: "complete-1",
+      mode: "database",
+      resourceId: "log-mobile-complete-1",
       status: "pending",
     });
   });

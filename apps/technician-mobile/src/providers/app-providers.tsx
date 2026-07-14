@@ -9,19 +9,29 @@ import {
 
 import {
   clearMobileSession,
+  type MobileSession,
   restoreMobileSession,
   saveMobileSession,
 } from "../auth/session-store";
+import { createApiClient } from "../api/client";
 import { refreshMobileSession } from "../auth/session-refresh";
 import { performZohoSignIn, type ZohoSignInResult } from "../auth/zoho-sign-in";
+import { getMobileRuntimeConfig } from "../config/runtime";
 import type { MobileStaff } from "../contracts/mobile";
+import { createApiTechnicianRepository } from "../data/api-technician-repository";
 import { MockTechnicianRepository } from "../data/mock-technician-repository";
+import { createOfflineTechnicianRepository } from "../data/offline-technician-repository";
 import type { TechnicianRepository } from "../data/technician-repository";
+import {
+  createInMemoryCommandCentreDatabase,
+  openCommandCentreDatabase,
+} from "../db/database";
+import { createMutationQueue } from "../features/sync/mutation-queue";
 import { MOBILE_STAFF_FIXTURES } from "../testing/fixtures";
 
 export type TechnicianSession =
   | { status: "signed-out" }
-  | { status: "approved"; staff: MobileStaff };
+  | { status: "approved"; mobileSession?: MobileSession; staff: MobileStaff };
 
 export const REVIEWER_DEMO_CODE = "EGIT-REVIEW-2026";
 
@@ -62,6 +72,10 @@ export function AppProviders({
 }: AppProvidersProps) {
   const [session, setSession] = useState<TechnicianSession>(initialSession);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [liveRepository, setLiveRepository] = useState<{
+    accessToken: string;
+    repository: TechnicianRepository;
+  } | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [injectedRepository] = useState(repository);
   useEffect(() => {
@@ -97,7 +111,11 @@ export function AppProviders({
             (staff) => staff.email === currentSession.staffEmail,
           );
           if (restoredStaff) {
-            setSession({ status: "approved", staff: restoredStaff });
+            setSession({
+              status: "approved",
+              mobileSession: currentSession,
+              staff: restoredStaff,
+            });
           }
         });
       })
@@ -114,12 +132,62 @@ export function AppProviders({
     session.status === "approved"
       ? session.staff.email
       : approvedMockStaff.email;
-  const repositoryValue = useMemo<TechnicianRepository>(
-    () =>
-      injectedRepository ??
-      new MockTechnicianRepository({ staffEmail: effectiveStaffEmail }),
-    [effectiveStaffEmail, injectedRepository],
-  );
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      injectedRepository ||
+      session.status !== "approved" ||
+      !session.mobileSession ||
+      isLocalMockSession(session.mobileSession)
+    ) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const mobileSession = session.mobileSession;
+    createLiveRepository(mobileSession, session.staff)
+      .then((nextRepository) => {
+        if (!cancelled) {
+          setLiveRepository({
+            accessToken: mobileSession.accessToken,
+            repository: nextRepository,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLiveRepository({
+            accessToken: mobileSession.accessToken,
+            repository: createUnavailableRepository(error),
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [injectedRepository, session]);
+
+  const repositoryValue = useMemo<TechnicianRepository>(() => {
+    if (injectedRepository) {
+      return injectedRepository;
+    }
+    if (
+      session.status === "approved" &&
+      session.mobileSession &&
+      !isLocalMockSession(session.mobileSession)
+    ) {
+      if (liveRepository?.accessToken === session.mobileSession.accessToken) {
+        return liveRepository.repository;
+      }
+      return (
+        createSessionRemoteRepository(session.mobileSession, session.staff)
+      );
+    }
+    return new MockTechnicianRepository({ staffEmail: effectiveStaffEmail });
+  }, [effectiveStaffEmail, injectedRepository, liveRepository, session]);
   const sessionValue = useMemo<SessionContextValue>(
     () => ({
       isSigningIn,
@@ -130,7 +198,11 @@ export function AppProviders({
         setSignInError(null);
         try {
           const result = await signInWithZoho();
-          setSession({ status: "approved", staff: result.staff });
+          setSession({
+            status: "approved",
+            mobileSession: result.session,
+            staff: result.staff,
+          });
         } catch (error) {
           setSignInError(
             error instanceof Error ? error.message : "Zoho sign-in failed.",
@@ -164,6 +236,71 @@ export function AppProviders({
       </SessionContext.Provider>
     </TechnicianRepositoryContext.Provider>
   );
+}
+
+async function createLiveRepository(
+  session: MobileSession,
+  staff: MobileStaff,
+): Promise<TechnicianRepository> {
+  const database = await openCommandCentreDatabase().catch(() =>
+    createInMemoryCommandCentreDatabase(),
+  );
+  const remote = createSessionRemoteRepository(session, staff);
+  const api = createSessionApiClient(session);
+  return createOfflineTechnicianRepository({
+    api,
+    database,
+    queue: createMutationQueue(database),
+    remote,
+  });
+}
+
+function createSessionRemoteRepository(
+  session: MobileSession,
+  staff: MobileStaff,
+): TechnicianRepository {
+  const api = createSessionApiClient(session);
+  const remote = createApiTechnicianRepository(api);
+  return {
+    ...remote,
+    getCurrentStaff: async () => staff,
+  };
+}
+
+function createSessionApiClient(session: MobileSession) {
+  const config = getMobileRuntimeConfig();
+  return createApiClient({
+    accessToken: session.accessToken,
+    baseUrl: config.mobileApiBaseUrl,
+  });
+}
+
+function isLocalMockSession(session: MobileSession): boolean {
+  return session.accessToken.startsWith("local-mock-");
+}
+
+function createUnavailableRepository(error?: unknown): TechnicianRepository {
+  const message =
+    error instanceof Error
+      ? error.message
+      : "Preparing live Command Centre connection.";
+  const reject = async () => {
+    throw new Error(message);
+  };
+
+  return {
+    addPart: reject,
+    attachEvidence: reject,
+    completeJob: reject,
+    getCurrentStaff: reject,
+    getJob: reject,
+    listSchedule: reject,
+    saveSignOff: reject,
+    saveWorklog: reject,
+    startTimer: reject,
+    stopTimer: reject,
+    updateStatus: reject,
+  };
 }
 
 export function useTechnicianRepository(): TechnicianRepository {

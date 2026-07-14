@@ -6,6 +6,8 @@ import {
   getMobileJob,
   rileyMobileAuth,
   saveMobileWorklog,
+  startMobileTimer,
+  stopMobileTimer,
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
 
@@ -252,6 +254,52 @@ describe("mobile API service", () => {
       mode: "database",
       resourceId: "log-mobile-complete-1",
       status: "pending",
+    });
+  });
+
+  it("starts and stops native timers for real database jobs", async () => {
+    const started = await startMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        clientMutationId: "timer-start-1",
+        installationId: "phone-1",
+        jobId: "link-100900",
+        occurredAt: "2026-07-14T01:30:00.000Z",
+      },
+      database: createDatabase(),
+      jobId: "link-100900",
+    });
+
+    expect(started.timer).toMatchObject({
+      id: "timer-timer-start-1",
+      jobId: "link-100900",
+      startedAt: "2026-07-14T01:30:00.000Z",
+      technicianId: "staff-db-riley",
+    });
+
+    const stopped = await stopMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        clientMutationId: "timer-stop-1",
+        installationId: "phone-1",
+        jobId: "link-100900",
+        occurredAt: "2026-07-14T01:47:00.000Z",
+        startedAt: "2026-07-14T01:30:00.000Z",
+        timerId: "timer-timer-start-1",
+      },
+      database: createDatabase(),
+      jobId: "link-100900",
+    });
+
+    expect(stopped.timer).toMatchObject({
+      actualElapsedMinutes: 17,
+      id: "timer-timer-start-1",
+      jobId: "link-100900",
+      roundedMinutes: 30,
+      stoppedAt: "2026-07-14T01:47:00.000Z",
+      technicianId: "staff-db-riley",
     });
   });
 });

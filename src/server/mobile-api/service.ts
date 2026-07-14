@@ -5,6 +5,7 @@ import {
 } from "../../../apps/technician-mobile/src/testing/fixtures";
 import type { MobileJob } from "../../../apps/technician-mobile/src/contracts/mobile";
 import type {
+  ActiveTimer,
   BookingType,
   MobileJobNote,
   MobileJobPermissions,
@@ -12,6 +13,9 @@ import type {
   MobilePriority,
   MobileStaff,
   MutationReceipt,
+  StartTimerCommand,
+  StoppedTimer,
+  StopTimerCommand,
   SyncState,
 } from "../../../apps/technician-mobile/src/contracts/mobile";
 
@@ -199,6 +203,104 @@ export async function saveMobileWorklog({
   };
 }
 
+export async function startMobileTimer({
+  auth,
+  command,
+  database = getConfiguredMobileDatabase(),
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  command: StartTimerCommand;
+  database?: MobileDatabase | null;
+  jobId: string;
+}): Promise<{ timer: ActiveTimer }> {
+  const job = database
+    ? mapDatabaseJob(
+        await requireDatabaseJobForStaff({
+          auth,
+          database,
+          jobId,
+        }),
+      )
+    : findOwnedJob(auth, jobId);
+
+  if (!job.permissions.canStartTimer) {
+    throw Object.assign(
+      new Error(job.permissions.readOnlyReason ?? "A timer cannot be started for this job."),
+      { code: "READ_ONLY_SOURCE", status: 409 },
+    );
+  }
+
+  const startedAt = requireIsoTimestamp(command.occurredAt, "Timer start time");
+  return {
+    timer: {
+      accumulatedPausedSeconds: 0,
+      id: `timer-${command.clientMutationId}`,
+      jobId,
+      pausedAt: null,
+      startedAt,
+      technicianId: job.technician.id,
+    },
+  };
+}
+
+export async function stopMobileTimer({
+  auth,
+  command,
+  database = getConfiguredMobileDatabase(),
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  command: StopTimerCommand;
+  database?: MobileDatabase | null;
+  jobId: string;
+}): Promise<{ timer: StoppedTimer }> {
+  const job = database
+    ? mapDatabaseJob(
+        await requireDatabaseJobForStaff({
+          auth,
+          database,
+          jobId,
+        }),
+      )
+    : findOwnedJob(auth, jobId);
+
+  if (!job.permissions.canStartTimer) {
+    throw Object.assign(
+      new Error(job.permissions.readOnlyReason ?? "A timer cannot be stopped for this job."),
+      { code: "READ_ONLY_SOURCE", status: 409 },
+    );
+  }
+
+  const startedAt = requireIsoTimestamp(command.startedAt, "Timer start time");
+  const stoppedAt = requireIsoTimestamp(command.occurredAt, "Timer stop time");
+  if (new Date(stoppedAt) < new Date(startedAt)) {
+    throw Object.assign(new Error("Timer stop time cannot be before its start time."), {
+      code: "BAD_REQUEST",
+      status: 400,
+    });
+  }
+
+  const actualElapsedMinutes = Math.max(
+    1,
+    Math.ceil((new Date(stoppedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
+  );
+
+  return {
+    timer: {
+      accumulatedPausedSeconds: 0,
+      actualElapsedMinutes,
+      id: command.timerId,
+      jobId,
+      pausedAt: null,
+      roundedMinutes: Math.ceil(actualElapsedMinutes / 15) * 15,
+      startedAt,
+      stoppedAt,
+      technicianId: job.technician.id,
+    },
+  };
+}
+
 export async function completeMobileJob({
   auth,
   command,
@@ -333,6 +435,26 @@ async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string)
     });
   }
   return staff;
+}
+
+async function requireDatabaseJobForStaff({
+  auth,
+  database,
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  database: MobileDatabase;
+  jobId: string;
+}) {
+  const staff = await requireDatabaseStaff(database, auth.email);
+  const job = await database.findJobForStaff({ jobId, staffId: staff.id });
+  if (!job) {
+    throw Object.assign(new Error("Mobile job was not found."), {
+      code: "NOT_FOUND",
+      status: 404,
+    });
+  }
+  return job;
 }
 
 const WRITABLE_PERMISSIONS: MobileJobPermissions = {
@@ -563,6 +685,16 @@ function visibilityFromPayload(record: Record<string, unknown>) {
 
 function worklogBody(command: MobileWorklogCommand) {
   return (command.body ?? command.summary ?? "").trim();
+}
+
+function requireIsoTimestamp(value: string | undefined, label: string) {
+  if (!value || Number.isNaN(Date.parse(value))) {
+    throw Object.assign(new Error(`${label} is required.`), {
+      code: "BAD_REQUEST",
+      status: 400,
+    });
+  }
+  return value;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

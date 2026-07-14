@@ -16,9 +16,10 @@ import {
   Search,
   X,
 } from "lucide-react";
-import Image from "next/image";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+
+import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 
 import type {
   Appointment,
@@ -914,7 +915,7 @@ export function CommandCentrePrototype({
 
   return (
     <main
-      className="cc-density-compact h-screen overflow-hidden bg-[#07111f] text-slate-100"
+      className="cc-density-compact h-screen overflow-hidden bg-cc-canvas text-slate-100"
       data-density="compact"
     >
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -940,16 +941,16 @@ export function CommandCentrePrototype({
         />
 
         <section className="shrink-0 px-3 pb-2 pt-2">
-          <div className="rounded-lg border border-white/10 bg-[#0b1628] p-2.5 shadow-xl">
+          <div className="rounded-lg border border-white/10 bg-cc-surface-1 p-2.5 shadow-xl">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
                   Health
                 </p>
                 <div className="mt-0.5 flex flex-wrap items-center gap-3">
                   <h2 className="text-base font-semibold">Dispatch Health</h2>
                   {activeHealthItem ? (
-                    <span className="rounded-full border border-cyan-200/25 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-100">
+                    <span className="rounded-full border border-cc-orange/25 bg-cc-orange/10 px-2 py-0.5 text-[11px] font-semibold text-cc-orange">
                       {healthLabel(activeHealthItem)}
                     </span>
                   ) : null}
@@ -962,7 +963,7 @@ export function CommandCentrePrototype({
                 </p>
                 {filtersActive ? (
                   <button
-                    className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cyan-200/30 hover:text-cyan-100"
+                    className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cc-orange/30 hover:text-cc-orange"
                     type="button"
                     onClick={clearAllFilters}
                   >
@@ -973,7 +974,7 @@ export function CommandCentrePrototype({
                   aria-expanded={showMoreHealth}
                   className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${
                     secondaryHealthActive
-                      ? "border-cyan-200/40 bg-cyan-300/12 text-cyan-100"
+                      ? "border-cc-orange/40 bg-cc-orange/12 text-cc-orange"
                       : "border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/25 hover:text-slate-100"
                   }`}
                   type="button"
@@ -1024,7 +1025,7 @@ export function CommandCentrePrototype({
 
         {/* TODO: Future /dispatch/wallboard can reuse this viewport shell, hide side panels, and give the timeline the full wall display width. */}
         <section className="grid min-h-0 flex-1 grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] gap-3 px-3 pb-3 max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]">
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1628] shadow-xl">
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="shrink-0 border-b border-white/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Queue
@@ -1039,7 +1040,7 @@ export function CommandCentrePrototype({
                     : readyRequests.length}
                 </span>
               </div>
-              <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cyan-200/40">
+              <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cc-orange/40">
                 <Search className="h-4 w-4" />
                 <input
                   className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 placeholder:text-slate-400 focus:outline-none"
@@ -1123,12 +1124,12 @@ export function CommandCentrePrototype({
                 />
               </div>
               {activeHealthItem ? (
-                <div className="mt-2 flex items-center justify-between rounded-md border border-cyan-200/20 bg-cyan-300/10 px-2.5 py-1.5 text-xs text-cyan-50">
+                <div className="mt-2 flex items-center justify-between rounded-md border border-cc-orange/20 bg-cc-orange/10 px-2.5 py-1.5 text-xs text-cc-orange">
                   <span className="font-semibold">
                     Health filter: {healthLabel(activeHealthItem)}
                   </span>
                   <button
-                    className="rounded px-1.5 py-0.5 font-semibold text-cyan-100 hover:bg-white/10"
+                    className="rounded px-1.5 py-0.5 font-semibold text-cc-orange hover:bg-white/10"
                     type="button"
                     onClick={() => setActiveHealth(undefined)}
                   >
@@ -1167,7 +1168,7 @@ export function CommandCentrePrototype({
             </div>
           </aside>
 
-          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1628] shadow-xl">
+          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2.5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -1354,12 +1355,12 @@ function ScheduleConfirmModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
       <section
         aria-modal="true"
-        className="w-full max-w-lg rounded-lg border border-cyan-300/20 bg-[#0b1628] p-5 text-slate-100 shadow-2xl"
+        className="w-full max-w-lg rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
         role="dialog"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
               Confirm mock schedule
             </p>
             <h2 className="mt-2 text-xl font-semibold">
@@ -1372,7 +1373,7 @@ function ScheduleConfirmModal({
         </div>
 
         <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
-          <div className="font-mono text-xs text-cyan-200">
+          <div className="font-mono text-xs text-cc-orange">
             {request?.requestNumber ?? "Outlook-only"}
           </div>
           <div className="mt-1 text-base font-semibold">
@@ -1521,7 +1522,7 @@ function ScheduleConfirmModal({
             Cancel
           </button>
           <button
-            className="rounded-md bg-cyan-400 px-4 py-2 text-sm font-semibold text-[#07111f]"
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1"
             type="button"
             onClick={onConfirm}
           >
@@ -1578,12 +1579,12 @@ function WorkLogModal({
       <section
         aria-labelledby="work-log-title"
         aria-modal="true"
-        className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg border border-cyan-300/20 bg-[#0b1628] p-5 text-slate-100 shadow-2xl"
+        className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
         role="dialog"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
               Mock/test-sync only
             </p>
             <h2 id="work-log-title" className="mt-2 text-xl font-semibold">
@@ -1729,7 +1730,7 @@ function WorkLogModal({
             Cancel
           </button>
           <button
-            className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100"
+            className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-4 py-2 text-sm font-semibold text-cc-orange"
             type="button"
             onClick={() =>
               onSave({ billable, complete: false, minutes, notes, visibility, workType })
@@ -1738,7 +1739,7 @@ function WorkLogModal({
             Save Work Log
           </button>
           <button
-            className="rounded-md bg-cyan-400 px-4 py-2 text-sm font-semibold text-[#07111f]"
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1"
             type="button"
             onClick={() =>
               onSave({ billable, complete: true, minutes, notes, visibility, workType })
@@ -1768,7 +1769,7 @@ function ScheduleSummary({
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </div>
-      <div className="mt-2 font-mono text-sm font-semibold text-cyan-100">
+      <div className="mt-2 font-mono text-sm font-semibold text-cc-orange">
         {time}
       </div>
       <div className="mt-1 text-xs text-slate-400">{date}</div>
@@ -1809,16 +1810,14 @@ function CommandHeader({
   viewMode: ViewMode;
 }) {
   return (
-    <header className="border-b border-white/10 bg-[#0b1628] px-3 py-2.5">
+    <header className="border-b border-cc-border bg-cc-surface-1 px-3 py-2.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <Image
-            alt=""
-            className="h-11 w-11 shrink-0 object-contain"
-            height={150}
+          <CommandCentreLogo
+            className="h-12 w-12 shrink-0 object-contain"
+            decorative
             priority
-            src="/assets/command-centre-logo-header.png"
-            width={150}
+            variant="icon-colour"
           />
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1833,7 +1832,7 @@ function CommandHeader({
               </span>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
-              <CalendarDays className="h-4 w-4 text-cyan-200" />
+              <CalendarDays className="h-4 w-4 text-cc-orange" />
               <span className="font-semibold text-slate-100">{date}</span>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs">
                 {timezone}
@@ -1849,7 +1848,7 @@ function CommandHeader({
                 aria-pressed={viewMode === mode}
                 className={`rounded px-2.5 py-1 text-sm font-semibold capitalize ${
                   viewMode === mode
-                    ? "bg-cyan-300 text-[#07111f]"
+                    ? "bg-cc-orange text-cc-surface-1"
                     : "text-slate-300 hover:bg-white/5"
                 }`}
                 type="button"
@@ -1863,7 +1862,7 @@ function CommandHeader({
             <ChevronLeft className="h-4 w-4" />
           </IconButton>
           <button
-            className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1.5 text-sm font-semibold text-cyan-100"
+            className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-2.5 py-1.5 text-sm font-semibold text-cc-orange"
             type="button"
             onClick={onToday}
           >
@@ -1879,7 +1878,7 @@ function CommandHeader({
             value={dateKey}
             onChange={(event) => onDateChange(event.target.value)}
           />
-          <label className="flex min-w-[220px] items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-400 focus-within:border-cyan-200/40">
+          <label className="flex min-w-[220px] items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-400 focus-within:border-cc-orange/40">
             <Search className="h-4 w-4" />
             <input
               className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-400 focus:outline-none"
@@ -1990,7 +1989,7 @@ function QueueFilterMenu({
         aria-expanded={open}
         className={`flex w-full items-center justify-between rounded-md border px-2 py-1.5 text-xs transition ${
           activeValue
-            ? "border-cyan-200/35 bg-cyan-300/10 text-cyan-100"
+            ? "border-cc-orange/35 bg-cc-orange/10 text-cc-orange"
             : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25"
         }`}
         type="button"
@@ -2002,14 +2001,14 @@ function QueueFilterMenu({
         <Filter className="h-3.5 w-3.5 shrink-0 text-slate-500" />
       </button>
       {open ? (
-        <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-full min-w-[160px] rounded-md border border-white/10 bg-[#081425] p-1 shadow-2xl">
+        <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-full min-w-[160px] rounded-md border border-white/10 bg-cc-surface-2 p-1 shadow-2xl">
           {options.map((option) => (
             <button
               key={option.value ?? "all"}
               aria-pressed={activeValue === option.value}
               className={`w-full rounded px-2 py-1 text-left text-xs transition ${
                 activeValue === option.value
-                  ? "bg-cyan-300/15 text-cyan-100"
+                  ? "bg-cc-orange/15 text-cc-orange"
                   : "text-slate-300 hover:bg-white/5"
               }`}
               type="button"
@@ -2048,7 +2047,7 @@ function RequestQueueCard({
       draggable
       className={`w-full rounded-md border p-2.5 text-left transition ${
         active
-          ? "border-cyan-200/80 bg-cyan-300/15 shadow-[0_0_0_1px_rgba(103,232,249,0.28),0_14px_32px_rgba(8,145,178,0.16)]"
+          ? "border-cc-orange/80 bg-cc-orange/15 shadow-[0_0_0_1px_rgba(255,130,58,0.28),0_14px_32px_rgba(255,130,58,0.16)]"
           : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.06]"
       }`}
       type="button"
@@ -2062,7 +2061,7 @@ function RequestQueueCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="font-mono text-[11px] text-cyan-200">
+          <div className="font-mono text-[11px] text-cc-orange">
             {request.requestNumber}
           </div>
           <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
@@ -2276,8 +2275,8 @@ function TimelineBoard({
                 </p>
               </div>
               <div
-                className={`relative bg-[#0b1628] ${
-                  dragPayload ? "outline outline-1 outline-cyan-300/10" : ""
+                className={`relative bg-cc-surface-1 ${
+                  dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                 }`}
                 data-testid="timeline-track"
                 style={{ height: rowHeight, width: timelineTrackWidth }}
@@ -2435,7 +2434,7 @@ function WeekPlanner({
               key={day.dateKey}
               className={`border-l px-2.5 py-2.5 text-left text-xs font-semibold hover:bg-white/[0.04] ${
                 isToday
-                  ? "border-cyan-300/30 bg-cyan-300/[0.08] text-cyan-50"
+                  ? "border-cc-orange/30 bg-cc-orange/[0.08] text-cc-orange"
                   : "border-white/10 bg-[#0f1b2e] text-slate-200"
               }`}
               type="button"
@@ -2443,7 +2442,7 @@ function WeekPlanner({
             >
               <span>{day.shortLabel}</span>
               {isToday ? (
-                <span className="ml-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-100">
+                <span className="ml-2 rounded-full border border-cc-orange/30 bg-cc-orange/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cc-orange">
                   Today
                 </span>
               ) : null}
@@ -2483,10 +2482,10 @@ function WeekPlanner({
                   key={`${technician.id}-${day.dateKey}`}
                   className={`min-h-[132px] border-l p-1.5 ${
                     isToday
-                      ? "border-cyan-300/20 bg-cyan-300/[0.045]"
-                      : "border-white/[0.06] bg-[#0b1628]"
+                      ? "border-cc-orange/20 bg-cc-orange/[0.045]"
+                      : "border-white/[0.06] bg-cc-surface-1"
                   } ${
-                    dragPayload ? "outline outline-1 outline-cyan-300/10" : ""
+                    dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                   }`}
                   onDragOver={(event) => {
                     if (!dragPayload) {
@@ -2558,7 +2557,7 @@ function WeekAppointmentCard({
       draggable
       className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${
         active
-          ? "border-cyan-100 bg-cyan-300/22 text-cyan-50 ring-2 ring-cyan-200"
+          ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
           : warning
             ? "border-amber-300/50 bg-amber-300/15 text-amber-50"
             : "border-sky-300/40 bg-sky-300/12 text-sky-50"
@@ -2614,10 +2613,10 @@ function CurrentTimeHeaderMarker({
 
   return (
     <div
-      className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-cyan-300/35 bg-[#081425]/95 px-2 py-1 text-[10px] font-semibold text-cyan-50 shadow-[0_0_16px_rgba(34,211,238,0.32)]"
+      className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-cc-orange/35 bg-cc-surface-2/95 px-2 py-1 text-[10px] font-semibold text-cc-orange shadow-[0_0_16px_rgba(255,130,58,0.32)]"
       style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
     >
-      <span className="uppercase tracking-wide text-cyan-200">Now</span>
+      <span className="uppercase tracking-wide text-cc-orange">Now</span>
       <span className="font-mono text-white">{indicator.label}</span>
     </div>
   );
@@ -2637,11 +2636,11 @@ function CurrentTimeLaneOverlay({
   return (
     <>
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-[1] bg-cyan-300/[0.045]"
+        className="pointer-events-none absolute inset-y-0 left-0 z-[1] bg-cc-orange/[0.045]"
         style={{ width: scaleTimelineX(indicator.elapsedWidthPx, trackWidth) }}
       />
       <div
-        className="pointer-events-none absolute inset-y-0 z-[4] w-px bg-cyan-300/90 shadow-[0_0_14px_rgba(34,211,238,0.6)]"
+        className="pointer-events-none absolute inset-y-0 z-[4] w-px bg-cc-orange/90 shadow-[0_0_14px_rgba(255,130,58,0.6)]"
         style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
       />
     </>
@@ -2691,7 +2690,7 @@ function TimelineOverlapGroup({
     <div
       className={`absolute z-30 transition ${
         searchState === "dimmed" ? "opacity-35 grayscale" : ""
-      } ${searchState === "match" ? "drop-shadow-[0_0_16px_rgba(34,211,238,0.18)]" : ""}`}
+      } ${searchState === "match" ? "drop-shadow-[0_0_16px_rgba(255,130,58,0.18)]" : ""}`}
       data-search-state={searchState}
       data-testid={`timeline-overlap-${frontAppointment.id}`}
       style={{
@@ -2714,7 +2713,7 @@ function TimelineOverlapGroup({
         title={`${frontAppointment.title} | ${frontAppointment.start}-${frontAppointment.end} | ${frontAppointment.customer}${frontRequest ? ` | ${frontRequest.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
-            ? "border-cyan-100 bg-cyan-300/24 text-cyan-50 ring-2 ring-cyan-200"
+            ? "border-cc-orange bg-cc-orange/24 text-cc-orange ring-2 ring-cc-orange"
             : "border-rose-200/70 bg-rose-300/18 text-rose-50"
         }`}
         style={{
@@ -2765,7 +2764,7 @@ function TimelineOverlapGroup({
       </button>
       {open ? (
         <div
-          className="absolute left-0 top-[66px] z-50 w-[300px] rounded-lg border border-rose-200/30 bg-[#081425]/98 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
+          className="absolute left-0 top-[66px] z-50 w-[300px] rounded-lg border border-rose-200/30 bg-cc-surface-2/98 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
           data-testid="timeline-overlap-reveal"
         >
           <div className="mb-2 flex items-center justify-between gap-2 px-1">
@@ -2786,9 +2785,9 @@ function TimelineOverlapGroup({
                 <button
                   key={appointment.id}
                   aria-label={`${appointment.title} ${appointment.customer}`}
-                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cyan-200/60 hover:bg-cyan-300/10 ${
+                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cc-orange/60 hover:bg-cc-orange/10 ${
                     selected
-                      ? "border-cyan-200/70 bg-cyan-300/14"
+                      ? "border-cc-orange/70 bg-cc-orange/14"
                       : "border-white/10 bg-white/[0.035]"
                   }`}
                   draggable
@@ -2805,7 +2804,7 @@ function TimelineOverlapGroup({
                     <span className="line-clamp-2 font-semibold leading-snug text-slate-50">
                       {appointment.title}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-cyan-100">
+                    <span className="shrink-0 font-mono text-[10px] text-cc-orange">
                       {appointment.start}-{appointment.end}
                     </span>
                   </div>
@@ -2878,14 +2877,14 @@ function TimelineAppointment({
         title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
-            ? "z-20 border-cyan-100 bg-cyan-300/22 text-cyan-50 ring-2 ring-cyan-200 shadow-[0_0_0_1px_rgba(103,232,249,0.34),0_18px_42px_rgba(8,145,178,0.22)]"
+            ? "z-20 border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange shadow-[0_0_0_1px_rgba(255,130,58,0.34),0_18px_42px_rgba(255,130,58,0.22)]"
             : warning
               ? "z-10 border-amber-300/50 bg-amber-300/15 text-amber-50"
               : "z-10 border-sky-300/40 bg-sky-300/12 text-sky-50"
         } ${
           searchState === "dimmed" ? "opacity-35 grayscale" : ""
         } ${
-          searchState === "match" ? "ring-1 ring-cyan-200/60" : ""
+          searchState === "match" ? "ring-1 ring-cc-orange/60" : ""
         }`}
         style={{
           height: cardHeight,
@@ -2967,7 +2966,7 @@ function TimelineDropPreview({
         className={`pointer-events-none absolute z-0 overflow-hidden rounded-md border border-dashed px-2 py-1 text-xs ${
           preview.warning
             ? "border-amber-300/60 bg-amber-300/10 text-amber-50"
-            : "border-cyan-300/60 bg-cyan-300/10 text-cyan-50"
+            : "border-cc-orange/60 bg-cc-orange/10 text-cc-orange"
         }`}
         style={{
           height,
@@ -3035,7 +3034,7 @@ function TravelSideExtension({
           : "rounded-l-none rounded-r-md border-l-0 justify-start"
       } ${
         active
-          ? "border-cyan-200/40 bg-[repeating-linear-gradient(135deg,rgba(103,232,249,0.18)_0,rgba(103,232,249,0.18)_5px,rgba(103,232,249,0.07)_5px,rgba(103,232,249,0.07)_10px)] text-cyan-100/85"
+          ? "border-cc-orange/40 bg-[repeating-linear-gradient(135deg,rgba(255,130,58,0.18)_0,rgba(255,130,58,0.18)_5px,rgba(255,130,58,0.07)_5px,rgba(255,130,58,0.07)_10px)] text-cc-orange/85"
           : warning
             ? "border-amber-300/25 bg-[repeating-linear-gradient(135deg,rgba(251,191,36,0.16)_0,rgba(251,191,36,0.16)_5px,rgba(251,191,36,0.06)_5px,rgba(251,191,36,0.06)_10px)] text-amber-100/80"
             : "border-slate-300/16 bg-[repeating-linear-gradient(135deg,rgba(148,163,184,0.16)_0,rgba(148,163,184,0.16)_5px,rgba(148,163,184,0.06)_5px,rgba(148,163,184,0.06)_10px)]"
@@ -3076,16 +3075,16 @@ function DetailDrawer({
 
   return (
     <aside
-      className="min-h-0 overflow-auto rounded-lg border border-cyan-300/20 bg-[#0b1628] shadow-[0_0_0_1px_rgba(103,232,249,0.08),0_20px_44px_rgba(0,0,0,0.28)]"
+      className="min-h-0 overflow-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 shadow-[0_0_0_1px_rgba(255,130,58,0.08),0_20px_44px_rgba(0,0,0,0.28)]"
       data-testid="command-centre-drawer"
     >
-      <div className="border-b border-cyan-300/10 bg-cyan-300/[0.03] p-3">
+      <div className="border-b border-cc-orange/10 bg-cc-orange/[0.03] p-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           {isOutlookOnly ? "Calendar Event" : "Request"}
         </p>
         <div className="mt-1.5 flex items-start justify-between gap-2">
           <div>
-            <div className="font-mono text-xs text-cyan-200">
+            <div className="font-mono text-xs text-cc-orange">
               {eyebrow}
             </div>
             <h2 className="mt-0.5 text-base font-semibold leading-snug text-slate-50">
@@ -3094,9 +3093,9 @@ function DetailDrawer({
           </div>
           {request ? <PriorityChip priority={request.priority} /> : null}
         </div>
-        <div className="mt-2 h-1 rounded-full bg-cyan-300/20">
+        <div className="mt-2 h-1 rounded-full bg-cc-orange/20">
           <div
-            className={`h-full rounded-full bg-cyan-300 ${
+            className={`h-full rounded-full bg-cc-orange ${
               selectionKind === "appointment" ? "w-full" : "w-2/3"
             }`}
           />
@@ -3354,7 +3353,7 @@ function ActionButton({
     disabled
       ? "cursor-not-allowed border border-white/10 bg-white/[0.03] text-slate-500"
       : primary
-      ? "bg-cyan-500 text-[#07111f]"
+      ? "bg-cc-orange text-cc-surface-1"
       : "border border-white/10 bg-white/5 text-slate-200"
   }`;
 
@@ -3511,7 +3510,7 @@ function severityClass(severity: Severity) {
   return {
     critical: "border-rose-300/25 bg-rose-400/12 text-rose-50",
     warning: "border-amber-300/25 bg-amber-300/12 text-amber-50",
-    info: "border-cyan-300/20 bg-cyan-300/10 text-cyan-50",
+    info: "border-cc-orange/20 bg-cc-orange/10 text-cc-orange",
     healthy: "border-emerald-300/20 bg-emerald-300/10 text-emerald-50",
   }[severity];
 }
@@ -3976,7 +3975,7 @@ function healthCardClass(item: HealthItem, active: boolean) {
       ? "border-white/10 bg-white/[0.025] text-slate-400 hover:bg-white/[0.045]"
       : severityClass(item.severity),
     active
-      ? "ring-2 ring-cyan-200 shadow-[0_0_28px_rgba(103,232,249,0.16)]"
+      ? "ring-2 ring-cc-orange shadow-[0_0_28px_rgba(255,130,58,0.16)]"
       : "",
   ].join(" ");
 }

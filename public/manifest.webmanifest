@@ -5,18 +5,18 @@
   "start_url": "/mobile",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#07111f",
-  "theme_color": "#07111f",
+  "background_color": "#040B14",
+  "theme_color": "#071526",
   "icons": [
     {
-      "src": "/assets/command-centre-logo.png",
+      "src": "/assets/command-centre/app-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/assets/command-centre-logo-header.png",
-      "sizes": "192x192",
+      "src": "/assets/command-centre/app-icon-256.png",
+      "sizes": "256x256",
       "type": "image/png",
       "purpose": "any"
     }

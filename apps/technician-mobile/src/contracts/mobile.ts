@@ -167,7 +167,7 @@ export interface MutationEnvelope {
 
 export interface MutationReceipt {
   clientMutationId: string;
-  mode: "mock";
+  mode: "database" | "mock";
   resourceId: string;
   resourceVersion: string;
   status: "pending";

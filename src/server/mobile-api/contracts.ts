@@ -30,8 +30,14 @@ export interface MobileAuthContext {
 
 export interface MobileWorklogCommand {
   baseVersion: string;
-  body: string;
+  body?: string;
   clientMutationId: string;
+  durationMinutes?: number;
+  endedAt?: string;
   installationId: string;
+  occurredAt?: string;
+  startedAt?: string;
+  summary?: string;
+  timerSessionId?: string | null;
   visibility: "external" | "internal";
 }

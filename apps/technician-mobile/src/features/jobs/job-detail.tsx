@@ -194,7 +194,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
           </Section>
         ) : null}
 
-        <Section title="Previous notes">
+        <Section title="Latest ticket notes">
           {job.previousNotes.length ? (
             job.previousNotes.map((note) => (
               <View key={note.id} style={styles.note}>
@@ -205,7 +205,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
               </View>
             ))
           ) : (
-            <Text style={styles.muted}>No previous notes.</Text>
+            <Text style={styles.muted}>No ticket notes yet.</Text>
           )}
         </Section>
 
@@ -234,12 +234,7 @@ function Section({
 
 function Detail({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
-  return (
-    <Text style={styles.detail}>
-      <Text style={styles.detailLabel}>{label}: </Text>
-      {value}
-    </Text>
-  );
+  return <Text style={styles.detail}>{`${label}: ${value}`}</Text>;
 }
 
 function ActionButton({

@@ -24,11 +24,12 @@ import {
 import type { TechnicianRepository } from "./technician-repository";
 
 interface MockTechnicianRepositoryOptions {
+  jobs?: readonly MobileJob[];
   staffEmail: string;
 }
 
 export class MockTechnicianRepository implements TechnicianRepository {
-  private readonly jobs = cloneMobileFixture(MOBILE_JOB_FIXTURES);
+  private readonly jobs: MobileJob[];
   private readonly staff: MobileStaff | undefined;
   private activeTimer: ActiveTimer | null = null;
   private readonly receipts = new Map<string, MutationReceipt>();
@@ -38,7 +39,11 @@ export class MockTechnicianRepository implements TechnicianRepository {
     ActiveTimer | StoppedTimer
   >();
 
-  constructor({ staffEmail }: MockTechnicianRepositoryOptions) {
+  constructor({
+    jobs = MOBILE_JOB_FIXTURES,
+    staffEmail,
+  }: MockTechnicianRepositoryOptions) {
+    this.jobs = jobs.map(cloneMobileFixture);
     const normalizedEmail = staffEmail.trim().toLowerCase();
     const staff = MOBILE_STAFF_FIXTURES.find(
       (candidate) => candidate.email.toLowerCase() === normalizedEmail,

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockTechnicianRepository } from "../../data/mock-technician-repository";
 import type { TechnicianRepository } from "../../data/technician-repository";
 import { AppProviders } from "../../providers/app-providers";
-import { MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
-import type { MobileStaff } from "../../contracts/mobile";
+import { MOBILE_JOB_FIXTURES, MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
+import type { MobileJob, MobileStaff } from "../../contracts/mobile";
 
 import { JobDetail } from "./job-detail";
 import { createNativeActions } from "./native-actions";
@@ -137,6 +137,42 @@ describe("job detail", () => {
 
     expect(button(rendered, "Call contact").props.disabled).toBe(false);
     expect(button(rendered, "Open in Maps").props.disabled).toBe(false);
+  });
+
+  it("shows the real request description and latest ticket notes", async () => {
+    const job: MobileJob = {
+      ...MOBILE_JOB_FIXTURES[0],
+      description:
+        "Real Command Centre database request description for VPN outage.",
+      previousNotes: [
+        {
+          id: "db-note-latest",
+          localId: null,
+          visibility: "external",
+          body: "Latest ticket note from the Command Centre database.",
+          authorName: "Command Centre",
+          createdAt: "2026-07-14T01:15:00.000Z",
+          updatedAt: "2026-07-14T01:15:00.000Z",
+          syncState: "synced",
+          canEdit: false,
+          canDelete: false,
+        },
+      ],
+    };
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+
+    const rendered = await renderJobDetail(job.id, repository);
+
+    expect(textValues(rendered)).toContain(
+      "Description: Real Command Centre database request description for VPN outage.",
+    );
+    expect(textValues(rendered)).toContain("Latest ticket notes");
+    expect(textValues(rendered)).toContain(
+      "Latest ticket note from the Command Centre database.",
+    );
   });
 
   it("stops a timer restored after the app was closed", async () => {

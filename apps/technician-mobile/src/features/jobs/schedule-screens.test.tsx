@@ -13,7 +13,12 @@ import {
   AppProviders,
   type TechnicianSession,
 } from "../../providers/app-providers";
-import { MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
+import type { MobileJob } from "../../contracts/mobile";
+import type { TechnicianRepository } from "../../data/technician-repository";
+import {
+  MOBILE_JOB_FIXTURES,
+  MOBILE_STAFF_FIXTURES,
+} from "../../testing/fixtures";
 
 vi.mock("react-native", () => ({
   ActivityIndicator: "ActivityIndicator",
@@ -70,7 +75,10 @@ const approvedRileySession: TechnicianSession = {
   staff: riley,
 };
 
-async function renderScreen(screen: "today" | "my-work") {
+async function renderScreen(
+  screen: "today" | "my-work",
+  repository?: TechnicianRepository,
+) {
   let rendered: ReactTestRenderer | undefined;
   const testGlobal = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -85,7 +93,10 @@ async function renderScreen(screen: "today" | "my-work") {
   try {
     await act(async () => {
       rendered = TestRenderer.create(
-        <AppProviders initialSession={approvedRileySession}>
+        <AppProviders
+          initialSession={approvedRileySession}
+          repository={repository}
+        >
           {screen === "today" ? <TodayRoute /> : <MyWorkRoute />}
         </AppProviders>,
       );
@@ -165,6 +176,50 @@ describe("native schedule screens", () => {
     const texts = textValues(rendered);
     expect(texts).toContain("Tomorrow");
     expect(texts).toContain("Monday, 13 July");
+  });
+
+  it("clears stale job cards immediately while a newly selected day loads", async () => {
+    vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
+    const firstDayJobs = MOBILE_JOB_FIXTURES.filter((job) =>
+      ["firewall-riley", "outlook-block-riley"].includes(job.id),
+    );
+    const secondDayJobs = MOBILE_JOB_FIXTURES.filter(
+      (job) => job.id === "remote-support-riley",
+    );
+    let resolveSecondDay: ((jobs: MobileJob[]) => void) | undefined;
+    const repository = createScheduleOnlyRepository(
+      vi.fn(({ from }) => {
+        if (from === "2026-07-09") {
+          return Promise.resolve(firstDayJobs);
+        }
+
+        return new Promise<MobileJob[]>((resolve) => {
+          resolveSecondDay = resolve;
+        });
+      }),
+    );
+    const rendered = await renderScreen("today", repository);
+    const nextButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Next day",
+    );
+
+    expect(textValues(rendered)).toContain("Firewall firmware window");
+
+    await act(async () => {
+      nextButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    const loadingTexts = textValues(rendered);
+    expect(loadingTexts).toContain("Friday, 10 July");
+    expect(loadingTexts).not.toContain("Firewall firmware window");
+
+    await act(async () => {
+      resolveSecondDay?.(secondDayJobs);
+      await Promise.resolve();
+    });
+
+    expect(textValues(rendered)).toContain("Remote payroll support");
   });
 
   it("can move backward to yesterday and keeps that date selected", async () => {
@@ -265,3 +320,25 @@ describe("native schedule screens", () => {
     }
   });
 });
+
+function createScheduleOnlyRepository(
+  listSchedule: TechnicianRepository["listSchedule"],
+): TechnicianRepository {
+  const unavailable = async () => {
+    throw new Error("Not needed for this schedule screen test.");
+  };
+
+  return {
+    addPart: unavailable,
+    attachEvidence: unavailable,
+    completeJob: unavailable,
+    getCurrentStaff: async () => riley,
+    getJob: unavailable,
+    listSchedule,
+    saveSignOff: unavailable,
+    saveWorklog: unavailable,
+    startTimer: unavailable,
+    stopTimer: unavailable,
+    updateStatus: unavailable,
+  } as TechnicianRepository;
+}

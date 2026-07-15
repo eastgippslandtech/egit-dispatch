@@ -21,6 +21,7 @@ export function useSchedule(range: DateRange): ScheduleState {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [settledRangeKey, setSettledRangeKey] = useState<string | null>(null);
   const rangeKey = `${range.from}:${range.to}`;
 
   const stableRange = useMemo(
@@ -37,14 +38,17 @@ export function useSchedule(range: DateRange): ScheduleState {
 
     try {
       setJobs(await repository.listSchedule(stableRange));
+      setSettledRangeKey(rangeKey);
       setLastSyncedAt(new Date().toISOString());
     } catch (scheduleError) {
+      setJobs([]);
+      setSettledRangeKey(rangeKey);
       setError(formatScheduleError(scheduleError));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [repository, stableRange]);
+  }, [rangeKey, repository, stableRange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,12 +58,15 @@ export function useSchedule(range: DateRange): ScheduleState {
       .then((nextJobs) => {
         if (!cancelled) {
           setJobs(nextJobs);
+          setSettledRangeKey(rangeKey);
           setError(null);
           setLastSyncedAt(new Date().toISOString());
         }
       })
       .catch((scheduleError: unknown) => {
         if (!cancelled) {
+          setJobs([]);
+          setSettledRangeKey(rangeKey);
           setError(formatScheduleError(scheduleError));
         }
       })
@@ -73,7 +80,7 @@ export function useSchedule(range: DateRange): ScheduleState {
     return () => {
       cancelled = true;
     };
-  }, [repository, stableRange]);
+  }, [rangeKey, repository, stableRange]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -91,12 +98,19 @@ export function useSchedule(range: DateRange): ScheduleState {
     };
   }, [refresh]);
 
+  const hasSettledCurrentRange = settledRangeKey === rangeKey;
+  const effectiveLoading = loading || !hasSettledCurrentRange;
+
   return {
-    connectionState: error ? "error" : loading || refreshing ? "connecting" : "connected",
+    connectionState: error
+      ? "error"
+      : effectiveLoading || refreshing
+        ? "connecting"
+        : "connected",
     error,
-    jobs,
+    jobs: hasSettledCurrentRange ? jobs : [],
     lastSyncedAt,
-    loading,
+    loading: effectiveLoading,
     refresh,
     refreshing,
   };

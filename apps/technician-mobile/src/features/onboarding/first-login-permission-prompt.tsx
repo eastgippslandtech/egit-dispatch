@@ -1,5 +1,6 @@
 import { useEffect, useState, type PropsWithChildren } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppButton } from "../../components/app-button";
 import { colours } from "../../theme/tokens";
@@ -13,6 +14,7 @@ export function FirstLoginPermissionPrompt({
   enableNotifications: () => Promise<string>;
   onDismiss: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [locationStatus, setLocationStatus] = useState<string | null>(null);
   const [notificationStatus, setNotificationStatus] = useState<string | null>(
     null,
@@ -21,50 +23,57 @@ export function FirstLoginPermissionPrompt({
   return (
     <View
       accessibilityLabel="First login permissions"
-      style={styles.container}
+      style={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 12, 24) },
+      ]}
     >
-      <View style={styles.copyGroup}>
-        <Text style={styles.eyebrow}>Recommended setup</Text>
-        <Text style={styles.title}>Enable field updates</Text>
-        <Text style={styles.copy}>
-          Turn on job notifications and allow location while using the app for
-          ETA and navigation helpers. Command Centre does not track location in
-          the background.
-        </Text>
+      <View style={styles.card}>
+        <View style={styles.copyGroup}>
+          <Text style={styles.eyebrow}>Recommended setup</Text>
+          <Text style={styles.title}>Enable field updates</Text>
+          <Text style={styles.copy}>
+            Turn on job notifications and allow location while using the app for
+            ETA and navigation helpers. Command Centre does not track location in
+            the background.
+          </Text>
+        </View>
+        <View style={styles.actions}>
+          <AppButton
+            accessibilityLabel="Enable notifications"
+            label="Enable notifications"
+            onPress={() => {
+              void enableNotifications()
+                .then(setNotificationStatus)
+                .catch(() =>
+                  setNotificationStatus("Notifications could not be enabled"),
+                );
+            }}
+          />
+          <AppButton
+            accessibilityLabel="Allow while using"
+            label="Allow while using"
+            onPress={() => {
+              void enableLocation()
+                .then(setLocationStatus)
+                .catch(() => setLocationStatus("Location could not be enabled"));
+            }}
+            variant="secondary"
+          />
+          <AppButton
+            accessibilityLabel="Not now"
+            label="Not now"
+            onPress={onDismiss}
+            variant="secondary"
+          />
+        </View>
+        {notificationStatus ? (
+          <Text selectable style={styles.status}>{notificationStatus}</Text>
+        ) : null}
+        {locationStatus ? (
+          <Text selectable style={styles.status}>{locationStatus}</Text>
+        ) : null}
       </View>
-      <View style={styles.actions}>
-        <AppButton
-          accessibilityLabel="Enable notifications"
-          label="Enable notifications"
-          onPress={() => {
-            void enableNotifications()
-              .then(setNotificationStatus)
-              .catch(() =>
-                setNotificationStatus("Notifications could not be enabled"),
-              );
-          }}
-        />
-        <AppButton
-          accessibilityLabel="Allow while using"
-          label="Allow while using"
-          onPress={() => {
-            void enableLocation()
-              .then(setLocationStatus)
-              .catch(() => setLocationStatus("Location could not be enabled"));
-          }}
-          variant="secondary"
-        />
-        <AppButton
-          accessibilityLabel="Not now"
-          label="Not now"
-          onPress={onDismiss}
-          variant="secondary"
-        />
-      </View>
-      {notificationStatus ? (
-        <Text style={styles.status}>{notificationStatus}</Text>
-      ) : null}
-      {locationStatus ? <Text style={styles.status}>{locationStatus}</Text> : null}
     </View>
   );
 }
@@ -148,12 +157,18 @@ const styles = StyleSheet.create({
   actions: {
     gap: 8,
   },
-  container: {
+  card: {
     backgroundColor: colours.surface,
-    borderBottomColor: colours.borderWarm,
-    borderBottomWidth: 1,
-    gap: 12,
+    borderColor: colours.borderWarm,
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 14,
     padding: 16,
+  },
+  container: {
+    backgroundColor: colours.canvas,
+    paddingBottom: 12,
+    paddingHorizontal: 12,
   },
   copy: {
     color: colours.muted,

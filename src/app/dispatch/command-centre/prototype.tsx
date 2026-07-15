@@ -1118,9 +1118,16 @@ export function CommandCentrePrototype({
           </div>
         </section>
 
-        {/* TODO: Future /dispatch/wallboard can reuse this viewport shell, hide side panels, and give the timeline the full wall display width. */}
-        <section className="grid min-h-0 flex-1 grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] gap-3 px-3 pb-3 max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]">
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
+        <section
+          className={`grid min-h-0 flex-1 gap-3 px-3 pb-3 ${
+            viewMode === "week"
+              ? "grid-cols-1"
+              : "grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]"
+          }`}
+          data-testid="dispatch-workspace"
+        >
+          {viewMode === "week" ? null : (
+            <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="shrink-0 border-b border-white/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Queue
@@ -1262,6 +1269,7 @@ export function CommandCentrePrototype({
               ))}
             </div>
           </aside>
+          )}
 
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2.5">
@@ -1352,16 +1360,18 @@ export function CommandCentrePrototype({
             ) : null}
           </section>
 
-          <DetailDrawer
-            appointment={selectedAppointment}
-            onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
-            request={selectedRequest}
-            selectionKind={selection.kind}
-            technician={technicianLabel(
-              dashboard.technicians,
-              selectedAppointment?.technicianId ?? fallbackRequest?.technicianId,
-            )}
-          />
+          {viewMode === "week" ? null : (
+            <DetailDrawer
+              appointment={selectedAppointment}
+              onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
+              request={selectedRequest}
+              selectionKind={selection.kind}
+              technician={technicianLabel(
+                dashboard.technicians,
+                selectedAppointment?.technicianId ?? fallbackRequest?.technicianId,
+              )}
+            />
+          )}
         </section>
         {pendingSchedule ? (
           <ScheduleConfirmModal
@@ -2544,12 +2554,12 @@ function WeekPlanner({
 
   return (
     <div
-      className="min-h-0 flex-1 overflow-hidden"
+      className="min-h-0 flex-1 overflow-auto"
       data-testid="week-calendar-viewport"
     >
-      <div className="w-full">
-        <div className="grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10">
-          <div className="sticky left-0 z-30 bg-[#0f1b2e] px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
+      <div className="min-w-[980px]">
+        <div className="sticky top-0 z-40 grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10">
+          <div className="sticky left-0 z-50 bg-[#0f1b2e] px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
             Technician
           </div>
           {weekDays.map((day) => {
@@ -2601,11 +2611,14 @@ function WeekPlanner({
             </div>
             {weekDays.map((day) => {
               const cellAppointments = grouped[technician.id][day.dateKey];
+              const visibleAppointments = cellAppointments.slice(0, 1);
+              const hiddenAppointmentCount =
+                cellAppointments.length - visibleAppointments.length;
               const isToday = day.dateKey === todayDateKey;
               return (
                 <div
                   key={`${technician.id}-${day.dateKey}`}
-                  className={`min-h-[132px] border-l p-1.5 ${
+                  className={`h-[132px] overflow-hidden border-l p-1.5 ${
                     isToday
                       ? "border-cc-orange/20 bg-cc-orange/[0.045]"
                       : "border-white/[0.06] bg-cc-surface-1"
@@ -2628,8 +2641,8 @@ function WeekPlanner({
                     onWeekDrop(dragPayload, technician.id, day.dateKey);
                   }}
                 >
-                  <div className="space-y-2">
-                    {cellAppointments.map((appointment) => (
+                  <div className="space-y-1.5">
+                    {visibleAppointments.map((appointment) => (
                       <WeekAppointmentCard
                         key={appointment.id}
                         active={selectedAppointmentId === appointment.id}
@@ -2643,6 +2656,15 @@ function WeekPlanner({
                       />
                     ))}
                   </div>
+                  {hiddenAppointmentCount > 0 ? (
+                    <button
+                      className="mt-1.5 w-full rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-center text-[11px] font-semibold text-slate-300 hover:border-cyan-200/30 hover:text-cyan-100"
+                      type="button"
+                      onClick={() => onDateOpen(day.dateKey)}
+                    >
+                      +{hiddenAppointmentCount} more — open day
+                    </button>
+                  ) : null}
                   {cellAppointments.length === 0 ? (
                     <div className="rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-[11px] text-slate-500">
                       Drop here

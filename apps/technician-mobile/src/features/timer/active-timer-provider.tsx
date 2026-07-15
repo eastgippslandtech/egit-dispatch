@@ -60,21 +60,27 @@ export function ActiveTimerProvider({
       isTimerForJob: (jobId: string) => activeSnapshot?.jobId === jobId,
       startTimerForJob: async (job: MobileJob) => {
         setTimerMessage(null);
-        const timer = await repository.startTimer({
-          baseVersion: job.version,
-          clientMutationId: `timer-start-${job.id}-${Date.now()}`,
-          installationId: "local-simulator",
-          jobId: job.id,
-          occurredAt: new Date().toISOString(),
-        });
-        const snapshot: ActiveTimerSnapshot = {
-          baseVersion: job.version,
-          jobId: job.id,
-          jobTitle: job.title,
-          timer,
-        };
-        setActiveSnapshot(snapshot);
-        await saveActiveTimerSnapshot(snapshot);
+        try {
+          const timer = await repository.startTimer({
+            baseVersion: job.version,
+            clientMutationId: `timer-start-${job.id}-${Date.now()}`,
+            installationId: "local-simulator",
+            jobId: job.id,
+            occurredAt: new Date().toISOString(),
+          });
+          const snapshot: ActiveTimerSnapshot = {
+            baseVersion: job.version,
+            jobId: job.id,
+            jobTitle: job.title,
+            timer,
+          };
+          setActiveSnapshot(snapshot);
+          await saveActiveTimerSnapshot(snapshot);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Timer could not start.";
+          setTimerMessage(message);
+        }
       },
       stopActiveTimer: async () => {
         if (!activeSnapshot) return;

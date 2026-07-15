@@ -489,8 +489,13 @@ test("shows a week planner and opens a day from the week header", async () => {
   fireEvent.click(screen.getByRole("button", { name: "week" }));
 
   expect(screen.getByText("Weekly planner")).toBeInTheDocument();
-  expect(screen.getByTestId("week-calendar-viewport")).toHaveClass("overflow-hidden");
-  expect(screen.getByTestId("week-calendar-viewport")).not.toHaveClass("overflow-auto");
+  expect(screen.getByTestId("dispatch-workspace")).toHaveClass("grid-cols-1");
+  expect(screen.getByTestId("week-calendar-viewport")).toHaveClass("overflow-auto");
+  expect(screen.getByTestId("week-calendar-viewport")).not.toHaveClass("overflow-hidden");
+  expect(screen.getByText("Riley")).toBeInTheDocument();
+  expect(
+    screen.getAllByRole("button", { name: /\+\d+ more — open day/ }).length,
+  ).toBeGreaterThan(0);
   expect(screen.getByText("Monday Outlook hold")).toBeInTheDocument();
   expect(screen.getByText("Sunday client travel prep")).toBeInTheDocument();
 

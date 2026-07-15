@@ -239,13 +239,7 @@ export async function startMobileTimer({
   jobId: string;
 }): Promise<{ timer: ActiveTimer }> {
   const job = database
-    ? mapDatabaseJob(
-        await requireDatabaseJobForStaff({
-          auth,
-          database,
-          jobId,
-        }),
-      )
+    ? await requireDatabaseOrTestSyncedJobForStaff({ auth, database, jobId })
     : findOwnedJob(auth, jobId);
 
   if (!job.permissions.canStartTimer) {
@@ -280,13 +274,7 @@ export async function stopMobileTimer({
   jobId: string;
 }): Promise<{ timer: StoppedTimer }> {
   const job = database
-    ? mapDatabaseJob(
-        await requireDatabaseJobForStaff({
-          auth,
-          database,
-          jobId,
-        }),
-      )
+    ? await requireDatabaseOrTestSyncedJobForStaff({ auth, database, jobId })
     : findOwnedJob(auth, jobId);
 
   if (!job.permissions.canStartTimer) {
@@ -461,7 +449,7 @@ async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string)
   return staff;
 }
 
-async function requireDatabaseJobForStaff({
+async function requireDatabaseOrTestSyncedJobForStaff({
   auth,
   database,
   jobId,
@@ -469,16 +457,22 @@ async function requireDatabaseJobForStaff({
   auth: MobileAuthContext;
   database: MobileDatabase;
   jobId: string;
-}) {
+}): Promise<MobileJob> {
   const staff = await requireDatabaseStaff(database, auth.email);
   const job = await database.findJobForStaff({ jobId, staffId: staff.id });
-  if (!job) {
-    throw Object.assign(new Error("Mobile job was not found."), {
-      code: "NOT_FOUND",
-      status: 404,
-    });
+  if (job) {
+    return mapDatabaseJob(job);
   }
-  return job;
+
+  const testJob = await findTestSyncedMobileJob({ auth, jobId });
+  if (testJob) {
+    return testJob;
+  }
+
+  throw Object.assign(new Error("Mobile job was not found."), {
+    code: "NOT_FOUND",
+    status: 404,
+  });
 }
 
 const WRITABLE_PERMISSIONS: MobileJobPermissions = {

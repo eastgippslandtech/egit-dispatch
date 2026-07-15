@@ -91,6 +91,23 @@ describe("active timer provider", () => {
     );
     expect(textValues(rendered)).toContain("Timer stopped: 15 minutes queued");
   });
+
+  it("shows a visible message when starting a timer fails", async () => {
+    const repository = {
+      startTimer: vi.fn(async () => {
+        throw new Error("Mobile API request failed with 404.");
+      }),
+    } as unknown as TechnicianRepository;
+
+    const rendered = await renderWithProvider(repository);
+
+    await pressButton(rendered, "Start test timer");
+
+    expect(textValues(rendered)).toContain(
+      "Mobile API request failed with 404.",
+    );
+    expect(textValues(rendered)).not.toContain("Timer running");
+  });
 });
 
 function TimerProbe() {

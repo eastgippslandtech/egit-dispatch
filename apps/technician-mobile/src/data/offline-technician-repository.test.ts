@@ -43,6 +43,28 @@ describe("offline technician repository", () => {
     ]);
   });
 
+  it("does not show out-of-range remote jobs for the selected day", async () => {
+    const repository = createOfflineTechnicianRepository({
+      database,
+      queue,
+      remote: {
+        getCurrentStaff: async () => firewallJob.technician,
+        getJob: async () => firewallJob,
+        listSchedule: async () => [
+          MOBILE_JOB_FIXTURES.find((job) => job.id === "firewall-riley"),
+          MOBILE_JOB_FIXTURES.find((job) => job.id === "remote-support-riley"),
+        ].filter((job): job is NonNullable<typeof job> => Boolean(job)),
+      },
+    });
+
+    const jobs = await repository.listSchedule({
+      from: "2026-07-09",
+      to: "2026-07-09",
+    });
+
+    expect(jobs.map((job) => job.id)).toEqual(["firewall-riley"]);
+  });
+
   it("sends an idempotency key and marks one successful receipt", async () => {
     const calls: { headers: Record<string, string> }[] = [];
     const api = createApiClient({

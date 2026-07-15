@@ -17,6 +17,10 @@ import type {
 } from "../contracts/mobile";
 import type { ApiClient } from "../api/client";
 import type { CommandCentreDatabase } from "../db/database";
+import {
+  dateKeyIsWithinRange,
+  jobDateKey,
+} from "../features/schedule/date-keys";
 import type { MutationQueue } from "../features/sync/mutation-queue";
 import { createTimerService } from "../features/timer/timer-service";
 
@@ -97,7 +101,7 @@ export function createOfflineTechnicianRepository({
     async listSchedule(range: DateRange): Promise<MobileJob[]> {
       if (remote) {
         try {
-          const jobs = await remote.listSchedule(range);
+          const jobs = filterJobsForRange(await remote.listSchedule(range), range);
           await Promise.all(jobs.map(cacheJob));
           return jobs;
         } catch {
@@ -106,9 +110,7 @@ export function createOfflineTechnicianRepository({
       }
 
       const cachedJobs = await database.listCachedJobs();
-      return cachedJobs
-        .filter((job) => isWithinRange(job, range))
-        .sort((left, right) => left.startAt.localeCompare(right.startAt));
+      return filterJobsForRange(cachedJobs, range);
     },
 
     async getJob(jobId: string): Promise<MobileJob> {
@@ -225,9 +227,19 @@ export function createOfflineTechnicianRepository({
   };
 }
 
-function isWithinRange(job: MobileJob, range: DateRange): boolean {
-  const date = job.startAt.slice(0, 10);
-  return date >= range.from && date <= range.to;
+function filterJobsForRange(
+  jobs: readonly MobileJob[],
+  range: DateRange,
+): MobileJob[] {
+  return jobs
+    .filter((job) =>
+      dateKeyIsWithinRange({
+        dateKey: jobDateKey(job.startAt, job.timezone),
+        from: range.from,
+        to: range.to,
+      }),
+    )
+    .sort((left, right) => left.startAt.localeCompare(right.startAt));
 }
 
 async function staffIdFor(

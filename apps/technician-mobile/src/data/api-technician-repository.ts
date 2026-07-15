@@ -13,6 +13,10 @@ import type {
   UpdateStatusCommand,
 } from "../contracts/mobile";
 import type { ApiClient } from "../api/client";
+import {
+  dateKeyIsWithinRange,
+  jobDateKey,
+} from "../features/schedule/date-keys";
 
 import type { TechnicianRepository } from "./technician-repository";
 
@@ -37,7 +41,15 @@ export function createApiTechnicianRepository(
       const response = await api.request<DataEnvelope<{ jobs: MobileJob[] }>>(
         `/jobs?${params.toString()}`,
       );
-      return response.data.jobs;
+      return response.data.jobs
+        .filter((job) =>
+          dateKeyIsWithinRange({
+            dateKey: jobDateKey(job.startAt, job.timezone),
+            from: range.from,
+            to: range.to,
+          }),
+        )
+        .sort((left, right) => left.startAt.localeCompare(right.startAt));
     },
 
     async getJob(jobId: string): Promise<MobileJob> {

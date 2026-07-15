@@ -226,6 +226,50 @@ describe("mobile API service", () => {
     );
   });
 
+  it("starts timers for dispatcher test-sync jobs when the database is configured", async () => {
+    listDispatchTestSyncEventsMock.mockResolvedValueOnce([
+      {
+        appointmentId: "mock-100284-test",
+        bookingType: "Onsite",
+        createdAt: "2026-07-14T01:00:00.000Z",
+        date: "2026-07-14",
+        end: "14:00",
+        eventType: "scheduled",
+        id: "event-100284",
+        payload: {},
+        priority: "Critical",
+        requestId: "100284",
+        start: "12:45",
+        technicianId: "tech-riley",
+      },
+    ]);
+
+    const started = await startMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion:
+          "test-sync-mock-100284-test-2026-07-14-12:45-14:00",
+        clientMutationId: "timer-start-test-sync-1",
+        installationId: "phone-1",
+        jobId: "mock-100284-test",
+        occurredAt: "2026-07-14T02:30:00.000Z",
+      },
+      database: createDatabase({
+        async findJobForStaff() {
+          return null;
+        },
+      }),
+      jobId: "mock-100284-test",
+    });
+
+    expect(started.timer).toMatchObject({
+      id: "timer-timer-start-test-sync-1",
+      jobId: "mock-100284-test",
+      startedAt: "2026-07-14T02:30:00.000Z",
+      technicianId: "tech-riley",
+    });
+  });
+
   it("returns a single real database job with latest notes and request description", async () => {
     const response = await getMobileJob({
       auth: rileyMobileAuth,

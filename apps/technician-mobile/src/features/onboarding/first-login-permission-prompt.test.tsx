@@ -1,4 +1,3 @@
-import { Fragment, createElement, type PropsWithChildren } from "react";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,8 +7,11 @@ vi.mock("react-native", () => ({
   Pressable: "Pressable",
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
-  View: ({ children }: PropsWithChildren) =>
-    createElement(Fragment, null, children),
+  View: "View",
+}));
+
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ bottom: 34, left: 0, right: 0, top: 59 }),
 }));
 
 describe("FirstLoginPermissionPrompt", () => {
@@ -34,6 +36,21 @@ describe("FirstLoginPermissionPrompt", () => {
         "Notifications enabled",
         "Location enabled while using",
       ]),
+    );
+  });
+
+  it("renders below the phone safe area instead of under the status bar", () => {
+    const rendered = renderPrompt({
+      enableLocation: vi.fn(async () => "Location enabled while using"),
+      enableNotifications: vi.fn(async () => "Notifications enabled"),
+    });
+
+    const prompt = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "First login permissions",
+    );
+
+    expect(prompt.props.style).toEqual(
+      expect.arrayContaining([expect.objectContaining({ paddingTop: 71 })]),
     );
   });
 });

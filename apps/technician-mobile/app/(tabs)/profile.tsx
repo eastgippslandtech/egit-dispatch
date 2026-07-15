@@ -65,15 +65,19 @@ export default function ProfileRoute() {
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
-      <Text style={styles.eyebrow}>Technician profile</Text>
-      <Text style={styles.title}>{staff.displayName}</Text>
-      <Text style={styles.copy}>{staff.email}</Text>
+      <Text style={styles.eyebrow}>Profile & settings</Text>
+      <Text style={styles.title}>Profile & Settings</Text>
+      <Text style={styles.copy}>
+        {staff.displayName} · {staff.email}
+      </Text>
 
       <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Account</Text>
         <Text style={styles.label}>Role</Text>
         <Text style={styles.value}>{staff.role}</Text>
         <Text style={styles.label}>Base office</Text>
         <Text style={styles.value}>{staff.baseOffice}</Text>
+        <Text style={styles.sectionTitle}>Settings</Text>
         <Text style={styles.label}>App version</Text>
         <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.0"}</Text>
         <Text style={styles.label}>Notifications</Text>
@@ -126,6 +130,14 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   label: { color: colours.muted, fontSize: 12, fontWeight: "800", marginTop: 8 },
+  sectionTitle: {
+    color: colours.primary,
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+    marginTop: 10,
+    textTransform: "uppercase",
+  },
   buttonGap: {
     marginTop: 20,
   },

@@ -400,7 +400,7 @@ describe("technician navigation", () => {
     pressButton(rendered, "Open reviewer demo");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
     );
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
@@ -424,7 +424,7 @@ describe("technician navigation", () => {
     const labels = textValues(rendered.root);
 
     expect(labels).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
     );
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
@@ -436,7 +436,7 @@ describe("technician navigation", () => {
     await pressButtonAsync(rendered, "Sign in with Zoho");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
     );
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");

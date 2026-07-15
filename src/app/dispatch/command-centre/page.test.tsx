@@ -79,6 +79,22 @@ test("week planner keeps technician rows compact and reveals overflow jobs", asy
   expect(within(reveal).getAllByTestId("week-overflow-appointment")).toHaveLength(2);
 });
 
+test("renders an obvious current-time line and elapsed-day shade in day view", async () => {
+  render(await CommandCentrePage());
+
+  expect(screen.getByText("Now")).toBeInTheDocument();
+
+  const elapsedShades = screen.getAllByTestId("current-time-elapsed-shade");
+  expect(elapsedShades.length).toBeGreaterThan(0);
+  expect(elapsedShades[0]).toHaveClass("bg-cc-orange/[0.14]");
+  expect(elapsedShades[0]).toHaveClass("z-[2]");
+
+  const currentTimeLines = screen.getAllByTestId("current-time-line");
+  expect(currentTimeLines.length).toBeGreaterThan(0);
+  expect(currentTimeLines[0]).toHaveClass("w-0.5");
+  expect(currentTimeLines[0]).toHaveClass("z-[12]");
+});
+
 test("updates the detail drawer from queue and appointment selections", async () => {
   render(await CommandCentrePage());
 

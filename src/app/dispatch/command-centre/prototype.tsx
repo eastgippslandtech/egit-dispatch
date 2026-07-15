@@ -2843,11 +2843,13 @@ function CurrentTimeLaneOverlay({
   return (
     <>
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-[1] bg-cc-orange/[0.045]"
+        data-testid="current-time-elapsed-shade"
+        className="pointer-events-none absolute inset-y-0 left-0 z-[2] bg-cc-orange/[0.14] shadow-[inset_-34px_0_42px_rgba(255,130,58,0.12)]"
         style={{ width: scaleTimelineX(indicator.elapsedWidthPx, trackWidth) }}
       />
       <div
-        className="pointer-events-none absolute inset-y-0 z-[4] w-px bg-cc-orange/90 shadow-[0_0_14px_rgba(255,130,58,0.6)]"
+        data-testid="current-time-line"
+        className="pointer-events-none absolute inset-y-0 z-[12] w-0.5 -translate-x-1/2 bg-cc-orange shadow-[0_0_18px_rgba(255,130,58,0.82)]"
         style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
       />
     </>

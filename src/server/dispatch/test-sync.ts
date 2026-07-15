@@ -16,6 +16,8 @@ export type DispatchTestSyncEventType =
   | "rescheduled"
   | "cancelled"
   | "notes_updated"
+  | "timer_started"
+  | "timer_stopped"
   | "work_logged";
 
 export type DispatchWorkLogVisibility = "Customer-facing" | "Internal";
@@ -27,6 +29,15 @@ export type DispatchWorkLogPayload = {
   status?: RequestStatus;
   visibility: DispatchWorkLogVisibility;
   workType: BookingType;
+};
+
+export type DispatchTimerPayload = {
+  id: string;
+  jobId: string;
+  startedAt: string;
+  stoppedAt?: string;
+  technicianId: string;
+  technicianName?: string;
 };
 
 export type DispatchTestSyncEvent = {
@@ -42,6 +53,7 @@ export type DispatchTestSyncEvent = {
   priority?: Priority;
   notes?: string;
   payload?: {
+    timer?: DispatchTimerPayload;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   };
@@ -70,6 +82,7 @@ type DispatchTestSyncRow = {
   priority: Priority | null;
   notes: string | null;
   payload: {
+    timer?: DispatchTimerPayload;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   } | null;
@@ -169,6 +182,40 @@ export function applyDispatchTestSyncEvents(
           request.status = workLog.status;
           request.readyToBook = workLog.status === "Resolved" ? false : request.readyToBook;
         }
+      }
+
+      continue;
+    }
+
+    if (event.eventType === "timer_started") {
+      const request = requests.find((candidate) => candidate.id === event.requestId);
+      const timer = event.payload?.timer;
+
+      if (request && timer) {
+        request.activeTimer = {
+          id: timer.id,
+          jobId: timer.jobId,
+          startedAt: timer.startedAt,
+          technicianId: timer.technicianId,
+          technicianName: timer.technicianName,
+        };
+        request.updatedAt = event.createdAt;
+        request.warnings = mergeWarnings(request.warnings, ["Active timer"]);
+      }
+
+      continue;
+    }
+
+    if (event.eventType === "timer_stopped") {
+      const request = requests.find((candidate) => candidate.id === event.requestId);
+      const timer = event.payload?.timer;
+
+      if (request && (!timer || request.activeTimer?.id === timer.id)) {
+        request.activeTimer = undefined;
+        request.updatedAt = event.createdAt;
+        request.warnings = request.warnings.filter(
+          (warning) => warning !== "Active timer",
+        );
       }
 
       continue;

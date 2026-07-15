@@ -2,9 +2,10 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
+import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 
 import CommandCentrePage from "./page";
-import { bookingCardPriorityClass } from "./prototype";
+import { CommandCentrePrototype, bookingCardPriorityClass } from "./prototype";
 
 vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
@@ -79,6 +80,36 @@ test("updates the detail drawer from queue and appointment selections", async ()
   expect(
     within(drawer).getAllByText("File server disk expansion").length,
   ).toBeGreaterThan(0);
+});
+
+test("shows a live mobile timer counter in the selected job drawer", () => {
+  const data = getDispatchDesignMockData();
+  const selectedRequestId = "100284";
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        selectedRequestId,
+        requests: data.requests.map((request) =>
+          request.id === selectedRequestId
+            ? {
+                ...request,
+                activeTimer: {
+                  id: "timer-mobile-1",
+                  jobId: "mock-100284-test",
+                  startedAt: "2026-07-08T01:15:00.000Z",
+                  technicianId: "tech-riley",
+                },
+              }
+            : request,
+        ),
+      }}
+    />,
+  );
+
+  const drawer = screen.getByTestId("command-centre-drawer");
+  expect(within(drawer).getByText("Active mobile timer")).toBeInTheDocument();
+  expect(within(drawer).getByText("45m")).toBeInTheDocument();
 });
 
 test("disables unavailable Helpdesk and Outlook writeback actions honestly", async () => {

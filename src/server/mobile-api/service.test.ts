@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listDispatchTestSyncEvents } from "@/server/dispatch/test-sync";
+import {
+  listDispatchTestSyncEvents,
+  recordDispatchTestSyncEvent,
+} from "@/server/dispatch/test-sync";
 import {
   completeMobileJob,
   listMobileJobs,
@@ -19,10 +22,12 @@ vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
   return {
     ...actual,
     listDispatchTestSyncEvents: vi.fn(),
+    recordDispatchTestSyncEvent: vi.fn(),
   };
 });
 
 const listDispatchTestSyncEventsMock = vi.mocked(listDispatchTestSyncEvents);
+const recordDispatchTestSyncEventMock = vi.mocked(recordDispatchTestSyncEvent);
 
 const dbStaff: DatabaseStaffRow = {
   active: true,
@@ -107,6 +112,13 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
         resourceVersion: `db-${dbJobId}-log-mobile-note-1`,
       };
     },
+    async saveTimerEvent() {
+      return {
+        recordedAt: "2026-07-14T01:30:00.000Z",
+        resourceId: "timer-log-1",
+        resourceVersion: `db-${dbJobId}-timer-log-1`,
+      };
+    },
     ...overrides,
   };
 }
@@ -114,6 +126,7 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
 describe("mobile API service", () => {
   beforeEach(() => {
     listDispatchTestSyncEventsMock.mockResolvedValue([]);
+    recordDispatchTestSyncEventMock.mockReset();
   });
 
   it("returns only jobs for the authenticated staff profile", async () => {
@@ -270,6 +283,21 @@ describe("mobile API service", () => {
       startedAt: "2026-07-14T02:30:00.000Z",
       technicianId: "tech-riley",
     });
+    expect(recordDispatchTestSyncEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appointmentId: "mock-100284-test",
+        eventType: "timer_started",
+        requestId: "100284",
+        technicianId: "tech-riley",
+        payload: {
+          timer: expect.objectContaining({
+            id: "timer-timer-start-test-sync-1",
+            startedAt: "2026-07-14T02:30:00.000Z",
+          }),
+        },
+      }),
+      "riley@egit.com.au",
+    );
   });
 
   it("does not run a UUID database lookup before starting a test-sync timer", async () => {
@@ -425,6 +453,11 @@ describe("mobile API service", () => {
   });
 
   it("starts and stops native timers for real database jobs", async () => {
+    const saveTimerEvent = vi.fn(async () => ({
+      recordedAt: "2026-07-14T01:30:00.000Z",
+      resourceId: "timer-log-1",
+      resourceVersion: `db-${dbJobId}-timer-log-1`,
+    }));
     const started = await startMobileTimer({
       auth: rileyMobileAuth,
       command: {
@@ -434,7 +467,9 @@ describe("mobile API service", () => {
         jobId: dbJobId,
         occurredAt: "2026-07-14T01:30:00.000Z",
       },
-      database: createDatabase(),
+      database: createDatabase({
+        saveTimerEvent,
+      } as unknown as Partial<MobileDatabase>),
       jobId: dbJobId,
     });
 
@@ -444,6 +479,17 @@ describe("mobile API service", () => {
       startedAt: "2026-07-14T01:30:00.000Z",
       technicianId: "staff-db-riley",
     });
+    expect(saveTimerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "mobile_timer_start",
+        clientMutationId: "timer-start-1",
+        job: dbJob,
+        timer: expect.objectContaining({
+          id: "timer-timer-start-1",
+          startedAt: "2026-07-14T01:30:00.000Z",
+        }),
+      }),
+    );
 
     const stopped = await stopMobileTimer({
       auth: rileyMobileAuth,
@@ -456,7 +502,9 @@ describe("mobile API service", () => {
         startedAt: "2026-07-14T01:30:00.000Z",
         timerId: "timer-timer-start-1",
       },
-      database: createDatabase(),
+      database: createDatabase({
+        saveTimerEvent,
+      } as unknown as Partial<MobileDatabase>),
       jobId: dbJobId,
     });
 
@@ -468,5 +516,16 @@ describe("mobile API service", () => {
       stoppedAt: "2026-07-14T01:47:00.000Z",
       technicianId: "staff-db-riley",
     });
+    expect(saveTimerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "mobile_timer_stop",
+        clientMutationId: "timer-stop-1",
+        job: dbJob,
+        timer: expect.objectContaining({
+          id: "timer-timer-start-1",
+          stoppedAt: "2026-07-14T01:47:00.000Z",
+        }),
+      }),
+    );
   });
 });

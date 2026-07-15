@@ -1,6 +1,10 @@
 import postgres from "postgres";
 
-import type { NoteVisibility } from "../../../apps/technician-mobile/src/contracts/mobile";
+import type {
+  ActiveTimer,
+  NoteVisibility,
+  StoppedTimer,
+} from "../../../apps/technician-mobile/src/contracts/mobile";
 
 export type DatabaseSyncStatus =
   | "linked"
@@ -73,6 +77,15 @@ export interface SaveDatabaseWorklogResult {
   resourceVersion: string;
 }
 
+export interface SaveDatabaseTimerEventInput {
+  action: "mobile_timer_start" | "mobile_timer_stop";
+  clientMutationId: string;
+  installationId: string;
+  job: DatabaseJobRow;
+  occurredAt: string;
+  timer: ActiveTimer | StoppedTimer;
+}
+
 export interface MobileDatabase {
   findJobForStaff(input: {
     jobId: string;
@@ -84,6 +97,7 @@ export interface MobileDatabase {
     staffId: string;
     to: string;
   }): Promise<DatabaseJobRow[]>;
+  saveTimerEvent(input: SaveDatabaseTimerEventInput): Promise<SaveDatabaseWorklogResult>;
   saveWorklog(input: SaveDatabaseWorklogInput): Promise<SaveDatabaseWorklogResult>;
 }
 
@@ -187,6 +201,52 @@ export function createPostgresMobileDatabase({
       const saved = rows[0];
       if (!saved) {
         throw Object.assign(new Error("Worklog was not recorded."), {
+          code: "BAD_REQUEST",
+          status: 500,
+        });
+      }
+
+      const recordedAt = toIsoString(saved.recordedAt);
+      return {
+        recordedAt,
+        resourceId: saved.id,
+        resourceVersion: `db-${input.job.id}-${saved.id}-${recordedAt}`,
+      };
+    },
+
+    async saveTimerEvent(input) {
+      const rows = await sql<Array<{ id: string; recordedAt: string | Date }>>`
+        insert into public.dispatch_sync_logs (
+          sdp_request_id,
+          outlook_event_id,
+          technician_id,
+          action,
+          status,
+          message,
+          payload_summary
+        )
+        values (
+          ${input.job.sdpRequestId},
+          ${input.job.outlookEventId},
+          ${input.job.technicianId}::uuid,
+          ${input.action},
+          'success',
+          ${input.action === "mobile_timer_start" ? "Mobile timer started." : "Mobile timer stopped."},
+          ${sql.json({
+            action: input.action,
+            clientMutationId: input.clientMutationId,
+            installationId: input.installationId,
+            occurredAt: input.occurredAt,
+            source: "technician-mobile",
+            timer: timerEventPayload(input.timer),
+          })}
+        )
+        returning id::text as "id", created_at as "recordedAt"
+      `;
+
+      const saved = rows[0];
+      if (!saved) {
+        throw Object.assign(new Error("Timer event was not recorded."), {
           code: "BAD_REQUEST",
           status: 500,
         });
@@ -305,4 +365,18 @@ function selectJobRows(
 
 function toIsoString(value: string | Date) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function timerEventPayload(timer: ActiveTimer | StoppedTimer) {
+  return {
+    accumulatedPausedSeconds: timer.accumulatedPausedSeconds,
+    actualElapsedMinutes: "actualElapsedMinutes" in timer ? timer.actualElapsedMinutes : undefined,
+    id: timer.id,
+    jobId: timer.jobId,
+    pausedAt: timer.pausedAt,
+    roundedMinutes: "roundedMinutes" in timer ? timer.roundedMinutes : undefined,
+    startedAt: timer.startedAt,
+    stoppedAt: "stoppedAt" in timer ? timer.stoppedAt : undefined,
+    technicianId: timer.technicianId,
+  };
 }

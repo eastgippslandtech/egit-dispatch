@@ -80,6 +80,15 @@ export type DispatchRequest = {
   readyToBook: boolean;
   slaState: SlaState;
   warnings: string[];
+  activeTimer?: ActiveDispatchTimer;
+};
+
+export type ActiveDispatchTimer = {
+  id: string;
+  jobId: string;
+  technicianId: string;
+  technicianName?: string;
+  startedAt: string;
 };
 
 export type Appointment = {

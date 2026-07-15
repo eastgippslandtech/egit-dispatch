@@ -26,6 +26,7 @@ import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import {
   applyDispatchTestSyncEvents,
   listDispatchTestSyncEvents,
+  recordDispatchTestSyncEvent,
 } from "@/server/dispatch/test-sync";
 import type {
   Appointment,
@@ -41,6 +42,11 @@ import {
   type DatabaseStaffRow,
   type MobileDatabase,
 } from "./database";
+
+type ResolvedTimerJob = {
+  databaseJob?: DatabaseJobRow;
+  mobileJob: MobileJob;
+};
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -238,9 +244,10 @@ export async function startMobileTimer({
   database?: MobileDatabase | null;
   jobId: string;
 }): Promise<{ timer: ActiveTimer }> {
-  const job = database
-    ? await requireDatabaseOrTestSyncedJobForStaff({ auth, database, jobId })
-    : findOwnedJob(auth, jobId);
+  const resolved = database
+    ? await requireTimerJobForStaff({ auth, database, jobId })
+    : { mobileJob: findOwnedJob(auth, jobId) };
+  const job = resolved.mobileJob;
 
   if (!job.permissions.canStartTimer) {
     throw Object.assign(
@@ -250,15 +257,35 @@ export async function startMobileTimer({
   }
 
   const startedAt = requireIsoTimestamp(command.occurredAt, "Timer start time");
+  const timer: ActiveTimer = {
+    accumulatedPausedSeconds: 0,
+    id: `timer-${command.clientMutationId}`,
+    jobId,
+    pausedAt: null,
+    startedAt,
+    technicianId: job.technician.id,
+  };
+
+  if (database && resolved.databaseJob) {
+    await database.saveTimerEvent({
+      action: "mobile_timer_start",
+      clientMutationId: command.clientMutationId,
+      installationId: command.installationId,
+      job: resolved.databaseJob,
+      occurredAt: startedAt,
+      timer,
+    });
+  } else if (database && job.source === "mock") {
+    await recordMobileTimerTestSyncEvent({
+      action: "timer_started",
+      auth,
+      job,
+      timer,
+    });
+  }
+
   return {
-    timer: {
-      accumulatedPausedSeconds: 0,
-      id: `timer-${command.clientMutationId}`,
-      jobId,
-      pausedAt: null,
-      startedAt,
-      technicianId: job.technician.id,
-    },
+    timer,
   };
 }
 
@@ -273,9 +300,10 @@ export async function stopMobileTimer({
   database?: MobileDatabase | null;
   jobId: string;
 }): Promise<{ timer: StoppedTimer }> {
-  const job = database
-    ? await requireDatabaseOrTestSyncedJobForStaff({ auth, database, jobId })
-    : findOwnedJob(auth, jobId);
+  const resolved = database
+    ? await requireTimerJobForStaff({ auth, database, jobId })
+    : { mobileJob: findOwnedJob(auth, jobId) };
+  const job = resolved.mobileJob;
 
   if (!job.permissions.canStartTimer) {
     throw Object.assign(
@@ -298,18 +326,38 @@ export async function stopMobileTimer({
     Math.ceil((new Date(stoppedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
   );
 
+  const timer: StoppedTimer = {
+    accumulatedPausedSeconds: 0,
+    actualElapsedMinutes,
+    id: command.timerId,
+    jobId,
+    pausedAt: null,
+    roundedMinutes: Math.ceil(actualElapsedMinutes / 15) * 15,
+    startedAt,
+    stoppedAt,
+    technicianId: job.technician.id,
+  };
+
+  if (database && resolved.databaseJob) {
+    await database.saveTimerEvent({
+      action: "mobile_timer_stop",
+      clientMutationId: command.clientMutationId,
+      installationId: command.installationId,
+      job: resolved.databaseJob,
+      occurredAt: stoppedAt,
+      timer,
+    });
+  } else if (database && job.source === "mock") {
+    await recordMobileTimerTestSyncEvent({
+      action: "timer_stopped",
+      auth,
+      job,
+      timer,
+    });
+  }
+
   return {
-    timer: {
-      accumulatedPausedSeconds: 0,
-      actualElapsedMinutes,
-      id: command.timerId,
-      jobId,
-      pausedAt: null,
-      roundedMinutes: Math.ceil(actualElapsedMinutes / 15) * 15,
-      startedAt,
-      stoppedAt,
-      technicianId: job.technician.id,
-    },
+    timer,
   };
 }
 
@@ -475,6 +523,74 @@ async function requireDatabaseOrTestSyncedJobForStaff({
     code: "NOT_FOUND",
     status: 404,
   });
+}
+
+async function requireTimerJobForStaff({
+  auth,
+  database,
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  database: MobileDatabase;
+  jobId: string;
+}): Promise<ResolvedTimerJob> {
+  const staff = await requireDatabaseStaff(database, auth.email);
+  const databaseJob = isUuid(jobId)
+    ? await database.findJobForStaff({ jobId, staffId: staff.id })
+    : null;
+  if (databaseJob) {
+    return {
+      databaseJob,
+      mobileJob: mapDatabaseJob(databaseJob),
+    };
+  }
+
+  const testJob = await findTestSyncedMobileJob({ auth, jobId });
+  if (testJob) {
+    return { mobileJob: testJob };
+  }
+
+  throw Object.assign(new Error("Mobile job was not found."), {
+    code: "NOT_FOUND",
+    status: 404,
+  });
+}
+
+async function recordMobileTimerTestSyncEvent({
+  action,
+  auth,
+  job,
+  timer,
+}: {
+  action: "timer_started" | "timer_stopped";
+  auth: MobileAuthContext;
+  job: MobileJob;
+  timer: ActiveTimer | StoppedTimer;
+}) {
+  await recordDispatchTestSyncEvent(
+    {
+      appointmentId: job.id,
+      createdAt: "stoppedAt" in timer ? timer.stoppedAt : timer.startedAt,
+      eventType: action,
+      requestId: requestIdForMobileJob(job),
+      technicianId: job.technician.id,
+      payload: {
+        timer: {
+          id: timer.id,
+          jobId: timer.jobId,
+          startedAt: timer.startedAt,
+          stoppedAt: "stoppedAt" in timer ? timer.stoppedAt : undefined,
+          technicianId: timer.technicianId,
+          technicianName: job.technician.displayName,
+        },
+      },
+    },
+    auth.email,
+  );
+}
+
+function requestIdForMobileJob(job: MobileJob) {
+  return job.requestNumber?.replace(/^REQ-/i, "") ?? job.id;
 }
 
 function isUuid(value: string) {

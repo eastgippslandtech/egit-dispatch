@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
 import type {
+  ActiveDispatchTimer,
   Appointment,
   DispatchDashboardData,
   DispatchRequest,
@@ -206,7 +207,7 @@ function selectDispatchRows(sql: postgres.Sql) {
         from public.dispatch_sync_logs
         where sdp_request_id = dl.sdp_request_id
         order by created_at desc
-        limit 5
+        limit 20
       ) latest
     ) logs on true
     order by coalesce(dl.scheduled_start, dl.updated_at), dl.sdp_request_number
@@ -279,6 +280,7 @@ function mapRequest(
 
   return {
     id: row.sdpRequestId,
+    activeTimer: activeTimerFromLogs(row),
     ageHours: estimateAgeHours(pickString(summaries, ["createdAt", "createdTime"])),
     billable: pickBoolean(summaries, ["billable", "isBillable"]) ?? true,
     contact:
@@ -328,6 +330,54 @@ function mapRequest(
       !row.technicianId ? "No technician assigned" : undefined,
     ].filter((warning): warning is string => Boolean(warning)),
   };
+}
+
+function activeTimerFromLogs(row: DispatchLinkRow): ActiveDispatchTimer | undefined {
+  const stoppedTimerIds = new Set<string>();
+
+  for (const note of row.notes) {
+    if (note.action !== "mobile_timer_start" && note.action !== "mobile_timer_stop") {
+      continue;
+    }
+
+    const payload = asRecord(note.payloadSummary);
+    const timer = asRecord(payload.timer);
+    const timerId = pickNestedString(timer, ["id"]);
+
+    if (!timerId) {
+      continue;
+    }
+
+    if (note.action === "mobile_timer_stop") {
+      stoppedTimerIds.add(timerId);
+      continue;
+    }
+
+    if (stoppedTimerIds.has(timerId)) {
+      continue;
+    }
+
+    const jobId = pickNestedString(timer, ["jobId"]);
+    const startedAt = pickNestedString(timer, ["startedAt"]);
+    const technicianId = pickNestedString(timer, ["technicianId"]);
+
+    if (!jobId || !startedAt || !technicianId) {
+      continue;
+    }
+
+    return {
+      id: timerId,
+      jobId,
+      startedAt,
+      technicianId,
+      technicianName:
+        pickNestedString(timer, ["technicianName"]) ??
+        row.technicianDisplayName ??
+        undefined,
+    };
+  }
+
+  return undefined;
 }
 
 function mapAppointment(

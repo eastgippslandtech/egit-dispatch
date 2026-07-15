@@ -73,6 +73,7 @@ vi.mock("react-native-safe-area-context", () => ({
     return createElement(Fragment, null, children);
   },
   SafeAreaView: "SafeAreaView",
+  useSafeAreaInsets: () => ({ bottom: 34, left: 0, right: 0, top: 59 }),
 }));
 
 vi.mock("@expo/vector-icons/MaterialCommunityIcons", () => ({

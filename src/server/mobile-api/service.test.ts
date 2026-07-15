@@ -38,9 +38,11 @@ const dbStaff: DatabaseStaffRow = {
   zohoEmail: "riley@egit.com.au",
 };
 
+const dbJobId = "00000000-0000-4000-8000-000000100900";
+
 const dbJob: DatabaseJobRow = {
   createdAt: "2026-07-14T00:00:00.000Z",
-  id: "link-100900",
+  id: dbJobId,
   lastSyncError: null,
   lastSyncStatus: "linked",
   notes: [
@@ -102,7 +104,7 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
       return {
         recordedAt: "2026-07-14T02:00:00.000Z",
         resourceId: "log-mobile-note-1",
-        resourceVersion: "db-link-100900-log-mobile-note-1",
+        resourceVersion: `db-${dbJobId}-log-mobile-note-1`,
       };
     },
     ...overrides,
@@ -155,7 +157,7 @@ describe("mobile API service", () => {
       customerName: "Gippsland Legal",
       description:
         "Real Command Centre database request description for VPN outage.",
-      id: "link-100900",
+      id: dbJobId,
       requestNumber: "REQ-100900",
       source: "msp_central",
       title: "VPN outage follow-up",
@@ -270,11 +272,56 @@ describe("mobile API service", () => {
     });
   });
 
+  it("does not run a UUID database lookup before starting a test-sync timer", async () => {
+    listDispatchTestSyncEventsMock.mockResolvedValueOnce([
+      {
+        appointmentId: "mock-100284-test",
+        bookingType: "Onsite",
+        createdAt: "2026-07-14T01:00:00.000Z",
+        date: "2026-07-14",
+        end: "14:00",
+        eventType: "scheduled",
+        id: "event-100284",
+        payload: {},
+        priority: "Critical",
+        requestId: "100284",
+        start: "12:45",
+        technicianId: "tech-riley",
+      },
+    ]);
+    const findJobForStaff = vi.fn(async () => {
+      throw new Error("invalid input syntax for type uuid: mock-100284-test");
+    });
+
+    await expect(
+      startMobileTimer({
+        auth: rileyMobileAuth,
+        command: {
+          baseVersion:
+            "test-sync-mock-100284-test-2026-07-14-12:45-14:00",
+          clientMutationId: "timer-start-test-sync-uuid-guard",
+          installationId: "phone-1",
+          jobId: "mock-100284-test",
+          occurredAt: "2026-07-14T02:30:00.000Z",
+        },
+        database: createDatabase({ findJobForStaff }),
+        jobId: "mock-100284-test",
+      }),
+    ).resolves.toMatchObject({
+      timer: {
+        id: "timer-timer-start-test-sync-uuid-guard",
+        jobId: "mock-100284-test",
+        technicianId: "tech-riley",
+      },
+    });
+    expect(findJobForStaff).not.toHaveBeenCalled();
+  });
+
   it("returns a single real database job with latest notes and request description", async () => {
     const response = await getMobileJob({
       auth: rileyMobileAuth,
       database: createDatabase(),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(response.job.description).toBe(
@@ -291,13 +338,13 @@ describe("mobile API service", () => {
     const saved = vi.fn(async () => ({
       recordedAt: "2026-07-14T02:00:00.000Z",
       resourceId: "log-mobile-note-1",
-      resourceVersion: "db-link-100900-log-mobile-note-1",
+      resourceVersion: `db-${dbJobId}-log-mobile-note-1`,
     }));
 
     const response = await saveMobileWorklog({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         clientMutationId: "note-1",
         durationMinutes: 30,
         endedAt: "2026-07-14T02:00:00.000Z",
@@ -311,7 +358,7 @@ describe("mobile API service", () => {
         workType: "billable",
       },
       database: createDatabase({ saveWorklog: saved }),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(saved).toHaveBeenCalledWith(
@@ -335,13 +382,13 @@ describe("mobile API service", () => {
     const saved = vi.fn(async () => ({
       recordedAt: "2026-07-14T02:05:00.000Z",
       resourceId: "log-mobile-complete-1",
-      resourceVersion: "db-link-100900-log-mobile-complete-1",
+      resourceVersion: `db-${dbJobId}-log-mobile-complete-1`,
     }));
 
     const response = await completeMobileJob({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         billable: false,
         clientMutationId: "complete-1",
         durationMinutes: 45,
@@ -353,7 +400,7 @@ describe("mobile API service", () => {
         workType: "non_billable",
       },
       database: createDatabase({ saveWorklog: saved }),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(saved).toHaveBeenCalledWith(
@@ -381,19 +428,19 @@ describe("mobile API service", () => {
     const started = await startMobileTimer({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         clientMutationId: "timer-start-1",
         installationId: "phone-1",
-        jobId: "link-100900",
+        jobId: dbJobId,
         occurredAt: "2026-07-14T01:30:00.000Z",
       },
       database: createDatabase(),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(started.timer).toMatchObject({
       id: "timer-timer-start-1",
-      jobId: "link-100900",
+      jobId: dbJobId,
       startedAt: "2026-07-14T01:30:00.000Z",
       technicianId: "staff-db-riley",
     });
@@ -401,22 +448,22 @@ describe("mobile API service", () => {
     const stopped = await stopMobileTimer({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         clientMutationId: "timer-stop-1",
         installationId: "phone-1",
-        jobId: "link-100900",
+        jobId: dbJobId,
         occurredAt: "2026-07-14T01:47:00.000Z",
         startedAt: "2026-07-14T01:30:00.000Z",
         timerId: "timer-timer-start-1",
       },
       database: createDatabase(),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(stopped.timer).toMatchObject({
       actualElapsedMinutes: 17,
       id: "timer-timer-start-1",
-      jobId: "link-100900",
+      jobId: dbJobId,
       roundedMinutes: 30,
       stoppedAt: "2026-07-14T01:47:00.000Z",
       technicianId: "staff-db-riley",

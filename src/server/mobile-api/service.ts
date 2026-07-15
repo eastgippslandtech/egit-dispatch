@@ -459,7 +459,9 @@ async function requireDatabaseOrTestSyncedJobForStaff({
   jobId: string;
 }): Promise<MobileJob> {
   const staff = await requireDatabaseStaff(database, auth.email);
-  const job = await database.findJobForStaff({ jobId, staffId: staff.id });
+  const job = isUuid(jobId)
+    ? await database.findJobForStaff({ jobId, staffId: staff.id })
+    : null;
   if (job) {
     return mapDatabaseJob(job);
   }
@@ -473,6 +475,12 @@ async function requireDatabaseOrTestSyncedJobForStaff({
     code: "NOT_FOUND",
     status: 404,
   });
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 const WRITABLE_PERMISSIONS: MobileJobPermissions = {

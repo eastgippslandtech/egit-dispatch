@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RootNavigator } from "../../app/_layout";
 import TabsLayout from "../../app/(tabs)/_layout";
 import IndexRoute from "../../app/index";
+import ProfileRoute from "../../app/(tabs)/profile";
 import SignInRoute from "../../app/sign-in";
 import {
   AppProviders,
@@ -33,6 +34,8 @@ const navigationHarness = vi.hoisted(() => ({
   routes: {} as Record<string, ComponentType>,
   stackOptions: {} as Record<string, Record<string, unknown>>,
   tabBarActiveTintColor: "",
+  hiddenTabTitles: [] as string[],
+  routerPush: vi.fn(),
   tabBarStyle: {} as Record<string, unknown>,
   tabIcons: [] as ReactElement[],
 }));
@@ -74,6 +77,24 @@ vi.mock("react-native-safe-area-context", () => ({
 
 vi.mock("@expo/vector-icons/MaterialCommunityIcons", () => ({
   default: "MaterialCommunityIcons",
+}));
+
+vi.mock("expo-constants", () => ({
+  default: { expoConfig: { version: "0.1.0" } },
+}));
+
+vi.mock("expo-device", () => ({
+  osInternalBuildId: "test-build",
+}));
+
+vi.mock("expo-location", () => ({
+  requestForegroundPermissionsAsync: vi.fn(),
+}));
+
+vi.mock("expo-notifications", () => ({
+  getExpoPushTokenAsync: vi.fn(),
+  getPermissionsAsync: vi.fn(),
+  requestPermissionsAsync: vi.fn(),
 }));
 
 vi.mock("expo-router", () => {
@@ -118,6 +139,7 @@ vi.mock("expo-router", () => {
     options,
   }: {
     options: {
+      href?: string | null;
       tabBarAccessibilityLabel?: string;
       tabBarIcon: (properties: {
         color: string;
@@ -127,6 +149,11 @@ vi.mock("expo-router", () => {
       title: string;
     };
   }) {
+    if (options.href === null) {
+      navigationHarness.hiddenTabTitles.push(options.title);
+      return null;
+    }
+
     const icon = options.tabBarIcon({
       color: "#123456",
       focused: false,
@@ -159,6 +186,7 @@ vi.mock("expo-router", () => {
       ),
     Stack,
     Tabs,
+    useRouter: () => ({ push: navigationHarness.routerPush }),
   };
 });
 
@@ -233,6 +261,8 @@ function renderTechnicianRouter(
   navigationHarness.stackOptions = {};
   navigationHarness.tabBarStyle = {};
   navigationHarness.tabBarActiveTintColor = "";
+  navigationHarness.hiddenTabTitles = [];
+  navigationHarness.routerPush.mockReset();
   navigationHarness.tabIcons = [];
   try {
     act(() => {
@@ -257,6 +287,38 @@ function renderTechnicianRouter(
   return rendered;
 }
 
+function renderProfileSettings(session: TechnicianSession) {
+  let rendered: ReactTestRenderer | undefined;
+  const testGlobal = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const consoleError = vi.spyOn(console, "error").mockImplementation((message) => {
+    if (!String(message).includes("react-test-renderer is deprecated")) {
+      throw new Error(`Unexpected render error: ${String(message)}`);
+    }
+  });
+
+  testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  navigationHarness.routerPush.mockReset();
+  try {
+    act(() => {
+      rendered = TestRenderer.create(
+        <AppProviders initialSession={session}>
+          <ProfileRoute />
+        </AppProviders>,
+      );
+    });
+  } finally {
+    consoleError.mockRestore();
+  }
+
+  if (!rendered) {
+    throw new Error("The profile settings screen did not render.");
+  }
+
+  return rendered;
+}
+
 async function renderTechnicianRouterAsync(
   session: TechnicianSession,
   signInWithZoho = approvedRileyZohoSignIn,
@@ -276,6 +338,8 @@ async function renderTechnicianRouterAsync(
   navigationHarness.stackOptions = {};
   navigationHarness.tabBarStyle = {};
   navigationHarness.tabBarActiveTintColor = "";
+  navigationHarness.hiddenTabTitles = [];
+  navigationHarness.routerPush.mockReset();
   navigationHarness.tabIcons = [];
   try {
     await act(async () => {
@@ -400,8 +464,9 @@ describe("technician navigation", () => {
     pressButton(rendered, "Open reviewer demo");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
@@ -424,8 +489,9 @@ describe("technician navigation", () => {
     const labels = textValues(rendered.root);
 
     expect(labels).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(labels).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
@@ -436,10 +502,22 @@ describe("technician navigation", () => {
     await pressButtonAsync(rendered, "Sign in with Zoho");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("keeps sync available from profile settings without showing it as a bottom tab", () => {
+    renderTechnicianRouter(approvedRileySession);
+
+    expect(navigationHarness.hiddenTabTitles).toContain("Sync");
+
+    const profile = renderProfileSettings(approvedRileySession);
+    pressButton(profile, "Open sync settings");
+
+    expect(navigationHarness.routerPush).toHaveBeenCalledWith("/(tabs)/sync");
   });
 
   it("restores the saved mobile session without asking for Zoho again", async () => {
@@ -568,9 +646,8 @@ describe("technician navigation", () => {
   it("uses native tab icons with navigator-provided size and colour", () => {
     renderTechnicianRouter(approvedRileySession);
 
-    expect(navigationHarness.tabIcons).toHaveLength(4);
+    expect(navigationHarness.tabIcons).toHaveLength(3);
     expect(navigationHarness.tabIcons.map((icon) => icon.type)).toEqual([
-      "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",

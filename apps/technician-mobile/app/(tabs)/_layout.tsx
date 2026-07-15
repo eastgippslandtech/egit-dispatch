@@ -55,6 +55,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="sync"
         options={{
+          href: null,
           tabBarAccessibilityLabel: "Sync tab",
           tabBarIcon: ({ color, size }) => (
             <MaterialCommunityIcons

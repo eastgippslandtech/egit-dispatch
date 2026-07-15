@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,6 +16,7 @@ import { useSession } from "../../src/providers/app-providers";
 import { colours } from "../../src/theme/tokens";
 
 export default function ProfileRoute() {
+  const router = useRouter();
   const { session, signOut } = useSession();
   const [locationStatus, setLocationStatus] = useState("Not enabled");
   const [notificationStatus, setNotificationStatus] = useState("Not enabled");
@@ -87,11 +89,22 @@ export default function ProfileRoute() {
       </View>
 
       <AppButton
-        label="Enable job notifications"
+        accessibilityLabel="Open sync settings"
+        label="Sync & offline queue"
         onPress={() => {
-          void enableNotifications();
+          router.push("/(tabs)/sync");
         }}
+        variant="secondary"
       />
+
+      <View style={styles.buttonGap}>
+        <AppButton
+          label="Enable job notifications"
+          onPress={() => {
+            void enableNotifications();
+          }}
+        />
+      </View>
 
       <View style={styles.buttonGap}>
         <AppButton

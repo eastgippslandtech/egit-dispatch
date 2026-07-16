@@ -122,6 +122,34 @@ test("updates the detail drawer from queue and appointment selections", async ()
   ).toBeGreaterThan(0);
 });
 
+test("shows ticket update indicators and marks an update seen when selected", async () => {
+  render(await CommandCentrePage());
+
+  expect(screen.getByTestId("queue-ticket-update-100317")).toHaveTextContent(
+    "Updated",
+  );
+  expect(screen.getByTestId("timeline-ticket-update-appt-1")).toHaveTextContent(
+    "Updated",
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /REQ-100317 POS terminal intermittent dropouts/,
+    }),
+  );
+
+  expect(
+    screen.queryByTestId("queue-ticket-update-100317"),
+  ).not.toBeInTheDocument();
+
+  const drawer = screen.getByTestId("command-centre-drawer");
+  expect(within(drawer).getByText("Ticket update")).toBeInTheDocument();
+  expect(within(drawer).getByText("Notes added")).toBeInTheDocument();
+  expect(
+    within(drawer).getByText("Customer confirmed the POS dropouts are still happening."),
+  ).toBeInTheDocument();
+});
+
 test("disables unavailable Helpdesk and Outlook writeback actions honestly", async () => {
   render(await CommandCentrePage());
 

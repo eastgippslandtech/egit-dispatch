@@ -54,6 +54,12 @@ export type DispatchRequest = {
   helpdeskUrl?: string;
   notes?: string;
   updatedAt?: string;
+  updateInfo?: {
+    at: string;
+    detail?: string;
+    source: "command-centre" | "msp-central" | "technician-app" | "test-sync";
+    summary: string;
+  };
   category?: string;
   subcategory?: string;
   item?: string;

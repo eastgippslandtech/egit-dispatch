@@ -135,6 +135,7 @@ export function bookingCardPriorityClass(
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
 type SearchState = "dimmed" | "match" | "normal";
+type SeenTicketUpdateIds = Set<string>;
 
 const TECHNICIAN_COLUMN_WIDTH_PX = 170;
 const TIMELINE_HEADER_HEIGHT_PX = 40;
@@ -222,6 +223,8 @@ export function CommandCentrePrototype({
   const [queueSearch, setQueueSearch] = useState("");
   const [queueFilters, setQueueFilters] = useState<QueueFilters>({});
   const [openQueueFilter, setOpenQueueFilter] = useState<QueueFilterKey>();
+  const [seenTicketUpdateIds, setSeenTicketUpdateIds] =
+    useState<SeenTicketUpdateIds>(() => new Set());
   const [dragPayload, setDragPayload] = useState<DragPayload | undefined>();
   const [dropPreview, setDropPreview] = useState<DropPreview | undefined>();
   const [pendingSchedule, setPendingSchedule] = useState<
@@ -352,6 +355,36 @@ export function CommandCentrePrototype({
     setActiveHealth(undefined);
   }
 
+  function markTicketUpdateSeen(requestId?: string) {
+    if (!requestId) {
+      return;
+    }
+
+    setSeenTicketUpdateIds((current) => {
+      if (current.has(requestId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.add(requestId);
+      return next;
+    });
+  }
+
+  function selectRequest(requestId: string) {
+    setSelection({ kind: "request", requestId });
+    markTicketUpdateSeen(requestId);
+  }
+
+  function selectAppointment(appointment: Appointment) {
+    setSelection({
+      kind: "appointment",
+      appointmentId: appointment.id,
+      requestId: appointment.requestId,
+    });
+    markTicketUpdateSeen(appointment.requestId);
+  }
+
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 60_000);
 
@@ -430,6 +463,8 @@ export function CommandCentrePrototype({
       return;
     }
 
+    const updateAt = new Date().toISOString();
+
     setDashboard((current) => {
       const requests = current.requests.map((request) => {
         if (request.id !== requestId) {
@@ -451,6 +486,12 @@ export function CommandCentrePrototype({
             : `${trimmedNotes} (${metadata})`,
           readyToBook: complete ? false : request.readyToBook,
           status: complete ? ("Resolved" as const) : request.status,
+          updateInfo: {
+            at: updateAt,
+            detail: trimmedNotes,
+            source: "command-centre" as const,
+            summary: complete ? "Work Log completed" : "Work Log added",
+          },
           warnings: complete
             ? request.warnings.filter((warning) => warning !== "Ready to book")
             : request.warnings,
@@ -463,6 +504,7 @@ export function CommandCentrePrototype({
       };
     });
 
+    markTicketUpdateSeen(requestId);
     setWorkLogRequestId(undefined);
     setToast(
       complete
@@ -1249,15 +1291,17 @@ export function CommandCentrePrototype({
                     selection.kind === "request" &&
                     selection.requestId === request.id
                   }
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    request,
+                    seenTicketUpdateIds,
+                  )}
                   request={request}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
                     beginDrag({ kind: "request", requestId: request.id })
                   }
-                  onSelect={() =>
-                    setSelection({ kind: "request", requestId: request.id })
-                  }
+                  onSelect={() => selectRequest(request.id)}
                 />
               ))}
             </div>
@@ -1291,6 +1335,7 @@ export function CommandCentrePrototype({
                 appointments={weekAppointments}
                 dragPayload={dragPayload}
                 requests={dashboard.requests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1307,13 +1352,7 @@ export function CommandCentrePrototype({
                 }
                 onDragEnd={endDrag}
                 onWeekDrop={handleWeekDrop}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             ) : (
               <TimelineBoard
@@ -1324,6 +1363,7 @@ export function CommandCentrePrototype({
                 globalSearch={topSearch}
                 activeHealth={activeHealth}
                 requests={dashboard.requests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1336,13 +1376,7 @@ export function CommandCentrePrototype({
                 onDragEnd={endDrag}
                 onTimelineDrop={handleTimelineDrop}
                 onTimelineHover={handleTimelineHover}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             )}
             {dashboard.calendarError ? (
@@ -2153,6 +2187,7 @@ function QueueFilterMenu({
 
 function RequestQueueCard({
   active,
+  hasUnreadUpdate,
   onDragEnd,
   onDragStart,
   onSelect,
@@ -2160,6 +2195,7 @@ function RequestQueueCard({
   technician,
 }: {
   active: boolean;
+  hasUnreadUpdate: boolean;
   onDragEnd: () => void;
   onDragStart: () => void;
   onSelect: () => void;
@@ -2193,7 +2229,12 @@ function RequestQueueCard({
             {request.subject}
           </div>
         </div>
-        <PriorityChip priority={request.priority} />
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <PriorityChip priority={request.priority} />
+          {hasUnreadUpdate ? (
+            <TicketUpdateBadge dataTestId={`queue-ticket-update-${request.id}`} />
+          ) : null}
+        </div>
       </div>
       <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
         <span>{request.customer}</span>
@@ -2234,6 +2275,7 @@ function TimelineBoard({
   onTimelineDrop,
   onTimelineHover,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
   technicians,
 }: {
@@ -2257,6 +2299,7 @@ function TimelineBoard({
     start: string,
   ) => void;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
   technicians: Technician[];
 }) {
@@ -2486,6 +2529,12 @@ function TimelineBoard({
                       request={requests.find(
                         (request) => request.id === item.appointment.requestId,
                       )}
+                      hasUnreadUpdate={hasUnreadTicketUpdate(
+                        requests.find(
+                          (request) => request.id === item.appointment.requestId,
+                        ),
+                        seenTicketUpdateIds,
+                      )}
                       onBeginDrag={() => onBeginAppointmentDrag(item.appointment.id)}
                       onDragEnd={onDragEnd}
                       onSelect={() => onSelectAppointment(item.appointment)}
@@ -2518,6 +2567,7 @@ function WeekPlanner({
   onSelectAppointment,
   onWeekDrop,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
   technicians,
   todayDateKey,
@@ -2535,6 +2585,7 @@ function WeekPlanner({
     dateKey: string,
   ) => void;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
   technicians: Technician[];
   todayDateKey?: string;
@@ -2654,6 +2705,12 @@ function WeekPlanner({
                         request={requests.find(
                           (request) => request.id === appointment.requestId,
                         )}
+                        hasUnreadUpdate={hasUnreadTicketUpdate(
+                          requests.find(
+                            (request) => request.id === appointment.requestId,
+                          ),
+                          seenTicketUpdateIds,
+                        )}
                         onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                         onDragEnd={onDragEnd}
                         onSelect={() => onSelectAppointment(appointment)}
@@ -2721,6 +2778,12 @@ function WeekPlanner({
                   request={requests.find(
                     (request) => request.id === appointment.requestId,
                   )}
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    requests.find(
+                      (request) => request.id === appointment.requestId,
+                    ),
+                    seenTicketUpdateIds,
+                  )}
                   onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                   onDragEnd={onDragEnd}
                   onSelect={() => {
@@ -2741,6 +2804,7 @@ function WeekAppointmentCard({
   active,
   appointment,
   dataTestId,
+  hasUnreadUpdate,
   onBeginDrag,
   onDragEnd,
   onSelect,
@@ -2749,6 +2813,7 @@ function WeekAppointmentCard({
   active: boolean;
   appointment: Appointment;
   dataTestId?: string;
+  hasUnreadUpdate: boolean;
   onBeginDrag: () => void;
   onDragEnd: () => void;
   onSelect: () => void;
@@ -2782,7 +2847,15 @@ function WeekAppointmentCard({
         <span className="font-mono text-[11px] font-semibold">
           {appointment.start}
         </span>
-        {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        <span className="flex shrink-0 items-center gap-1">
+          {hasUnreadUpdate ? (
+            <TicketUpdateBadge
+              compact
+              dataTestId={`week-ticket-update-${appointment.id}`}
+            />
+          ) : null}
+          {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        </span>
       </div>
       <div className="mt-1 line-clamp-2 font-semibold leading-snug">
         {appointment.customer}
@@ -3043,6 +3116,7 @@ function TimelineAppointment({
   active,
   appointment,
   cardHeight,
+  hasUnreadUpdate,
   laneTop,
   onBeginDrag,
   onDragEnd,
@@ -3054,6 +3128,7 @@ function TimelineAppointment({
   active: boolean;
   appointment: Appointment;
   cardHeight: number;
+  hasUnreadUpdate: boolean;
   laneTop: number;
   onBeginDrag: () => void;
   onDragEnd: () => void;
@@ -3115,9 +3190,17 @@ function TimelineAppointment({
           <span className="block truncate text-[12px] font-bold leading-4">
             {appointment.title}
           </span>
-          {warning || appointment.travelWarning ? (
-            <MailWarning className="h-3.5 w-3.5 shrink-0" />
-          ) : null}
+          <span className="flex shrink-0 items-center gap-1">
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge
+                compact
+                dataTestId={`timeline-ticket-update-${appointment.id}`}
+              />
+            ) : null}
+            {warning || appointment.travelWarning ? (
+              <MailWarning className="h-3.5 w-3.5 shrink-0" />
+            ) : null}
+          </span>
         </div>
         <div className="mt-0.5 font-mono text-[11px] font-semibold leading-4 text-white/90">
           {appointment.start}-{appointment.end}
@@ -3317,6 +3400,27 @@ function DetailDrawer({
             </Badge>
           ))}
         </div>
+        {request?.updateInfo ? (
+          <div className="mt-2 rounded-md border border-cc-orange/25 bg-cc-orange/10 px-2.5 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-cc-orange">
+                Ticket update
+              </span>
+              <span className="text-[10px] font-semibold text-slate-300">
+                {formatTicketUpdateSource(request.updateInfo.source)}{" - "}
+                {formatDateTime(request.updateInfo.at)}
+              </span>
+            </div>
+            <div className="mt-1 text-xs font-semibold text-slate-50">
+              {request.updateInfo.summary}
+            </div>
+            {request.updateInfo.detail ? (
+              <div className="mt-0.5 text-xs leading-snug text-slate-300">
+                {request.updateInfo.detail}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="space-y-2.5 p-3">
         <DrawerSection title="Helpdesk">
@@ -3612,6 +3716,33 @@ function requestSourceLabel(request: DispatchRequest) {
   return "Mock";
 }
 
+function hasUnreadTicketUpdate(
+  request: DispatchRequest | undefined,
+  seenTicketUpdateIds: SeenTicketUpdateIds,
+) {
+  return Boolean(
+    request?.updateInfo && !seenTicketUpdateIds.has(request.id),
+  );
+}
+
+function formatTicketUpdateSource(
+  source: NonNullable<DispatchRequest["updateInfo"]>["source"],
+) {
+  if (source === "msp-central") {
+    return "MSP Central";
+  }
+
+  if (source === "technician-app") {
+    return "Technician app";
+  }
+
+  if (source === "test-sync") {
+    return "Test sync";
+  }
+
+  return "Command Centre";
+}
+
 function workTypeLabel(value: string) {
   if (value === "non_billable") {
     return "non-billable";
@@ -3661,6 +3792,25 @@ function PriorityChip({ priority }: { priority: DispatchRequest["priority"] }) {
       className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${classes[priority]}`}
     >
       {priority}
+    </span>
+  );
+}
+
+function TicketUpdateBadge({
+  compact = false,
+  dataTestId,
+}: {
+  compact?: boolean;
+  dataTestId?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border border-cc-orange/45 bg-cc-orange/20 font-bold uppercase tracking-wide text-cc-orange shadow-[0_0_12px_rgba(255,130,58,0.18)] ${
+        compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[10px]"
+      }`}
+      data-testid={dataTestId}
+    >
+      Updated
     </span>
   );
 }
@@ -3808,6 +3958,9 @@ function requestSearchFields(
     request.subcategory,
     request.item,
     request.assetNames,
+    request.updateInfo?.summary,
+    request.updateInfo?.detail,
+    request.updateInfo?.source,
     request.billable ? "Billable" : "Non-billable",
     request.readyToBook ? "Ready to book" : undefined,
     technicianLabel(technicians, request.technicianId),

@@ -151,6 +151,12 @@ export function applyDispatchTestSyncEvents(
       if (request && event.notes) {
         request.notes = event.notes;
         request.updatedAt = event.createdAt;
+        request.updateInfo = {
+          at: event.createdAt,
+          detail: event.notes,
+          source: "test-sync",
+          summary: "Notes updated",
+        };
       }
 
       continue;
@@ -163,6 +169,12 @@ export function applyDispatchTestSyncEvents(
       if (request && workLog?.notes) {
         request.notes = appendTestNote(request.notes, formatWorkLogNote(workLog));
         request.updatedAt = event.createdAt;
+        request.updateInfo = {
+          at: event.createdAt,
+          detail: workLog.notes,
+          source: "test-sync",
+          summary: "Work Log added",
+        };
         request.warnings = mergeWarnings(request.warnings, ["Work Log added"]);
 
         if (workLog.status) {
@@ -196,6 +208,12 @@ export function applyDispatchTestSyncEvents(
       request.bookingType = event.bookingType ?? request.bookingType;
       request.priority = event.priority ?? request.priority;
       request.updatedAt = event.createdAt;
+      request.updateInfo = {
+        at: event.createdAt,
+        detail: `${event.start}-${event.end}`,
+        source: "test-sync",
+        summary: event.eventType === "rescheduled" ? "Schedule changed" : "Scheduled",
+      };
       request.warnings = mergeWarnings(request.warnings, ["Test sync"]);
     }
 

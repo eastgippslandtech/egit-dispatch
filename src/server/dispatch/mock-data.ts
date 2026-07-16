@@ -100,6 +100,15 @@ const requests: DispatchRequest[] = [
     billable: index % 4 !== 3,
     readyToBook: index !== 14,
     slaState: seed[6] as SlaState,
+    updateInfo:
+      index === 2
+        ? {
+            at: "2026-07-08T10:45:00+10:00",
+            detail: "Customer confirmed the POS dropouts are still happening.",
+            source: "msp-central" as const,
+            summary: "Notes added",
+          }
+        : undefined,
     warnings: [seed[7], index % 2 === 0 ? "Ready to book" : "Needs review"],
   })),
   {
@@ -125,6 +134,12 @@ const requests: DispatchRequest[] = [
     billable: true,
     readyToBook: false,
     slaState: "normal",
+    updateInfo: {
+      at: "2026-07-08T09:05:00+10:00",
+      detail: "Technician added a Work Log from the mobile app.",
+      source: "technician-app",
+      summary: "Work Log added",
+    },
     warnings: ["Outlook linked"],
   },
   {

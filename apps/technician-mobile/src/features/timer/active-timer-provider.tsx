@@ -7,10 +7,15 @@ import {
   type PropsWithChildren,
 } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ActiveTimer, MobileJob } from "../../contracts/mobile";
 import type { TechnicianRepository } from "../../data/technician-repository";
 import { colours } from "../../theme/tokens";
+import {
+  TIMER_MESSAGE_VERTICAL_PADDING,
+  topCutoutPadding,
+} from "./timer-banner-layout";
 import { TimerBar } from "./timer-bar";
 
 interface ActiveTimerSnapshot {
@@ -125,6 +130,7 @@ export function ActiveTimerProvider({
 
 export function GlobalTimerBanner({ now = new Date() }: { now?: Date }) {
   const activeTimer = useOptionalActiveTimer();
+  const insets = useSafeAreaInsets();
   if (!activeTimer) return null;
 
   if (activeTimer.activeSnapshot) {
@@ -144,7 +150,17 @@ export function GlobalTimerBanner({ now = new Date() }: { now?: Date }) {
 
   if (activeTimer.timerMessage) {
     return (
-      <View style={styles.messageBanner}>
+      <View
+        style={[
+          styles.messageBanner,
+          {
+            paddingTop: topCutoutPadding(
+              insets.top,
+              TIMER_MESSAGE_VERTICAL_PADDING,
+            ),
+          },
+        ]}
+      >
         <Text style={styles.messageText}>{activeTimer.timerMessage}</Text>
       </View>
     );
@@ -214,7 +230,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colours.borderWarm,
     borderBottomWidth: 1,
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingBottom: TIMER_MESSAGE_VERTICAL_PADDING,
   },
   messageText: {
     color: colours.primary,

@@ -1,22 +1,36 @@
-import { Fragment, createElement, type PropsWithChildren } from "react";
+import { createElement, type PropsWithChildren } from "react";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MobileJob, StoppedTimer } from "../../contracts/mobile";
 import type { TechnicianRepository } from "../../data/technician-repository";
 import { MOBILE_JOB_FIXTURES } from "../../testing/fixtures";
+import { colours } from "../../theme/tokens";
 import {
   ActiveTimerProvider,
   GlobalTimerBanner,
   useActiveTimer,
 } from "./active-timer-provider";
 
+const safeAreaMock = vi.hoisted(() => ({
+  top: 59,
+}));
+
 vi.mock("react-native", () => ({
   Pressable: "Pressable",
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
-  View: ({ children }: PropsWithChildren) =>
-    createElement(Fragment, null, children),
+  View: ({ children, ...props }: PropsWithChildren<Record<string, unknown>>) =>
+    createElement("View", props, children),
+}));
+
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({
+    bottom: 34,
+    left: 0,
+    right: 0,
+    top: safeAreaMock.top,
+  }),
 }));
 
 const secureStore = vi.hoisted(() => ({
@@ -38,6 +52,7 @@ const job = MOBILE_JOB_FIXTURES[0] as MobileJob;
 describe("active timer provider", () => {
   beforeEach(() => {
     secureStore.values.clear();
+    safeAreaMock.top = 59;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T02:05:00.000Z"));
   });
@@ -108,6 +123,47 @@ describe("active timer provider", () => {
     );
     expect(textValues(rendered)).not.toContain("Timer running");
   });
+
+  it("keeps stopped timer messages below camera cutouts", async () => {
+    safeAreaMock.top = 0;
+    const stoppedTimer: StoppedTimer = {
+      accumulatedPausedSeconds: 0,
+      actualElapsedMinutes: 5,
+      id: "timer-start-1",
+      jobId: job.id,
+      pausedAt: null,
+      roundedMinutes: 15,
+      startedAt: "2026-07-14T02:00:00.000Z",
+      stoppedAt: "2026-07-14T02:05:00.000Z",
+      technicianId: job.technician.id,
+    };
+    const repository = {
+      startTimer: vi.fn(async () => ({
+        accumulatedPausedSeconds: 0,
+        id: "timer-start-1",
+        jobId: job.id,
+        pausedAt: null,
+        startedAt: "2026-07-14T02:00:00.000Z",
+        technicianId: job.technician.id,
+      })),
+      stopTimer: vi.fn(async () => stoppedTimer),
+    } as unknown as TechnicianRepository;
+
+    const rendered = await renderWithProvider(repository);
+    await pressButton(rendered, "Start test timer");
+    await pressButton(rendered, "Stop timer");
+
+    const messageBanner = rendered.root
+      .findAll((node) => String(node.type) === "View")
+      .find(
+        (node) =>
+          flattenStyle(node.props.style).backgroundColor ===
+          colours.surfaceWarm,
+      );
+
+    expect(messageBanner).toBeDefined();
+    expect(flattenStyle(messageBanner?.props.style).paddingTop).toBe(67);
+  });
 });
 
 function TimerProbe() {
@@ -166,4 +222,18 @@ function textValues(rendered: ReactTestRenderer) {
   return rendered.root
     .findAll((node) => String(node.type) === "Text")
     .map((node) => node.children.join(""));
+}
+
+function flattenStyle(style: unknown): Record<string, unknown> {
+  if (!Array.isArray(style)) {
+    return style && typeof style === "object"
+      ? (style as Record<string, unknown>)
+      : {};
+  }
+  return style.reduce<Record<string, unknown>>((merged, item) => {
+    if (item && typeof item === "object") {
+      Object.assign(merged, item);
+    }
+    return merged;
+  }, {});
 }

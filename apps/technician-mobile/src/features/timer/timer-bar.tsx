@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppButton } from "../../components/app-button";
 import type { ActiveTimer } from "../../contracts/mobile";
 import { colours } from "../../theme/tokens";
+import {
+  TIMER_BANNER_VERTICAL_PADDING,
+  topCutoutPadding,
+} from "./timer-banner-layout";
 import { elapsedSeconds } from "./timer-service";
 
 export function TimerBar({
@@ -17,6 +22,7 @@ export function TimerBar({
   onStop: () => void;
   timer: ActiveTimer;
 }) {
+  const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState(now);
 
   useEffect(() => {
@@ -30,7 +36,12 @@ export function TimerBar({
   }, [timer.id, timer.startedAt]);
 
   return (
-    <View style={styles.bar}>
+    <View
+      style={[
+        styles.bar,
+        { paddingTop: topCutoutPadding(insets.top, TIMER_BANNER_VERTICAL_PADDING) },
+      ]}
+    >
       <View>
         <Text style={styles.label}>Timer running</Text>
         <Text style={styles.title}>{jobTitle}</Text>
@@ -67,7 +78,7 @@ const styles = StyleSheet.create({
     gap: 14,
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingBottom: TIMER_BANNER_VERTICAL_PADDING,
   },
   elapsed: {
     color: colours.brandNavy,

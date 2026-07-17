@@ -13,7 +13,7 @@
       "email": "hello@egit.com.au",
       "phone": "+611300492206",
       "demoRequired": false,
-      "notes": "EGIT Command Centre is a business operations app for approved East Gippsland IT staff. The normal production sign-in path uses Zoho. For App Review, no external Zoho account is required: on the sign-in screen, tap the EGIT Command Centre app icon five times, enter review code EGIT-REVIEW-2026, then tap Open reviewer demo. This opens a sandbox technician workspace with sample jobs, notes, evidence, timers, schedule navigation, and offline sync queues. The reviewer demo mode does not access real customer or EGIT production data."
+      "notes": "EGIT Command Centre is a business operations app for approved East Gippsland IT staff and contractors. It is not intended for broad public discovery; this submission is intended for limited business/unlisted distribution. The normal production sign-in path uses Zoho and requires an approved EGIT staff account. For App Review, no external Zoho account is required: on the sign-in screen, tap the EGIT Command Centre app icon five times, enter review code EGIT-REVIEW-2026, then tap Open reviewer demo. This opens a sandbox technician workspace with sample jobs, notes, evidence, timers, schedule navigation, and offline sync queues. The reviewer demo mode does not access real customer or EGIT production data. There is no paid content, in-app purchase, or public account registration."
     },
     "info": {
       "en-US": {
@@ -32,7 +32,15 @@
         ],
         "releaseNotes": "Initial production release for approved EGIT technicians, including job screens, schedule navigation, offline cache, mutation queue, timer persistence, and Zoho session refresh.",
         "supportUrl": "https://egit.com.au/contact-us",
-        "privacyPolicyUrl": "https://eastgippsland.tech/privacy-policy"
+        "privacyPolicyUrl": "https://eastgippsland.tech/privacy-policy",
+        "screenshots": {
+          "APP_IPHONE_65": [
+            "./store-assets/app-store/iphone-65/01-schedule.png",
+            "./store-assets/app-store/iphone-65/02-job-detail.png",
+            "./store-assets/app-store/iphone-65/03-active-timer-work-log.png",
+            "./store-assets/app-store/iphone-65/04-my-work.png"
+          ]
+        }
       }
     },
     "advisory": {

@@ -282,6 +282,23 @@ const appointments: Appointment[] = [
   { id: "appt-10", date: "2026-07-12", technicianId: "tech-jervy", title: "Sunday client travel prep", customer: "Decor Floors", start: "10:30", end: "11:30", status: "tentative", source: "outlook" },
 ];
 
+export function getEmptyCommandCentreData(): DispatchDesignMockData {
+  const data: DispatchDesignMockData = {
+    selectedDateLabel: "Today",
+    timezone: "Australia/Melbourne",
+    technicians,
+    requests: [],
+    appointments: [],
+    healthItems: [],
+    selectedRequestId: "",
+  };
+
+  return {
+    ...data,
+    healthItems: buildDispatchHealthItems(data),
+  };
+}
+
 export function getDispatchDesignMockData(): DispatchDesignMockData {
   const contextAppointments = appointments.map((appointment) =>
     appointment.travelToSiteMinutes !== undefined ||

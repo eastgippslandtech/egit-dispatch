@@ -5,13 +5,15 @@ import { getDispatchDashboardData } from "./provider";
 import type { DispatchDashboardDatabase } from "./database";
 
 describe("dispatch dashboard provider", () => {
-  it("serves the locked Command Centre from mock data by default", async () => {
+  it("serves an empty Command Centre board by default", async () => {
     const data = await getDispatchDashboardData(readDispatchConfig({}));
 
-    expect(data.selectedRequestId).toBe("100284");
+    expect(data.selectedRequestId).toBe("");
     expect(data.technicians).toHaveLength(4);
+    expect(data.requests).toEqual([]);
+    expect(data.appointments).toEqual([]);
     expect(data.healthItems.find((item) => item.key === "unscheduled")?.count).toBe(
-      15,
+      0,
     );
   });
 
@@ -31,12 +33,8 @@ describe("dispatch dashboard provider", () => {
     const data = await getDispatchDashboardData(config);
 
     expect(data.calendarDataSource).toBe("mock");
-    expect(data.requests.some((request) => request.requestNumber === "REQ-100284")).toBe(
-      true,
-    );
-    expect(data.appointments.some((appointment) => appointment.source === "linked")).toBe(
-      true,
-    );
+    expect(data.requests).toEqual([]);
+    expect(data.appointments).toEqual([]);
   });
 
   it("serves MSP Central fixture data when fixture mode is selected", async () => {

@@ -1,7 +1,7 @@
 import type { DispatchConfig } from "./env";
 import { todayDateKey } from "./date-scope";
 import { readDispatchConfig } from "./env";
-import { getDispatchDesignMockData } from "./mock-data";
+import { getDispatchDesignMockData, getEmptyCommandCentreData } from "./mock-data";
 import {
   buildDatabaseDispatchDashboardData,
   getConfiguredDispatchDashboardDatabase,
@@ -20,6 +20,7 @@ export async function getDispatchDashboardData(
     database?: DispatchDashboardDatabase | null;
   } = {},
 ): Promise<DispatchDashboardData> {
+  const emptyCommandCentreData = getEmptyCommandCentreData();
   const mockData = getDispatchDesignMockData();
 
   if (config.dispatchDataSource === "command-centre-db") {
@@ -40,10 +41,10 @@ export async function getDispatchDashboardData(
 
   if (config.calendarDataSource === "mock") {
     return {
-      ...mockData,
+      ...emptyCommandCentreData,
       calendarDataSource: "mock",
       calendarReadOnly: false,
-      calendarStatusLabel: "Mock Mode",
+      calendarStatusLabel: "No Sample Data",
       dispatchDataSource: "mock",
     };
   }
@@ -56,6 +57,8 @@ export async function getDispatchDashboardData(
 
   return {
     ...outlookData,
+    requests: [],
+    selectedRequestId: "",
     dispatchDataSource: "mock",
   };
 }

@@ -2,6 +2,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
+import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
+import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
 
 import CommandCentrePage from "./page";
 import { bookingCardPriorityClass } from "./prototype";
@@ -10,7 +12,14 @@ vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
 }));
 
+vi.mock("@/server/dispatch/test-sync-dashboard", () => ({
+  getTestSyncedDispatchDashboardData: vi.fn(),
+}));
+
 const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
+const getTestSyncedDispatchDashboardDataMock = vi.mocked(
+  getTestSyncedDispatchDashboardData,
+);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -20,6 +29,9 @@ beforeEach(() => {
     email: "simeon@egit.com.au",
     name: "Simeon",
   });
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValue(
+    getDispatchDesignMockData(),
+  );
 });
 
 afterEach(() => {

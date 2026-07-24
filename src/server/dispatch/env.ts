@@ -20,6 +20,7 @@ export type DispatchConfig = {
     portal?: string;
     clientId?: string;
     clientSecret?: string;
+    accountsUrl?: string;
     refreshToken?: string;
     requestWebBaseUrl?: string;
   };
@@ -71,6 +72,7 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
       portal: env.MSP_CENTRAL_PORTAL,
       clientId: env.MSP_CENTRAL_CLIENT_ID,
       clientSecret: env.MSP_CENTRAL_CLIENT_SECRET,
+      accountsUrl: env.MSP_CENTRAL_ACCOUNTS_URL,
       refreshToken: env.MSP_CENTRAL_REFRESH_TOKEN,
       requestWebBaseUrl: env.MSP_CENTRAL_REQUEST_WEB_BASE_URL,
     },

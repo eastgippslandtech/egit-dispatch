@@ -65,7 +65,10 @@ export function getMspCentralReadinessStatus(
     liveApiConfigured,
     mapperFixtureLoadOk,
     nextStep: nextReadinessStep(config.dispatchDataSource, liveApiConfigured),
-    ok: mapperFixtureLoadOk && config.dispatchDataSource !== "msp-central",
+    ok:
+      config.dispatchDataSource === "msp-central"
+        ? liveApiConfigured
+        : mapperFixtureLoadOk,
   };
 }
 
@@ -85,5 +88,5 @@ function nextReadinessStep(
     return "Set MSP Central OAuth/API env vars before enabling live API mode.";
   }
 
-  return "Live env vars are present, but live MSP Central API calls are intentionally not implemented yet.";
+  return "Live MSP Central API mode is enabled.";
 }

@@ -73,4 +73,10 @@ export type MspCentralClient = {
   listSites(): Promise<Array<{ id: string; name: string }>>;
   listTechnicians(): Promise<Technician[]>;
   refreshAccessToken(): Promise<string>;
+  updateRequestSchedule(input: {
+    requestId: string;
+    scheduledEnd: string;
+    scheduledStart: string;
+    technicianName?: string;
+  }): Promise<void>;
 };

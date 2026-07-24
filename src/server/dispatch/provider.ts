@@ -1,6 +1,7 @@
 import type { DispatchConfig } from "./env";
 import { todayDateKey } from "./date-scope";
 import { readDispatchConfig } from "./env";
+import { buildDispatchHealthItems } from "./health";
 import { getDispatchDesignMockData, getEmptyCommandCentreData } from "./mock-data";
 import {
   buildDatabaseDispatchDashboardData,
@@ -10,7 +11,9 @@ import {
 import type { DispatchDashboardData } from "./types";
 import { buildGraphWorkWeekRange } from "@/server/graph/range";
 import { buildOutlookCalendarDashboardData } from "@/server/graph/technician-calendars";
+import { createMspCentralClient } from "@/server/msp-central/client";
 import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures";
+import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
 
 export async function getDispatchDashboardData(
   config: DispatchConfig = readDispatchConfig(),
@@ -36,7 +39,43 @@ export async function getDispatchDashboardData(
   }
 
   if (config.dispatchDataSource === "msp-central") {
-    throw new Error("MSP Central API not configured for live dispatch data.");
+    const client = createMspCentralClient(config);
+    const [requests, technicians] = await Promise.all([
+      client.listRequests(),
+      client
+        .listTechnicians()
+        .catch(() => getInitialStaffProfiles().map(staffProfileToTechnician)),
+    ]);
+    const mspData: DispatchDashboardData = {
+      appointments: [],
+      calendarDataSource: "mock",
+      calendarReadOnly: false,
+      calendarStatusLabel: "MSP Central",
+      dispatchDataSource: "msp-central",
+      healthItems: [],
+      requests,
+      selectedDateLabel: todayDateKey(),
+      selectedRequestId: requests[0]?.id ?? "",
+      technicians,
+      timezone: config.timezone,
+    };
+    const dashboard = {
+      ...mspData,
+      healthItems: buildDispatchHealthItems(mspData),
+    };
+
+    if (config.calendarDataSource === "outlook") {
+      return {
+        ...(await buildOutlookCalendarDashboardData({
+          config,
+          mockData: dashboard,
+          range: buildGraphWorkWeekRange(todayDateKey()),
+        })),
+        dispatchDataSource: "msp-central",
+      };
+    }
+
+    return dashboard;
   }
 
   if (config.calendarDataSource === "mock") {

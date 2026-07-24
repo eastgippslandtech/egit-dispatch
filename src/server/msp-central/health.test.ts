@@ -26,4 +26,20 @@ describe("MSP Central readiness status", () => {
     expect(status.mapperFixtureLoadOk).toBe(true);
     expect(status.liveApiAttempted).toBe(false);
   });
+
+  it("reports live MSP Central mode ready when required env vars are present", () => {
+    const status = getMspCentralReadinessStatus({
+      DISPATCH_DATA_SOURCE: "msp-central",
+      MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+      MSP_CENTRAL_CLIENT_ID: "client-id",
+      MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+      MSP_CENTRAL_PORTAL: "memsp1783593801295",
+      MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+    });
+
+    expect(status.liveApiConfigured).toBe(true);
+    expect(status.liveApiAttempted).toBe(true);
+    expect(status.ok).toBe(true);
+    expect(status.nextStep).toBe("Live MSP Central API mode is enabled.");
+  });
 });

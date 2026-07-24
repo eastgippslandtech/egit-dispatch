@@ -1,4 +1,9 @@
-import type { GraphCalendarRange, MicrosoftGraphEvent } from "./types";
+import type {
+  GraphCalendarRange,
+  MicrosoftGraphEvent,
+  MicrosoftGraphEventDraft,
+  MicrosoftGraphEventUpdate,
+} from "./types";
 
 type FetchLike = typeof fetch;
 
@@ -101,8 +106,89 @@ export function createGraphClient({
     return payload.value ?? [];
   }
 
+  async function createEvent(input: MicrosoftGraphEventDraft) {
+    const token = await acquireToken();
+    const response = await fetchImpl(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
+        input.userPrincipalName,
+      )}/events`,
+      {
+        body: JSON.stringify(graphEventBody(input, outlookTimezone)),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Prefer: `outlook.timezone="${outlookTimezone}"`,
+        },
+        method: "POST",
+      },
+    );
+
+    if (!response.ok) {
+      throw new GraphApiError(
+        `Microsoft Graph calendar create failed for ${input.userPrincipalName}.`,
+        response.status,
+      );
+    }
+
+    return (await response.json()) as MicrosoftGraphEvent;
+  }
+
+  async function updateEvent(input: MicrosoftGraphEventUpdate) {
+    const token = await acquireToken();
+    const response = await fetchImpl(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
+        input.userPrincipalName,
+      )}/events/${encodeURIComponent(input.eventId)}`,
+      {
+        body: JSON.stringify(graphEventBody(input, outlookTimezone)),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Prefer: `outlook.timezone="${outlookTimezone}"`,
+        },
+        method: "PATCH",
+      },
+    );
+
+    if (!response.ok) {
+      throw new GraphApiError(
+        `Microsoft Graph calendar update failed for ${input.userPrincipalName}.`,
+        response.status,
+      );
+    }
+
+    return (await response.json()) as MicrosoftGraphEvent;
+  }
+
   return {
     acquireToken,
+    createEvent,
     listCalendarView,
+    updateEvent,
+  };
+}
+
+function graphEventBody(input: MicrosoftGraphEventDraft, timezone: string) {
+  return {
+    body: input.bodyPreview
+      ? {
+          content: input.bodyPreview,
+          contentType: "text",
+        }
+      : undefined,
+    end: {
+      dateTime: input.end,
+      timeZone: timezone,
+    },
+    location: input.location
+      ? {
+          displayName: input.location,
+        }
+      : undefined,
+    start: {
+      dateTime: input.start,
+      timeZone: timezone,
+    },
+    subject: input.subject,
   };
 }

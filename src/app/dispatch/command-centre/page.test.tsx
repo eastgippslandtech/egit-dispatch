@@ -186,7 +186,10 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
     within(drawer).getByRole("button", {
       name: "Create / Update Calendar Event",
     }),
-  ).toHaveAttribute("title", "Outlook writeback is not enabled yet.");
+  ).toHaveAttribute(
+    "title",
+    "Select a linked scheduled request while Outlook writeback is enabled.",
+  );
 });
 
 test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {

@@ -83,6 +83,11 @@ type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
 
+type LiveScheduleResult = {
+  id?: string;
+  webLink?: string;
+};
+
 const PRIMARY_HEALTH_KEYS = [
   "unscheduled",
   "sla-risk",
@@ -906,31 +911,61 @@ export function CommandCentrePrototype({
         return;
       }
 
-      const appointmentId = `mock-${request.id}-${Date.now()}`;
+      const liveSchedule = canUseLiveSchedule(dashboard);
+      let liveEvent: LiveScheduleResult | undefined;
+      const appointmentId = liveSchedule
+        ? `pending-live-${request.id}-${Date.now()}`
+        : `mock-${request.id}-${Date.now()}`;
       const bookingType = bookingTypeForRequest(request);
 
       try {
-        await publishDispatchTestSyncEvent({
-          appointmentId,
-          bookingType,
-          date: pendingSchedule.date,
-          end: pendingSchedule.end,
-          eventType: "scheduled",
-          priority: request.priority,
-          requestId: request.id,
-          start: pendingSchedule.start,
-          technicianId: pendingSchedule.technicianId,
-          payload: {
-            travel: pendingSchedule.travel,
-          },
-        });
+        if (liveSchedule) {
+          liveEvent = await publishLiveSchedule({
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            location: request.siteAddress ?? request.site,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            start: pendingSchedule.start,
+            subject: request.subject,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await publishDispatchTestSyncEvent({
+            appointmentId,
+            bookingType,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventType: "scheduled",
+            priority: request.priority,
+            requestId: request.id,
+            start: pendingSchedule.start,
+            technicianId: pendingSchedule.technicianId,
+            payload: {
+              travel: pendingSchedule.travel,
+            },
+          });
+        }
       } catch (error) {
-        setToast(testSyncErrorMessage(error));
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
         return;
       }
 
+      const finalAppointmentId = liveEvent?.id
+        ? `outlook-${pendingSchedule.technicianId}-${liveEvent.id}`
+        : appointmentId;
       const appointments = scheduleRequest({
-        appointmentId,
+        appointmentId: finalAppointmentId,
         appointments: dashboard.appointments,
         date: pendingSchedule.date,
         durationMinutes: pendingSchedule.durationMinutes,
@@ -942,7 +977,17 @@ export function CommandCentrePrototype({
 
       setDashboard((current) => ({
         ...current,
-        appointments,
+        appointments: appointments.map((appointment) =>
+          appointment.id === finalAppointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+                status: liveSchedule ? "confirmed" : appointment.status,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((candidate) =>
           candidate.id === request.id
             ? {
@@ -960,7 +1005,7 @@ export function CommandCentrePrototype({
                 ),
                 readyToBook: false,
                 warnings: [
-                  "Mock scheduled",
+                  liveSchedule ? "Scheduled" : "Mock scheduled",
                   ...(pendingSchedule.travel?.travelWarning
                     ? [pendingSchedule.travel.travelWarning]
                     : []),
@@ -971,10 +1016,14 @@ export function CommandCentrePrototype({
       }));
       setSelection({
         kind: "appointment",
-        appointmentId,
+        appointmentId: finalAppointmentId,
         requestId: request.id,
       });
-      setToast(`${request.requestNumber} scheduled in mock mode.`);
+      setToast(
+        liveSchedule
+          ? `${request.requestNumber} scheduled in MSP Central and Outlook.`
+          : `${request.requestNumber} scheduled in mock mode.`,
+      );
     } else {
       const currentAppointment = dashboard.appointments.find(
         (appointment) => appointment.id === pendingSchedule.appointmentId,
@@ -987,23 +1036,50 @@ export function CommandCentrePrototype({
       const bookingType =
         currentAppointment?.bookingType ?? (request ? bookingTypeForRequest(request) : undefined);
 
+      const liveSchedule = Boolean(request) && canUseLiveSchedule(dashboard);
+      let liveEvent: LiveScheduleResult | undefined;
+
       try {
-        await publishDispatchTestSyncEvent({
-          appointmentId: pendingSchedule.appointmentId,
-          bookingType,
-          date: pendingSchedule.date,
-          end: pendingSchedule.end,
-          eventType: "rescheduled",
-          priority: request?.priority,
-          requestId: currentAppointment?.requestId,
-          start: pendingSchedule.start,
-          technicianId: pendingSchedule.technicianId,
-          payload: {
-            travel: pendingSchedule.travel,
-          },
-        });
+        if (liveSchedule && request) {
+          liveEvent = await publishLiveSchedule({
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventId: currentAppointment?.outlookEventId,
+            location: request.siteAddress ?? request.site,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            start: pendingSchedule.start,
+            subject: request.subject,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await publishDispatchTestSyncEvent({
+            appointmentId: pendingSchedule.appointmentId,
+            bookingType,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventType: "rescheduled",
+            priority: request?.priority,
+            requestId: currentAppointment?.requestId,
+            start: pendingSchedule.start,
+            technicianId: pendingSchedule.technicianId,
+            payload: {
+              travel: pendingSchedule.travel,
+            },
+          });
+        }
       } catch (error) {
-        setToast(testSyncErrorMessage(error));
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
         return;
       }
 
@@ -1019,7 +1095,16 @@ export function CommandCentrePrototype({
 
       setDashboard((current) => ({
         ...current,
-        appointments: movedAppointments,
+        appointments: movedAppointments.map((appointment) =>
+          appointment.id === pendingSchedule.appointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((request) =>
           request.id ===
           current.appointments.find(
@@ -1044,10 +1129,60 @@ export function CommandCentrePrototype({
         kind: "appointment",
         appointmentId: pendingSchedule.appointmentId,
       });
-      setToast("Appointment moved in mock mode.");
+      setToast(
+        liveSchedule
+          ? "Appointment moved in MSP Central and Outlook."
+          : "Appointment moved in mock mode.",
+      );
     }
 
     setPendingSchedule(undefined);
+  }
+
+  async function syncSelectedCalendarEvent() {
+    if (!selectedAppointment || !selectedRequest || !canUseLiveSchedule(dashboard)) {
+      return;
+    }
+
+    try {
+      const liveEvent = await publishLiveSchedule({
+        customer: selectedRequest.customer,
+        date: selectedAppointment.date ?? selectedDateKey,
+        end: selectedAppointment.end,
+        eventId: selectedAppointment.outlookEventId,
+        location: selectedRequest.siteAddress ?? selectedRequest.site,
+        requestId: selectedRequest.id,
+        requestNumber: selectedRequest.requestNumber,
+        start: selectedAppointment.start,
+        subject: selectedRequest.subject,
+        technicianName: technicianLabel(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+        userPrincipalName: technicianOutlookIdentity(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+      });
+
+      setDashboard((current) => ({
+        ...current,
+        appointments: current.appointments.map((appointment) =>
+          appointment.id === selectedAppointment.id
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+                status: "confirmed",
+              }
+            : appointment,
+        ),
+      }));
+      setToast(`${selectedRequest.requestNumber} synced to MSP Central and Outlook.`);
+    } catch (error) {
+      setToast(liveScheduleErrorMessage(error));
+    }
   }
 
   return (
@@ -1388,7 +1523,9 @@ export function CommandCentrePrototype({
 
           <DetailDrawer
             appointment={selectedAppointment}
+            calendarWriteEnabled={canUseLiveSchedule(dashboard)}
             onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
+            onSyncCalendar={syncSelectedCalendarEvent}
             request={selectedRequest}
             selectionKind={selection.kind}
             technician={technicianLabel(
@@ -1462,11 +1599,69 @@ async function publishDispatchTestSyncEvent(
   }
 }
 
+async function publishLiveSchedule(event: {
+  customer: string;
+  date: string;
+  end: string;
+  eventId?: string;
+  location: string;
+  requestId: string;
+  requestNumber: string;
+  start: string;
+  subject: string;
+  technicianName: string;
+  userPrincipalName: string;
+}): Promise<LiveScheduleResult> {
+  const response = await fetch("/api/internal/dispatch/live-schedule", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; event?: LiveScheduleResult }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "Live schedule write failed.");
+  }
+
+  return body?.event ?? {};
+}
+
 function testSyncErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
 
   return `Mock schedule did not save: ${message}`;
+}
+
+function liveScheduleErrorMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Live schedule write failed.";
+
+  return `Live schedule did not save: ${message}`;
+}
+
+function canUseLiveSchedule(dashboard: DispatchDashboardData) {
+  return (
+    dashboard.dispatchDataSource === "msp-central" &&
+    dashboard.calendarDataSource === "outlook" &&
+    dashboard.calendarReadOnly === false
+  );
+}
+
+function technicianOutlookIdentity(technicians: Technician[], technicianId: string) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+  const identity =
+    technician?.outlookUserPrincipalName ?? technician?.outlookEmail;
+
+  if (!identity) {
+    throw new Error("Technician does not have an Outlook calendar identity.");
+  }
+
+  return identity;
 }
 
 function bookingTypeForRequest(request: DispatchRequest): BookingType {
@@ -3346,13 +3541,17 @@ function TravelSideExtension({
 
 function DetailDrawer({
   appointment,
+  calendarWriteEnabled,
   onOpenWorkLog,
+  onSyncCalendar,
   request,
   selectionKind,
   technician,
 }: {
   appointment?: Appointment;
+  calendarWriteEnabled: boolean;
   onOpenWorkLog: (requestId: string) => void;
+  onSyncCalendar: () => void;
   request?: DispatchRequest;
   selectionKind: Selection["kind"];
   technician: string;
@@ -3551,11 +3750,16 @@ function DetailDrawer({
               Reschedule
             </ActionButton>
             <ActionButton
-              disabled
+              disabled={!request || !appointment || !calendarWriteEnabled}
               icon={<RefreshCw className="h-4 w-4" />}
-              title="Outlook writeback is not enabled yet."
+              onClick={onSyncCalendar}
+              title={
+                request && appointment && calendarWriteEnabled
+                  ? "Create or update the linked Outlook event and MSP Central schedule."
+                  : "Select a linked scheduled request while Outlook writeback is enabled."
+              }
             >
-              {appointment?.readOnly ? "Calendar Read Only" : "Create / Update Calendar Event"}
+              Create / Update Calendar Event
             </ActionButton>
           </div>
         </DrawerSection>

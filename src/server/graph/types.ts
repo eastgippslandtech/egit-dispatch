@@ -30,6 +30,19 @@ export type MicrosoftGraphEvent = {
   webLink?: string;
 };
 
+export type MicrosoftGraphEventDraft = {
+  bodyPreview?: string;
+  end: string;
+  location?: string;
+  start: string;
+  subject: string;
+  userPrincipalName: string;
+};
+
+export type MicrosoftGraphEventUpdate = MicrosoftGraphEventDraft & {
+  eventId: string;
+};
+
 export type GraphCalendarRange = {
   endDateTime: string;
   startDateTime: string;

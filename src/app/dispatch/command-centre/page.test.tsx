@@ -4,9 +4,10 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { getCommandCentreAccess } from "@/server/auth/session";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
+import type { DispatchRequest } from "@/server/dispatch/types";
 
 import CommandCentrePage from "./page";
-import { bookingCardPriorityClass } from "./prototype";
+import { bookingCardPriorityClass, requestNotesSummary } from "./prototype";
 
 vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
@@ -86,6 +87,14 @@ test("maps booking urgency to full-card priority colours", () => {
   expect(bookingCardPriorityClass("Medium")).toContain("bg-emerald");
   expect(bookingCardPriorityClass("Low")).toContain("bg-sky");
   expect(bookingCardPriorityClass(null)).toContain("bg-slate");
+});
+
+test("does not show mock notes for live MSP Central requests", () => {
+  expect(
+    requestNotesSummary({
+      sourceSystem: "msp-central",
+    } as DispatchRequest),
+  ).toBe("No notes provided.");
 });
 
 test("week planner keeps technician rows compact and reveals overflow jobs", async () => {

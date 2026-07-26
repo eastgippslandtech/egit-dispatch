@@ -3747,10 +3747,7 @@ function DetailDrawer({
               <DetailRow label="Due time" value={formatDateTime(request.dueAt)} />
               <DetailRow
                 label="Notes"
-                value={
-                  request.notes ??
-                  "Mock note. Confirm access and parts before dispatch."
-                }
+                value={requestNotesSummary(request)}
               />
             </>
           ) : (
@@ -4033,6 +4030,17 @@ function requestSourceLabel(request: DispatchRequest) {
   }
 
   return "Mock";
+}
+
+export function requestNotesSummary(request: DispatchRequest) {
+  if (request.notes?.trim()) {
+    return request.notes;
+  }
+
+  return request.sourceSystem === "msp-central" ||
+    request.sourceSystem === "msp-central-fixture"
+    ? "No notes provided."
+    : "Mock note. Confirm access and parts before dispatch.";
 }
 
 function hasUnreadTicketUpdate(

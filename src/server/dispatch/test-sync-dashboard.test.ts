@@ -121,6 +121,36 @@ describe("test-synced dispatch dashboard", () => {
     await expect(pendingDashboard).resolves.toEqual(dashboard);
   });
 
+  it("does not reintroduce resolved test-sync requests in live MSP Central mode", async () => {
+    getDispatchDashboardDataMock.mockResolvedValue({
+      ...dashboard,
+      dispatchDataSource: "msp-central",
+    });
+    listDispatchTestSyncEventsMock.mockResolvedValue([
+      {
+        createdAt: "2026-07-08T00:00:00.000Z",
+        eventType: "work_logged",
+        id: "event-resolved",
+        requestId: "req-1",
+        payload: {
+          workLog: {
+            billable: true,
+            minutesSpent: 30,
+            notes: "Completed during testing.",
+            status: "Resolved",
+            visibility: "Customer-facing",
+            workType: "Remote",
+          },
+        },
+      },
+    ]);
+
+    const result = await getTestSyncedDispatchDashboardData();
+
+    expect(result.requests).toEqual([]);
+    expect(result.selectedRequestId).toBe("");
+  });
+
   it("leaves the dashboard unchanged when no test database is configured", async () => {
     delete process.env.DATABASE_URL;
 

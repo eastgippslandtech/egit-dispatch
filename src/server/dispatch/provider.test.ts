@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readDispatchConfig } from "./env";
 import { getDispatchDashboardData } from "./provider";
@@ -6,6 +6,10 @@ import type { DispatchDashboardDatabase } from "./database";
 import type { MspCentralClient } from "@/server/msp-central/types";
 
 describe("dispatch dashboard provider", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("serves an empty Command Centre board by default", async () => {
     const data = await getDispatchDashboardData(readDispatchConfig({}));
 
@@ -56,6 +60,20 @@ describe("dispatch dashboard provider", () => {
   });
 
   it("keeps the board available when live MSP Central is temporarily unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        String(input).includes("/oauth2/v2.0/token")
+          ? {
+              json: async () => ({ access_token: "graph-token" }),
+              ok: true,
+            }
+          : {
+              json: async () => ({ value: [] }),
+              ok: true,
+            },
+      ),
+    );
     const mspClient = {
       listRequests: async () => {
         throw new Error("OAuth refresh failed");
@@ -67,7 +85,11 @@ describe("dispatch dashboard provider", () => {
 
     const data = await getDispatchDashboardData(
       readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
         DISPATCH_DATA_SOURCE: "msp-central",
+        MICROSOFT_CLIENT_ID: "graph-client",
+        MICROSOFT_CLIENT_SECRET: "graph-secret",
+        MICROSOFT_TENANT_ID: "graph-tenant",
         MSP_CENTRAL_BASE_URL: "https://msp.example",
         MSP_CENTRAL_PORTAL: "egit",
         MSP_CENTRAL_CLIENT_ID: "msp-client",
@@ -82,7 +104,9 @@ describe("dispatch dashboard provider", () => {
     expect(data.technicians.map((technician) => technician.displayName)).toEqual(
       ["Simeon", "Matt", "Jervy", "Riley"],
     );
-    expect(data.calendarError).toContain("MSP Central");
+    expect(data.calendarError).toBe(
+      "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.",
+    );
   });
 
   it("serves dispatch from the existing Command Centre database source", async () => {

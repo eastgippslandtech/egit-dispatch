@@ -119,7 +119,9 @@ export async function getDispatchDashboardData(
 }
 
 function joinErrors(...errors: Array<string | undefined>) {
-  const messages = errors.filter((error): error is string => Boolean(error));
+  const messages = [
+    ...new Set(errors.filter((error): error is string => Boolean(error))),
+  ];
   return messages.length > 0 ? messages.join(" ") : undefined;
 }
 

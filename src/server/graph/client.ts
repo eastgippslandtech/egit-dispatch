@@ -38,7 +38,14 @@ export function createGraphClient({
 }: GraphClientOptions) {
   const outlookTimezone =
     timezone === "Australia/Melbourne" ? "AUS Eastern Standard Time" : timezone;
-  async function acquireToken() {
+  let accessTokenPromise: Promise<string> | undefined;
+
+  function acquireToken() {
+    accessTokenPromise ??= requestAccessToken();
+    return accessTokenPromise;
+  }
+
+  async function requestAccessToken() {
     if (!tenantId || !clientId || !clientSecret) {
       throw new GraphApiError("Microsoft Graph credentials are not configured.");
     }

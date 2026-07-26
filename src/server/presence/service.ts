@@ -35,9 +35,12 @@ export async function getWallboardSnapshot({
   peopleConfig?: ZohoPeopleConfig | null;
   repository?: Pick<PresenceOverrideRepository, "listActive"> | null;
 } = {}): Promise<WallboardSnapshot> {
-  const dashboard = sanitizeDashboard(await getDashboard());
+  const [rawDashboard, overrides] = await Promise.all([
+    getDashboard(),
+    repository ? repository.listActive(now) : Promise.resolve([]),
+  ]);
+  const dashboard = sanitizeDashboard(rawDashboard);
   const sourceWarnings: string[] = [];
-  const overrides = repository ? await repository.listActive(now) : [];
   let leaves: PresenceLeave[] = [];
   let peopleStatus: WallboardSnapshot["peopleStatus"] = "not_configured";
 

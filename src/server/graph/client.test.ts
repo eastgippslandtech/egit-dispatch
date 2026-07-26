@@ -83,10 +83,6 @@ describe("Graph client", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ access_token: "token-value" }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
         status: 200,
         json: async () => ({ id: "event-1", webLink: "https://outlook/event-1" }),
       });
@@ -136,9 +132,48 @@ describe("Graph client", () => {
       subject: "REQ-123 Printer offline",
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
+      3,
       "https://graph.microsoft.com/v1.0/users/mattd%40egit.com.au/events/event-1",
       expect.objectContaining({ method: "PATCH" }),
     );
+  });
+
+  it("shares one access-token request across concurrent calendar reads", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) =>
+      String(input).includes("/oauth2/v2.0/token")
+        ? {
+            ok: true,
+            json: async () => ({ access_token: "token-value" }),
+          }
+        : {
+            ok: true,
+            json: async () => ({ value: [] }),
+          },
+    );
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    await Promise.all([
+      client.listCalendarView({
+        endDateTime: "2026-07-09T00:00:00",
+        startDateTime: "2026-07-08T00:00:00",
+        userPrincipalName: "mattd@egit.com.au",
+      }),
+      client.listCalendarView({
+        endDateTime: "2026-07-09T00:00:00",
+        startDateTime: "2026-07-08T00:00:00",
+        userPrincipalName: "jervy@egit.com.au",
+      }),
+    ]);
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/oauth2/v2.0/token"),
+      ),
+    ).toHaveLength(1);
   });
 });

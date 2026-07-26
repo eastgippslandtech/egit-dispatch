@@ -7,6 +7,35 @@ import { getWallboardSnapshot } from "./service";
 const technician = staffProfileToTechnician(getInitialStaffProfiles()[2]);
 
 describe("wallboard snapshot service", () => {
+  it("loads presence overrides in parallel with the dispatch dashboard", async () => {
+    const dashboard = {
+      ...getEmptyCommandCentreData(),
+      appointments: [],
+      technicians: [technician],
+    };
+    let resolveDashboard:
+      | ((value: typeof dashboard) => void)
+      | undefined;
+    const listActive = vi.fn().mockResolvedValue([]);
+    const snapshotPromise = getWallboardSnapshot({
+      getDashboard: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveDashboard = resolve;
+          }),
+      ),
+      now: new Date("2026-07-26T02:15:00.000Z"),
+      peopleConfig: null,
+      repository: { listActive },
+    });
+    await Promise.resolve();
+
+    expect(listActive).toHaveBeenCalledOnce();
+
+    resolveDashboard?.(dashboard);
+    await snapshotPromise;
+  });
+
   it("combines the live dashboard and active overrides into presence", async () => {
     const dashboard = {
       ...getEmptyCommandCentreData(),

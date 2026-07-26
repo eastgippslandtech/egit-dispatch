@@ -103,6 +103,24 @@ describe("test-synced dispatch dashboard", () => {
     );
   });
 
+  it("loads persisted schedule changes in parallel with the dashboard", async () => {
+    let resolveDashboard: ((value: DispatchDashboardData) => void) | undefined;
+    getDispatchDashboardDataMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDashboard = resolve;
+      }),
+    );
+    listDispatchTestSyncEventsMock.mockResolvedValue([]);
+
+    const pendingDashboard = getTestSyncedDispatchDashboardData();
+    await Promise.resolve();
+
+    expect(listDispatchTestSyncEventsMock).toHaveBeenCalledOnce();
+
+    resolveDashboard?.(dashboard);
+    await expect(pendingDashboard).resolves.toEqual(dashboard);
+  });
+
   it("leaves the dashboard unchanged when no test database is configured", async () => {
     delete process.env.DATABASE_URL;
 

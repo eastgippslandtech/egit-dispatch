@@ -75,6 +75,7 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
 }
 
 function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
+  let accessTokenPromise: Promise<string> | undefined;
   const configured = Boolean(
     config.mspCentral.baseUrl &&
       config.mspCentral.portal &&
@@ -92,6 +93,8 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     );
   };
   const apiRoot = buildMspCentralApiRoot(config);
+  const getAccessToken = () =>
+    (accessTokenPromise ??= refreshAccessToken(config));
 
   return {
     async getRequest(requestId) {
@@ -173,7 +176,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     },
     async refreshAccessToken() {
       assertConfigured();
-      return refreshAccessToken(config);
+      return getAccessToken();
     },
     async updateRequestSchedule(input) {
       assertConfigured();
@@ -205,7 +208,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     url: string,
     init: { body?: URLSearchParams; method: "GET" | "PUT" },
   ): Promise<T> {
-    const token = await refreshAccessToken(config);
+    const token = await getAccessToken();
     const response = await fetch(url, {
       body: init.body,
       headers: {

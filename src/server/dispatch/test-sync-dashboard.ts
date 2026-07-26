@@ -10,9 +10,22 @@ export async function getTestSyncedDispatchDashboardData(
   config?: DispatchConfig,
   dependencies?: Parameters<typeof getDispatchDashboardData>[1],
 ) {
-  return applyStoredDispatchTestSyncEvents(
-    await getDispatchDashboardData(config, dependencies),
-  );
+  const dashboardPromise = getDispatchDashboardData(config, dependencies);
+
+  if (!process.env.DATABASE_URL) {
+    return dashboardPromise;
+  }
+
+  const eventsPromise = listDispatchTestSyncEvents().catch((error) => {
+    console.error("Dispatch test sync overlay failed", error);
+    return undefined;
+  });
+  const [dashboard, events] = await Promise.all([
+    dashboardPromise,
+    eventsPromise,
+  ]);
+
+  return events ? applyDispatchTestSyncEvents(dashboard, events) : dashboard;
 }
 
 export async function applyStoredDispatchTestSyncEvents(

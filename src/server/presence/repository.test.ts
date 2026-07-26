@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import type postgres from "postgres";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  createPostgresPresenceOverrideRepository,
   createPresenceOverrideRepository,
   type PresenceOverrideRow,
   type PresenceOverrideStore,
@@ -43,6 +45,20 @@ function memoryStore(seed: PresenceOverrideRow[] = []) {
 }
 
 describe("presence override repository", () => {
+  it("does not run schema DDL during an ordinary presence read", async () => {
+    const sql = Object.assign(vi.fn(async () => []), {
+      unsafe: vi.fn(async () => []),
+    });
+    const repository = createPostgresPresenceOverrideRepository({
+      databaseUrl: "postgresql://example",
+      sql: sql as unknown as postgres.Sql,
+    });
+
+    await repository.listActive(new Date("2026-07-26T02:15:00.000Z"));
+
+    expect(sql.unsafe).not.toHaveBeenCalled();
+  });
+
   it("starts Lunch immediately with an exact 30-minute expiry", async () => {
     const { store } = memoryStore();
     const repository = createPresenceOverrideRepository(store);

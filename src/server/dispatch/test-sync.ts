@@ -78,7 +78,6 @@ type DispatchTestSyncRow = {
 };
 
 let sqlSingleton: postgres.Sql | undefined;
-let schemaReady: Promise<void> | undefined;
 
 export function normaliseDispatchTestSyncEvent(
   input: DispatchTestSyncEventInput,
@@ -280,7 +279,6 @@ export function applyDispatchTestSyncEvents(
 export async function listDispatchTestSyncEvents() {
   const sql = await getDispatchTestSyncClient();
 
-  await ensureDispatchTestSyncSchema(sql);
   const rows = await sql<DispatchTestSyncRow[]>`
     select id, event_type, request_id, appointment_id, technician_id, date_key,
             start_time, end_time, booking_type, priority, notes, payload,
@@ -302,7 +300,6 @@ export async function recordDispatchTestSyncEvent(
   });
   const sql = await getDispatchTestSyncClient();
 
-  await ensureDispatchTestSyncSchema(sql);
   await sql`
     insert into dispatch_test_schedule_events (
       id, event_type, request_id, appointment_id, technician_id, date_key,
@@ -347,7 +344,6 @@ export async function recordDispatchTestSyncEvent(
 export async function clearDispatchTestSyncEvents() {
   const sql = await getDispatchTestSyncClient();
 
-  await ensureDispatchTestSyncSchema(sql);
   await sql`delete from dispatch_test_schedule_events`;
 }
 
@@ -365,42 +361,6 @@ async function getDispatchTestSyncClient() {
   });
 
   return sqlSingleton;
-}
-
-async function ensureDispatchTestSyncSchema(sql: postgres.Sql) {
-  schemaReady ??= (async () => {
-    await sql.unsafe(`
-      create table if not exists dispatch_test_schedule_events (
-        id text primary key,
-        event_type text not null,
-        request_id text,
-        appointment_id text,
-        technician_id text,
-        date_key text,
-        start_time text,
-        end_time text,
-        booking_type text,
-        priority text,
-        notes text,
-        payload jsonb not null default '{}'::jsonb,
-        created_by text,
-        created_at timestamptz not null default now()
-      )
-    `);
-    await sql.unsafe(`
-      alter table dispatch_test_schedule_events
-        add column if not exists payload jsonb not null default '{}'::jsonb
-    `);
-    await sql.unsafe(`
-      create index if not exists dispatch_test_schedule_events_created_at_idx
-        on dispatch_test_schedule_events (created_at)
-    `);
-    await sql.unsafe(`
-      alter table dispatch_test_schedule_events enable row level security
-    `);
-  })();
-
-  await schemaReady;
 }
 
 function rowToDispatchTestSyncEvent(

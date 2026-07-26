@@ -44,20 +44,27 @@ export async function getDispatchDashboardData(
   if (config.dispatchDataSource === "msp-central") {
     const client = mspClient ?? createMspCentralClient(config);
     const profiles = getInitialStaffProfiles();
-    let requests: DispatchDashboardData["requests"] = [];
-    let mspCentralError: string | undefined;
+    const [requestsResult, techniciansResult] = await Promise.allSettled([
+      client.listRequests(),
+      client.listTechnicians(),
+    ]);
+    const requests =
+      requestsResult.status === "fulfilled" ? requestsResult.value : [];
+    const technicians =
+      techniciansResult.status === "fulfilled"
+        ? techniciansResult.value
+        : profiles.map(staffProfileToTechnician);
+    const mspCentralError =
+      requestsResult.status === "rejected"
+        ? "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded."
+        : undefined;
 
-    try {
-      requests = await client.listRequests();
-    } catch (error) {
-      mspCentralError =
-        "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.";
-      console.error("MSP Central request read failed", safeError(error));
+    if (requestsResult.status === "rejected") {
+      console.error(
+        "MSP Central request read failed",
+        safeError(requestsResult.reason),
+      );
     }
-
-    const technicians = await client
-      .listTechnicians()
-      .catch(() => profiles.map(staffProfileToTechnician));
     const mspData: DispatchDashboardData = {
       appointments: [],
       calendarDataSource: "mock",

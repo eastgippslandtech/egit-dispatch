@@ -18,7 +18,13 @@ export function mapGraphEventToAppointment(
   event: MicrosoftGraphEvent,
   technician: Technician,
 ): Appointment {
-  const isPrivate = event.sensitivity === "private" || !event.subject;
+  const sensitivity = event.sensitivity?.toLowerCase();
+  const isPersonal =
+    ["confidential", "personal", "private"].includes(sensitivity ?? "") ||
+    event.categories?.some(
+      (category) => category.trim().toLowerCase() === "personal",
+    ) === true;
+  const isPrivate = isPersonal || !event.subject;
   const requestNumber = isPrivate
     ? undefined
     : extractLinkedRequestNumber(event.subject, event.bodyPreview);
@@ -29,7 +35,14 @@ export function mapGraphEventToAppointment(
   const date = graphDateKey(event.start.dateTime);
   const start = isAllDay ? "09:00" : graphTime(event.start.dateTime);
   const end = isAllDay ? "17:30" : graphTime(event.end.dateTime);
-  const subject = isPrivate ? "Private appointment" : event.subject?.trim();
+  const subject = isPrivate
+    ? sensitivity === "personal" ||
+      event.categories?.some(
+        (category) => category.trim().toLowerCase() === "personal",
+      )
+      ? "Personal"
+      : "Private appointment"
+    : event.subject?.trim();
   const location = event.location?.displayName?.trim();
 
   return {
@@ -40,9 +53,12 @@ export function mapGraphEventToAppointment(
     end,
     id: `outlook-${technician.id}-${event.id}`,
     isAllDay,
-    outlookAttendees: event.attendees
-      ?.map((attendee) => attendee.emailAddress?.address)
-      .filter(Boolean) as string[] | undefined,
+    outlookAttendees: isPrivate
+      ? undefined
+      : (event.attendees
+          ?.map((attendee) => attendee.emailAddress?.address)
+          .filter(Boolean) as string[] | undefined),
+    outlookCategories: event.categories,
     outlookEventId: event.id,
     outlookIssue: outlookIssue({
       isAllDay,
@@ -52,6 +68,7 @@ export function mapGraphEventToAppointment(
     }),
     outlookLinkedRequestNumber: requestNumber,
     outlookOrganizer: event.organizer?.emailAddress?.address,
+    outlookSensitivity: event.sensitivity,
     outlookShowAs: event.showAs,
     outlookWebLink: event.webLink,
     readOnly: true,

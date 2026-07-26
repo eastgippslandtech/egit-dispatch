@@ -38,6 +38,7 @@ type DispatchStaffRow = {
   technicianOutlookEmail: string | null;
   technicianSdpId: string | null;
   zohoEmail: string;
+  zohoPeopleEmployeeId: string | null;
 };
 
 type DispatchLinkRow = {
@@ -139,6 +140,7 @@ function selectStaffRows(sql: postgres.Sql) {
       sp.role::text as "role",
       sp.base_office as "baseOffice",
       sp.zoho_email as "zohoEmail",
+      (to_jsonb(sp) ->> 'zoho_people_employee_id') as "zohoPeopleEmployeeId",
       sp.outlook_email as "outlookEmail",
       sp.outlook_user_principal_name as "outlookUserPrincipalName",
       sp.msp_central_email as "mspCentralEmail",
@@ -256,6 +258,7 @@ function mapTechnician(row: DispatchStaffRow): Technician {
     sdpTechnicianName: row.mspCentralTechnicianName ?? undefined,
     storeLocation: row.storeLocation ?? row.baseOffice,
     zohoEmail: row.zohoEmail,
+    zohoPeopleEmployeeId: row.zohoPeopleEmployeeId,
   };
 }
 

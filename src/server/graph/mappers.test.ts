@@ -87,6 +87,27 @@ describe("Graph event mapper", () => {
     expect(appointment.bodyPreview).toBeUndefined();
   });
 
+  it("treats personal Outlook events as redacted personal time", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Private medical appointment details",
+        location: { displayName: "Private location" },
+        sensitivity: "personal",
+        subject: "Medical appointment",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      customer: "Private",
+      outlookIssue: "private",
+      outlookSensitivity: "personal",
+      title: "Personal",
+    });
+    expect(appointment.bodyPreview).toBeUndefined();
+    expect(appointment.outlookAttendees).toBeUndefined();
+  });
+
   it("marks unlinked Outlook service-looking events for review", () => {
     const appointment = mapGraphEventToAppointment(
       event({

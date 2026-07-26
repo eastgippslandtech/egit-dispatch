@@ -18,6 +18,7 @@ export type Technician = {
   id: string;
   displayName: string;
   zohoEmail?: string;
+  zohoPeopleEmployeeId?: string | null;
   sdpTechnicianName?: string;
   outlookEmail: string;
   outlookUserPrincipalName?: string;
@@ -118,7 +119,9 @@ export type Appointment = {
   outlookWebLink?: string;
   outlookOrganizer?: string;
   outlookAttendees?: string[];
+  outlookCategories?: string[];
   outlookShowAs?: string;
+  outlookSensitivity?: string;
   outlookLinkedRequestNumber?: string;
   outlookIssue?: "unlinked" | "private" | "all-day" | "closed-day";
   calendarOwnerEmail?: string;

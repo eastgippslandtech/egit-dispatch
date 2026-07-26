@@ -13,6 +13,7 @@ export type MicrosoftGraphEvent = {
     emailAddress?: MicrosoftGraphEmailAddress;
   }>;
   bodyPreview?: string;
+  categories?: string[];
   end: MicrosoftGraphDateTime;
   id: string;
   isAllDay?: boolean;

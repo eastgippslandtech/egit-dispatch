@@ -20,6 +20,7 @@ import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import { PresenceControls } from "@/app/components/presence-controls";
 
 import type {
   Appointment,
@@ -1196,6 +1197,7 @@ export function CommandCentrePrototype({
           calendarStatusLabel={dashboard.calendarStatusLabel}
           date={selectedDateLabel}
           dateKey={selectedDateKey}
+          technicians={dashboard.technicians}
           timezone={dashboard.timezone}
           viewMode={viewMode}
           searchValue={topSearch}
@@ -2132,6 +2134,105 @@ function ScheduleSummary({
   );
 }
 
+export function ReadOnlyDispatchCalendar({
+  data,
+  dateKey,
+  now,
+  viewMode,
+}: {
+  data: DispatchDashboardData;
+  dateKey: string;
+  now: Date;
+  viewMode: ViewMode;
+}) {
+  const weekDays = useMemo(() => getWeekRange(dateKey), [dateKey]);
+  const dayAppointments = useMemo(
+    () => appointmentsForDate(data.appointments, dateKey),
+    [data.appointments, dateKey],
+  );
+  const weekAppointments = useMemo(
+    () =>
+      appointmentsForRange(
+        data.appointments,
+        weekDays.map((day) => day.dateKey),
+      ),
+    [data.appointments, weekDays],
+  );
+  const currentTimeIndicator = useMemo(
+    () => getCurrentTimeIndicator(dateKey, now),
+    [dateKey, now],
+  );
+  const weekToday = useMemo(
+    () => getWeekTodayDateKey(weekDays, now),
+    [now, weekDays],
+  );
+  const seenUpdates = useMemo(() => new Set<string>(), []);
+  const ignoreAppointment = () => undefined;
+  const ignoreDrop = () => undefined;
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2">
+        <div>
+          <p className="text-[10px] font-semibold uppercase text-slate-400">
+            Schedule
+          </p>
+          <h2 className="text-base font-semibold">
+            {viewMode === "week" ? "Weekly planner" : "Technician timeline"}
+          </h2>
+          <p className="text-[11px] text-slate-400">
+            {viewMode === "week"
+              ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
+              : "9:00 AM - 5:30 PM"}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-slate-300">
+          <Legend color="bg-sky-400" label="Scheduled" />
+          <Legend color="bg-amber-400" label="Warning" />
+          <Legend color="bg-rose-500" label="Conflict" />
+        </div>
+      </div>
+      <div className="pointer-events-none flex min-h-0 flex-1 flex-col">
+        {viewMode === "week" ? (
+          <WeekPlanner
+            appointments={weekAppointments}
+            readOnly
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            technicians={data.technicians}
+            todayDateKey={weekToday}
+            weekDays={weekDays}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDateOpen={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onWeekDrop={ignoreDrop}
+          />
+        ) : (
+          <TimelineBoard
+            appointments={dayAppointments}
+            currentTimeIndicator={currentTimeIndicator}
+            globalSearch=""
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            technicians={data.technicians}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onTimelineDrop={ignoreDrop}
+            onTimelineHover={ignoreDrop}
+          />
+        )}
+      </div>
+      {data.calendarError ? (
+        <div className="border-t border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-50">
+          {data.calendarError}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CommandHeader({
   authDisabled,
   calendarStatusLabel,
@@ -2145,6 +2246,7 @@ function CommandHeader({
   onSearchChange,
   onToday,
   onViewModeChange,
+  technicians,
   timezone,
   viewMode,
 }: {
@@ -2160,6 +2262,7 @@ function CommandHeader({
   onSearchChange: (value: string) => void;
   onToday: () => void;
   onViewModeChange: (mode: ViewMode) => void;
+  technicians: Technician[];
   timezone: string;
   viewMode: ViewMode;
 }) {
@@ -2257,6 +2360,7 @@ function CommandHeader({
               </button>
             ) : null}
           </label>
+          <PresenceControls technicians={technicians} />
           {authDisabled ? null : (
             <button
               className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200"
@@ -2761,6 +2865,7 @@ function WeekPlanner({
   onDragEnd,
   onSelectAppointment,
   onWeekDrop,
+  readOnly = false,
   requests,
   seenTicketUpdateIds,
   selectedAppointmentId,
@@ -2779,6 +2884,7 @@ function WeekPlanner({
     technicianId: string,
     dateKey: string,
   ) => void;
+  readOnly?: boolean;
   requests: DispatchRequest[];
   seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
@@ -2927,7 +3033,7 @@ function WeekPlanner({
                       +{hiddenAppointments.length}
                     </button>
                   ) : null}
-                  {cellAppointments.length === 0 ? (
+                  {cellAppointments.length === 0 && !readOnly ? (
                     <div className="rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-[11px] text-slate-500">
                       Drop here
                     </div>

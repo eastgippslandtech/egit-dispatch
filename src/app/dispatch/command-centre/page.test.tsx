@@ -53,6 +53,10 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByText("Schedule")).toBeInTheDocument();
   expect(screen.getByText("Request")).toBeInTheDocument();
   expect(screen.getByText("9:00 AM - 5:30 PM")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Wallboard" })).toHaveAttribute(
+    "href",
+    "/wallboard",
+  );
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
   expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");

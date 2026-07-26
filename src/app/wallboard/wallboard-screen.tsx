@@ -8,12 +8,14 @@ import {
   ChevronRight,
   Clock3,
   Coffee,
+  LayoutDashboard,
   LogOut,
   Palmtree,
   TriangleAlert,
   UserRound,
   UsersRound,
 } from "lucide-react";
+import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -208,6 +210,13 @@ export function WallboardScreen({
                 value={selectedDateKey}
                 onChange={(event) => setSelectedDateKey(event.target.value)}
               />
+              <Link
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+                href="/dispatch"
+              >
+                <LayoutDashboard className="h-4 w-4" />
+                Dispatch
+              </Link>
               {authDisabled ? null : (
                 <button
                   aria-label="Sign out"

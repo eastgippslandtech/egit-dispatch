@@ -12,10 +12,12 @@ import {
   Filter,
   LogOut,
   MailWarning,
+  Monitor,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -2361,6 +2363,13 @@ function CommandHeader({
             ) : null}
           </label>
           <PresenceControls technicians={technicians} />
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/wallboard"
+          >
+            <Monitor className="h-4 w-4" />
+            Wallboard
+          </Link>
           {authDisabled ? null : (
             <button
               className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200"

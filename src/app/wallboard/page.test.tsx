@@ -56,6 +56,10 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.getByText("To OneHarvest")).toBeInTheDocument();
   expect(screen.getAllByText("In office")).toHaveLength(3);
   expect(screen.getByText("Technician timeline")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Dispatch" })).toHaveAttribute(
+    "href",
+    "/dispatch",
+  );
   expect(screen.getByTestId("timeline-viewport")).toBeInTheDocument();
   expect(screen.queryByText("Unscheduled Requests")).not.toBeInTheDocument();
   expect(screen.queryByTestId("command-centre-drawer")).not.toBeInTheDocument();

@@ -99,6 +99,48 @@ describe("MSP Central request mappers", () => {
     );
   });
 
+  it("maps ServiceDesk timestamp objects and ignores malformed dates", () => {
+    const dueTime = new Date("2026-07-10T12:00:00+10:00");
+    const structured = mapMspCentralRequest(
+      {
+        created_time: {
+          display_value: "Jul 9, 2026 9:00 AM",
+          value: String(new Date("2026-07-09T09:00:00+10:00").getTime()),
+        },
+        due_by_time: {
+          display_value: "Jul 10, 2026 12:00 PM",
+          value: String(dueTime.getTime()),
+        },
+        request_number: "REQ-MSP-TIME",
+        updated_time: {
+          value: String(new Date("2026-07-09T10:00:00+10:00").getTime()),
+        },
+      },
+      { now },
+    );
+    const malformed = mapMspCentralRequest(
+      {
+        created_time: { value: "not-a-date" },
+        due_by_time: { display_value: "Unknown" },
+        request_number: "REQ-MSP-BAD-TIME",
+        scheduled_start_time: {
+          value: "not-a-date",
+        },
+      },
+      { now },
+    );
+
+    expect(structured).toMatchObject({
+      ageHours: 0,
+      dueAt: dueTime.toISOString(),
+      updatedAt: new Date("2026-07-09T10:00:00+10:00").toISOString(),
+    });
+    expect(malformed).toMatchObject({
+      dueAt: new Date(0).toISOString(),
+      scheduledStart: undefined,
+    });
+  });
+
   it("maps priority, status, due, and scheduled classification", () => {
     expect(mapMspCentralPriority("urgent")).toBe("Critical");
     expect(mapMspCentralPriority("low")).toBe("Low");

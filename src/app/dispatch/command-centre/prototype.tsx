@@ -4714,7 +4714,7 @@ function timelineWidth(
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return "Unknown";
   }
   return new Intl.DateTimeFormat("en-AU", {
     hour: "numeric",
@@ -4724,9 +4724,13 @@ function formatTime(value: string) {
 }
 
 function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
   return new Intl.DateTimeFormat("en-AU", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Australia/Melbourne",
-  }).format(new Date(value));
+  }).format(date);
 }

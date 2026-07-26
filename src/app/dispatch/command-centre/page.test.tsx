@@ -58,6 +58,24 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
 });
 
+test("does not crash when a live request contains an invalid due date", async () => {
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    requests: data.requests.map((request, index) =>
+      index === 0 ? { ...request, dueAt: "[object Object]" } : request,
+    ),
+    selectedRequestId: data.requests[0].id,
+  });
+
+  const page = await CommandCentrePage();
+
+  expect(() => render(page)).not.toThrow();
+  expect(
+    screen.getByRole("heading", { level: 1, name: "Command Centre" }),
+  ).toBeInTheDocument();
+});
+
 test("maps booking urgency to full-card priority colours", () => {
   expect(bookingCardPriorityClass("Critical")).toContain("bg-rose");
   expect(bookingCardPriorityClass("High")).toContain("bg-amber");

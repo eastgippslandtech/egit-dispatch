@@ -6,15 +6,23 @@ export type MspCentralRawTechnician = {
   name?: string | null;
 };
 
+export type MspCentralTimestamp =
+  | string
+  | number
+  | {
+      display_value?: string | null;
+      value?: string | number | null;
+    };
+
 export type MspCentralRawRequest = {
   account?: { name?: string | null } | null;
   assets?: Array<{ name?: string | null }> | null;
   billable?: boolean | null;
   category?: string | { name?: string | null } | null;
-  created_time?: string | null;
+  created_time?: MspCentralTimestamp | null;
   customer?: string | null;
   description?: string | null;
-  due_by_time?: string | null;
+  due_by_time?: MspCentralTimestamp | null;
   id?: string | number | null;
   is_billable?: boolean | null;
   is_onsite?: boolean | null;
@@ -25,8 +33,8 @@ export type MspCentralRawRequest = {
   requester?: { email?: string | null; name?: string | null } | null;
   requester_email?: string | null;
   requester_name?: string | null;
-  scheduled_end_time?: string | null;
-  scheduled_start_time?: string | null;
+  scheduled_end_time?: MspCentralTimestamp | null;
+  scheduled_start_time?: MspCentralTimestamp | null;
   site?: {
     address?: string | null;
     area?: string | null;
@@ -44,7 +52,7 @@ export type MspCentralRawRequest = {
   subject?: string | null;
   technician?: MspCentralRawTechnician | null;
   udf_fields?: Record<string, unknown> | null;
-  updated_time?: string | null;
+  updated_time?: MspCentralTimestamp | null;
 };
 
 export type MspCentralRequestListResponse = {

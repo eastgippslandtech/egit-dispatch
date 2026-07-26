@@ -58,9 +58,9 @@ export function mapMspCentralRequest(
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
-  const dueAt = readString(raw.due_by_time) ?? new Date(0).toISOString();
-  const scheduledStart = readString(raw.scheduled_start_time);
-  const scheduledEnd = readString(raw.scheduled_end_time);
+  const dueAt = readDateTime(raw.due_by_time) ?? new Date(0).toISOString();
+  const scheduledStart = readDateTime(raw.scheduled_start_time);
+  const scheduledEnd = readDateTime(raw.scheduled_end_time);
   const customer =
     readString(raw.account?.name) ??
     readString(raw.customer) ??
@@ -94,7 +94,7 @@ export function mapMspCentralRequest(
 
   return {
     id: readString(raw.id) ?? requestNumber,
-    ageHours: estimateAgeHours(readString(raw.created_time), options.now),
+    ageHours: estimateAgeHours(readDateTime(raw.created_time), options.now),
     assetNames: raw.assets
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
@@ -139,7 +139,7 @@ export function mapMspCentralRequest(
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,
-    updatedAt: readString(raw.updated_time),
+    updatedAt: readDateTime(raw.updated_time),
     warnings,
   };
 }
@@ -378,4 +378,42 @@ function readString(value: unknown) {
 
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+function readDateTime(value: unknown) {
+  const candidates =
+    typeof value === "object" && value !== null
+      ? [
+          (value as { value?: unknown }).value,
+          (value as { display_value?: unknown }).display_value,
+        ]
+      : [value];
+
+  for (const candidate of candidates) {
+    const parsed = parseDateTimeCandidate(candidate);
+    if (parsed) return parsed;
+  }
+
+  return undefined;
+}
+
+function parseDateTimeCandidate(value: unknown) {
+  if (value === null || value === undefined || typeof value === "object") {
+    return undefined;
+  }
+
+  const text = String(value).trim();
+  if (!text) return undefined;
+
+  const numeric = Number(text);
+  const timestamp =
+    Number.isFinite(numeric) && /^\d+(?:\.\d+)?$/.test(text)
+      ? numeric < 100_000_000_000
+        ? numeric * 1000
+        : numeric
+      : Date.parse(text);
+  if (!Number.isFinite(timestamp)) return undefined;
+
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }

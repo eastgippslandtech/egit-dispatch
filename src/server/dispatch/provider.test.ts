@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readDispatchConfig } from "./env";
 import { getDispatchDashboardData } from "./provider";
 import type { DispatchDashboardDatabase } from "./database";
+import type { MspCentralClient } from "@/server/msp-central/types";
 
 describe("dispatch dashboard provider", () => {
   it("serves an empty Command Centre board by default", async () => {
@@ -52,6 +53,36 @@ describe("dispatch dashboard provider", () => {
       requestNumber: "REQ-MSP-1001",
     });
     expect(data.appointments).toEqual([]);
+  });
+
+  it("keeps the board available when live MSP Central is temporarily unavailable", async () => {
+    const mspClient = {
+      listRequests: async () => {
+        throw new Error("OAuth refresh failed");
+      },
+      listTechnicians: async () => {
+        throw new Error("OAuth refresh failed");
+      },
+    } as unknown as MspCentralClient;
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_BASE_URL: "https://msp.example",
+        MSP_CENTRAL_PORTAL: "egit",
+        MSP_CENTRAL_CLIENT_ID: "msp-client",
+        MSP_CENTRAL_CLIENT_SECRET: "msp-secret",
+        MSP_CENTRAL_REFRESH_TOKEN: "msp-refresh",
+      }),
+      { mspClient },
+    );
+
+    expect(data.dispatchDataSource).toBe("msp-central");
+    expect(data.requests).toEqual([]);
+    expect(data.technicians.map((technician) => technician.displayName)).toEqual(
+      ["Simeon", "Matt", "Jervy", "Riley"],
+    );
+    expect(data.calendarError).toContain("MSP Central");
   });
 
   it("serves dispatch from the existing Command Centre database source", async () => {

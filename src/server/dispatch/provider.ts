@@ -13,14 +13,17 @@ import { buildGraphWorkWeekRange } from "@/server/graph/range";
 import { buildOutlookCalendarDashboardData } from "@/server/graph/technician-calendars";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures";
+import type { MspCentralClient } from "@/server/msp-central/types";
 import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
 
 export async function getDispatchDashboardData(
   config: DispatchConfig = readDispatchConfig(),
   {
     database = getConfiguredDispatchDashboardDatabase(config.databaseUrl),
+    mspClient,
   }: {
     database?: DispatchDashboardDatabase | null;
+    mspClient?: MspCentralClient;
   } = {},
 ): Promise<DispatchDashboardData> {
   const emptyCommandCentreData = getEmptyCommandCentreData();
@@ -39,16 +42,26 @@ export async function getDispatchDashboardData(
   }
 
   if (config.dispatchDataSource === "msp-central") {
-    const client = createMspCentralClient(config);
-    const [requests, technicians] = await Promise.all([
-      client.listRequests(),
-      client
-        .listTechnicians()
-        .catch(() => getInitialStaffProfiles().map(staffProfileToTechnician)),
-    ]);
+    const client = mspClient ?? createMspCentralClient(config);
+    const profiles = getInitialStaffProfiles();
+    let requests: DispatchDashboardData["requests"] = [];
+    let mspCentralError: string | undefined;
+
+    try {
+      requests = await client.listRequests();
+    } catch (error) {
+      mspCentralError =
+        "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.";
+      console.error("MSP Central request read failed", safeError(error));
+    }
+
+    const technicians = await client
+      .listTechnicians()
+      .catch(() => profiles.map(staffProfileToTechnician));
     const mspData: DispatchDashboardData = {
       appointments: [],
       calendarDataSource: "mock",
+      calendarError: mspCentralError,
       calendarReadOnly: false,
       calendarStatusLabel: "MSP Central",
       dispatchDataSource: "msp-central",
@@ -65,12 +78,15 @@ export async function getDispatchDashboardData(
     };
 
     if (config.calendarDataSource === "outlook") {
+      const outlookData = await buildOutlookCalendarDashboardData({
+        config,
+        mockData: dashboard,
+        range: buildGraphWorkWeekRange(todayDateKey()),
+      });
+
       return {
-        ...(await buildOutlookCalendarDashboardData({
-          config,
-          mockData: dashboard,
-          range: buildGraphWorkWeekRange(todayDateKey()),
-        })),
+        ...outlookData,
+        calendarError: joinErrors(mspCentralError, outlookData.calendarError),
         dispatchDataSource: "msp-central",
       };
     }
@@ -100,4 +116,15 @@ export async function getDispatchDashboardData(
     selectedRequestId: "",
     dispatchDataSource: "mock",
   };
+}
+
+function joinErrors(...errors: Array<string | undefined>) {
+  const messages = errors.filter((error): error is string => Boolean(error));
+  return messages.length > 0 ? messages.join(" ") : undefined;
+}
+
+function safeError(error: unknown) {
+  return error instanceof Error
+    ? { message: error.message }
+    : { message: "Unknown MSP Central error." };
 }

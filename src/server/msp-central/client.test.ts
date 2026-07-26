@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDispatchConfig } from "@/server/dispatch/env";
 
 import { createMspCentralClient } from "./client";
+import { MspCentralConfigurationError } from "./errors";
 
 describe("MSP Central live client", () => {
   afterEach(() => {
@@ -128,5 +129,34 @@ describe("MSP Central live client", () => {
         technician: { name: "Matt" },
       },
     });
+  });
+
+  it("reports the safe Zoho OAuth error code without exposing credentials", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: "invalid_code" }),
+      }),
+    );
+
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(client.refreshAccessToken()).rejects.toEqual(
+      new MspCentralConfigurationError(
+        "MSP Central OAuth refresh failed (invalid_code).",
+      ),
+    );
   });
 });

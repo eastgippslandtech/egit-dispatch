@@ -245,8 +245,11 @@ async function refreshAccessToken(config: DispatchConfig) {
   });
 
   if (!response.ok) {
+    const payload = await readOAuthError(response);
     throw new MspCentralConfigurationError(
-      `MSP Central OAuth refresh failed with status ${response.status}.`,
+      payload.error
+        ? `MSP Central OAuth refresh failed (${payload.error}).`
+        : `MSP Central OAuth refresh failed with status ${response.status}.`,
     );
   }
 
@@ -258,6 +261,14 @@ async function refreshAccessToken(config: DispatchConfig) {
   }
 
   return payload.access_token;
+}
+
+async function readOAuthError(response: Response) {
+  try {
+    return (await response.json()) as { error?: string };
+  } catch {
+    return {};
+  }
 }
 
 function buildMspCentralApiRoot(config: DispatchConfig) {

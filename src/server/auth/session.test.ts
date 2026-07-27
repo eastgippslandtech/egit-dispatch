@@ -22,6 +22,19 @@ describe("Command Centre session access", () => {
     });
   });
 
+  it("does not approve an allowlisted email without a signed access role", () => {
+    const session = {
+      user: { email: "simeon@egit.com.au", name: "Simeon" },
+    };
+
+    expect(commandCentreAccessFromSession(session, env)).toEqual({
+      status: "unauthenticated",
+    });
+    expect(wallboardAccessFromSession(session, env)).toEqual({
+      status: "unauthenticated",
+    });
+  });
+
   it("restricts a signed wallboard session to wallboard-only access", () => {
     expect(commandCentreAccessFromSession(wallboardSession, env)).toEqual({
       name: "Command Centre Wallboard",
@@ -40,6 +53,7 @@ describe("Command Centre session access", () => {
   it("approves a build-mode mock session when auth is disabled", () => {
     expect(commandCentreAccessFromSession(null, { DISABLE_AUTH: "true" })).toEqual({
       status: "approved",
+      accessLevel: "staff",
       email: "build-mode@egit.local",
       name: "Build Mode",
       authDisabled: true,
@@ -67,11 +81,15 @@ describe("Command Centre session access", () => {
     ]) {
       expect(
         commandCentreAccessFromSession(
-          { user: { email, name: email.split("@")[0] } },
+          {
+            accessLevel: "staff",
+            user: { email, name: email.split("@")[0] },
+          },
           env,
         ),
       ).toEqual({
         status: "approved",
+        accessLevel: "staff",
         email,
         name: email.split("@")[0],
       });

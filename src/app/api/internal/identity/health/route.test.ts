@@ -35,6 +35,7 @@ describe("identity health route", () => {
 
   it("returns the signed-in staff match without leaking unnecessary identity fields", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "mattd@egit.com.au",
       name: "Matt",
       status: "approved",

@@ -17,7 +17,7 @@ type MinimalSession = {
 
 export type ApprovedStaffAccess = {
   status: "approved";
-  accessLevel?: "staff";
+  accessLevel: "staff";
   email: string;
   name?: string;
   authDisabled?: boolean;
@@ -104,10 +104,15 @@ function staffAccessFromSession(
   if (isAuthDisabled(env)) {
     return {
       status: "approved",
+      accessLevel: "staff",
       email: "build-mode@egit.local",
       name: "Build Mode",
       authDisabled: true,
     };
+  }
+
+  if (session?.accessLevel !== "staff") {
+    return { status: "unauthenticated" };
   }
 
   const email = session?.user?.email?.trim().toLowerCase();
@@ -120,7 +125,7 @@ function staffAccessFromSession(
     return { status: "not-approved", email, name };
   }
 
-  return { status: "approved", email, name };
+  return { status: "approved", accessLevel: "staff", email, name };
 }
 
 export function isApprovedStaffAccess(
@@ -128,7 +133,7 @@ export function isApprovedStaffAccess(
 ): access is ApprovedStaffAccess {
   return (
     access.status === "approved" &&
-    access.accessLevel !== "wallboard" &&
+    access.accessLevel === "staff" &&
     "email" in access
   );
 }

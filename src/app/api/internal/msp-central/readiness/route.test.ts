@@ -39,6 +39,7 @@ describe("MSP Central readiness route", () => {
     process.env.MSP_CENTRAL_CLIENT_SECRET = "do-not-return";
     process.env.MSP_CENTRAL_REFRESH_TOKEN = "also-secret";
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",

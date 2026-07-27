@@ -34,6 +34,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-07-08T02:00:00Z"));
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });

@@ -47,6 +47,7 @@ describe("live dispatch schedule route", () => {
     });
     const updateRequestSchedule = vi.fn().mockResolvedValue(undefined);
     getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",

@@ -40,6 +40,7 @@ describe("internal Graph events route", () => {
       webLink: "https://outlook/event-1",
     });
     getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",
@@ -88,6 +89,7 @@ describe("internal Graph events route", () => {
       webLink: "https://outlook/event-1",
     });
     getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",

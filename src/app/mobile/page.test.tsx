@@ -25,6 +25,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "riley@egit.com.au",
     name: "Riley",
   });
@@ -202,6 +203,7 @@ test("job detail renders on a narrow mobile viewport", async () => {
 test("does not show a future job detail when today has no jobs", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });
@@ -311,6 +313,7 @@ test("denied location permission keeps job detail usable and shows Maps fallback
 test("ETA controls are hidden for jobs without a site address", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });

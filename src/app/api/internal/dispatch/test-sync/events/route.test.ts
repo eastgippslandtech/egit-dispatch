@@ -64,6 +64,7 @@ describe("dispatch test sync event API", () => {
 
   it("records dispatcher schedule events", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });
@@ -114,6 +115,7 @@ describe("dispatch test sync event API", () => {
 
   it("lists current test sync events for debugging", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });
@@ -127,6 +129,7 @@ describe("dispatch test sync event API", () => {
 
   it("clears test sync events", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });

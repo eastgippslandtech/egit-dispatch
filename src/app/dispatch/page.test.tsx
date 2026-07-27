@@ -21,6 +21,7 @@ const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 beforeEach(() => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });

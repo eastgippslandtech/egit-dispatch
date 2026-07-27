@@ -42,6 +42,7 @@ describe("internal presence API", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     accessMock.mockResolvedValue({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });

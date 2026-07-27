@@ -29,6 +29,7 @@ const snapshotMock = vi.mocked(getWallboardSnapshot);
 beforeEach(() => {
   vi.clearAllMocks();
   const staffAccess = {
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
     status: "approved",

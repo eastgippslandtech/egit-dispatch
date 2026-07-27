@@ -72,7 +72,7 @@ file. `.env.example` documents the variable names without real values.
 
 ## Abuse And Failure Handling
 
-- Credential comparison uses the password-hash library's constant-time
+- Credential comparison uses the password verifier's constant-time
   verification.
 - Five failed attempts for the same wallboard username and client address
   within 15 minutes block further attempts for 15 minutes.

@@ -83,6 +83,28 @@ Zoho OAuth uses fixed callback URLs only. Test live OAuth on `https://command.eg
 
 Zoho OAuth access is for approved EGIT work accounts only. Do not add `eastgippsland.tech` addresses for Command Centre access unless they are specifically approved later.
 
+### Wallboard login
+
+`/wallboard` also supports one dedicated local account for the wallboard PC. It
+can view the wallboard and live presence feed only; it cannot open Dispatch or
+use write/admin endpoints. The session lasts up to 30 days.
+
+Generate the password hash:
+
+```bash
+pnpm wallboard:hash -- "your wallboard password"
+```
+
+Set these protected server-side values in Vercel:
+
+```bash
+WALLBOARD_LOCAL_USERNAME=wallboard
+WALLBOARD_LOCAL_PASSWORD_HASH=<generated scrypt hash>
+```
+
+Do not reuse an EGIT staff password or store the plain-text password in the
+repository.
+
 Future server-side service values:
 
 ```bash

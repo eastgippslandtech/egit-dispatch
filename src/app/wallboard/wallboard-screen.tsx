@@ -45,9 +45,11 @@ const STATUS_STYLE: Record<PresenceStatus, string> = {
 
 export function WallboardScreen({
   authDisabled = false,
+  canAccessDispatch,
   initialSnapshot,
 }: {
   authDisabled?: boolean;
+  canAccessDispatch: boolean;
   initialSnapshot: WallboardSnapshot;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
@@ -210,19 +212,27 @@ export function WallboardScreen({
                 value={selectedDateKey}
                 onChange={(event) => setSelectedDateKey(event.target.value)}
               />
-              <Link
-                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
-                href="/dispatch"
-              >
-                <LayoutDashboard className="h-4 w-4" />
-                Dispatch
-              </Link>
+              {canAccessDispatch ? (
+                <Link
+                  className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+                  href="/dispatch"
+                >
+                  <LayoutDashboard className="h-4 w-4" />
+                  Dispatch
+                </Link>
+              ) : null}
               {authDisabled ? null : (
                 <button
                   aria-label="Sign out"
                   className="rounded-md border border-white/10 bg-white/5 p-2 text-slate-200"
                   type="button"
-                  onClick={() => signOut({ callbackUrl: "/auth/sign-in" })}
+                  onClick={() =>
+                    signOut({
+                      callbackUrl: canAccessDispatch
+                        ? "/auth/sign-in"
+                        : "/auth/wallboard-sign-in",
+                    })
+                  }
                 >
                   <LogOut className="h-4 w-4" />
                 </button>

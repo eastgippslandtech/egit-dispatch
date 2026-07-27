@@ -1,5 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
+
+const { signOutMock } = vi.hoisted(() => ({ signOutMock: vi.fn() }));
 
 import {
   getCommandCentreAccess,
@@ -21,6 +23,7 @@ vi.mock("next/navigation", () => ({
     throw new Error(`NEXT_REDIRECT:${target}`);
   }),
 }));
+vi.mock("next-auth/react", () => ({ signOut: signOutMock }));
 
 const commandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 const wallboardAccessMock = vi.mocked(getWallboardAccess);
@@ -98,12 +101,28 @@ test("renders the wallboard for a signed wallboard session", async () => {
   expect(commandCentreAccessMock).not.toHaveBeenCalled();
 });
 
-test("redirects unauthenticated wallboard viewers to Zoho sign in", async () => {
+test("hides Dispatch and returns local sessions to wallboard sign-in on sign-out", async () => {
+  wallboardAccessMock.mockResolvedValue({
+    accessLevel: "wallboard",
+    name: "Command Centre Wallboard",
+    status: "approved",
+  });
+
+  render(await WallboardPage());
+
+  expect(screen.queryByRole("link", { name: "Dispatch" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  expect(signOutMock).toHaveBeenCalledWith({
+    callbackUrl: "/auth/wallboard-sign-in",
+  });
+});
+
+test("redirects unauthenticated wallboard viewers to local wallboard sign in", async () => {
   commandCentreAccessMock.mockResolvedValue({ status: "unauthenticated" });
   wallboardAccessMock.mockResolvedValue({ status: "unauthenticated" });
 
   await expect(WallboardPage()).rejects.toThrow(
-    "NEXT_REDIRECT:/auth/sign-in?callbackUrl=/wallboard",
+    "NEXT_REDIRECT:/auth/wallboard-sign-in",
   );
 });
 

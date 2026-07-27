@@ -9,7 +9,7 @@ export async function ProtectedWallboardScreen() {
   const access = await getWallboardAccess();
 
   if (access.status === "unauthenticated") {
-    redirect("/auth/sign-in?callbackUrl=/wallboard");
+    redirect("/auth/wallboard-sign-in");
   }
 
   if (access.status === "not-approved") {
@@ -21,6 +21,7 @@ export async function ProtectedWallboardScreen() {
       authDisabled={
         access.accessLevel === "staff" ? access.authDisabled : undefined
       }
+      canAccessDispatch={access.accessLevel === "staff"}
       initialSnapshot={await getWallboardSnapshot()}
     />
   );

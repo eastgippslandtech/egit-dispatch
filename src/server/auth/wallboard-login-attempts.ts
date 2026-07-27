@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import postgres from "postgres";
 
 const BLOCK_THRESHOLD = 5;
 const BLOCK_WINDOW_MS = 15 * 60 * 1000;
@@ -22,6 +22,8 @@ export type WallboardLoginAttemptRepository = {
   clear(attemptKey: string): Promise<void>;
 };
 
+let sqlSingleton: postgres.Sql | undefined;
+
 export function createWallboardLoginAttemptRepository(
   store: WallboardLoginAttemptStore,
 ): WallboardLoginAttemptRepository {
@@ -40,61 +42,58 @@ export function createWallboardLoginAttemptRepository(
   };
 }
 
-type QueryResult = { rows: Array<{ count?: string | number }> };
-export type WallboardLoginAttemptSql = (
-  query: string,
-  values?: unknown[],
-) => Promise<QueryResult>;
-
 export function createPostgresWallboardLoginAttemptRepository({
   databaseUrl,
-  sql,
+  sql = getPostgresSql(databaseUrl),
 }: {
   databaseUrl: string;
-  sql?: WallboardLoginAttemptSql;
+  sql?: postgres.Sql;
 }): WallboardLoginAttemptRepository {
-  if (!databaseUrl && !sql) {
+  const store: WallboardLoginAttemptStore = {
+    async countRecent(attemptKey, since) {
+      const rows = await sql<{ count: number }[]>`
+        select count(*)::int as count
+        from public.wallboard_login_attempts
+        where attempt_key = ${attemptKey}
+          and failed_at >= ${since}
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+
+    async deleteByKey(attemptKey) {
+      await sql`
+        delete from public.wallboard_login_attempts
+        where attempt_key = ${attemptKey}
+      `;
+    },
+
+    async deleteOlderThan(cutoff) {
+      await sql`
+        delete from public.wallboard_login_attempts
+        where failed_at < ${cutoff}
+      `;
+    },
+
+    async insert(attempt) {
+      await sql`
+        insert into public.wallboard_login_attempts (attempt_key, failed_at)
+        values (${attempt.attemptKey}, ${attempt.failedAt})
+      `;
+    },
+  };
+
+  return createWallboardLoginAttemptRepository(store);
+}
+
+function getPostgresSql(databaseUrl: string) {
+  if (!databaseUrl?.trim()) {
     throw new Error("DATABASE_URL is required for wallboard login attempts.");
   }
 
-  const pool = sql ? undefined : new Pool({
-    connectionString: databaseUrl,
-    ssl: shouldUseSsl(databaseUrl) ? { rejectUnauthorized: false } : undefined,
+  sqlSingleton ??= postgres(databaseUrl, {
+    max: 3,
+    prepare: false,
+    ssl: "require",
   });
-  const query: WallboardLoginAttemptSql =
-    sql ?? ((text, values) => pool!.query(text, values));
-
-  return createWallboardLoginAttemptRepository({
-    async countRecent(attemptKey, since) {
-      const result = await query(
-        `select count(*)::int as count
-           from public.wallboard_login_attempts
-          where attempt_key = $1 and failed_at >= $2`,
-        [attemptKey, since],
-      );
-      return Number(result.rows[0]?.count ?? 0);
-    },
-    async deleteByKey(attemptKey) {
-      await query(
-        "delete from public.wallboard_login_attempts where attempt_key = $1",
-        [attemptKey],
-      );
-    },
-    async deleteOlderThan(cutoff) {
-      await query(
-        "delete from public.wallboard_login_attempts where failed_at < $1",
-        [cutoff],
-      );
-    },
-    async insert(attempt) {
-      await query(
-        "insert into public.wallboard_login_attempts (attempt_key, failed_at) values ($1, $2)",
-        [attempt.attemptKey, attempt.failedAt],
-      );
-    },
-  });
-}
-
-function shouldUseSsl(databaseUrl: string) {
-  return !databaseUrl.includes("localhost") && !databaseUrl.includes("127.0.0.1");
+  return sqlSingleton;
 }

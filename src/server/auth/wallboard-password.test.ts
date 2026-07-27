@@ -22,4 +22,22 @@ describe("wallboard password hashing", () => {
       verifyWallboardPassword("anything", "not-a-hash"),
     ).resolves.toBe(false);
   });
+
+  it("rejects non-canonical base64url salt and key components", async () => {
+    const encoded = await hashWallboardPassword("Correct Horse 42!");
+    const parts = encoded.split("$");
+
+    await expect(
+      verifyWallboardPassword(
+        "Correct Horse 42!",
+        [...parts.slice(0, 5), `${parts[5]}=`, parts[6]].join("$"),
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      verifyWallboardPassword(
+        "Correct Horse 42!",
+        [...parts.slice(0, 6), `${parts[6]}=`].join("$"),
+      ),
+    ).resolves.toBe(false);
+  });
 });

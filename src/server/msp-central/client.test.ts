@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readDispatchConfig } from "@/server/dispatch/env";
 
-import { createMspCentralClient } from "./client";
+import {
+  createMspCentralClient,
+  resetMspCentralAccessTokenCacheForTests,
+} from "./client";
 import { MspCentralConfigurationError } from "./errors";
 
 describe("MSP Central live client", () => {
   afterEach(() => {
+    resetMspCentralAccessTokenCacheForTests();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -118,6 +123,105 @@ describe("MSP Central live client", () => {
         String(input).includes("/oauth/v2/token"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("reuses one Zoho access token across separate client instances", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: "shared-access-token",
+            expires_in: 3600,
+          }),
+        };
+      }
+      if (url.includes("/technicians")) {
+        return {
+          ok: true,
+          json: async () => ({ technicians: [] }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ requests: [] }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = readDispatchConfig({
+      DISPATCH_DATA_SOURCE: "msp-central",
+      MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+      MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+      MSP_CENTRAL_CLIENT_ID: "shared-client-id",
+      MSP_CENTRAL_CLIENT_SECRET: "shared-client-secret",
+      MSP_CENTRAL_PORTAL: "memsp1783593801295",
+      MSP_CENTRAL_REFRESH_TOKEN: "shared-refresh-token",
+    });
+
+    await createMspCentralClient(config).listRequests();
+    await createMspCentralClient(config).listTechnicians();
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/oauth/v2/token"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("uses a still-valid token when an early refresh is throttled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T06:00:00.000Z"));
+    let tokenRequests = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        tokenRequests += 1;
+        if (tokenRequests === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              access_token: "still-valid-access-token",
+              expires_in: 120,
+            }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ error: "Access Denied" }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ requests: [] }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = readDispatchConfig({
+      DISPATCH_DATA_SOURCE: "msp-central",
+      MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+      MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+      MSP_CENTRAL_CLIENT_ID: "fallback-client-id",
+      MSP_CENTRAL_CLIENT_SECRET: "fallback-client-secret",
+      MSP_CENTRAL_PORTAL: "memsp1783593801295",
+      MSP_CENTRAL_REFRESH_TOKEN: "fallback-refresh-token",
+    });
+
+    await createMspCentralClient(config).listRequests();
+    vi.advanceTimersByTime(70_000);
+    await createMspCentralClient(config).listRequests();
+    vi.advanceTimersByTime(10_000);
+    await createMspCentralClient(config).listRequests();
+
+    expect(tokenRequests).toBe(2);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/requests?"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Zoho-oauthtoken still-valid-access-token",
+        }),
+      }),
+    );
   });
 
   it("updates live request schedule fields with MSP Central input_data", async () => {

@@ -14,12 +14,29 @@ import type {
   MspCentralTechnicianListResponse,
 } from "./types";
 
+const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60_000;
+const ACCESS_TOKEN_THROTTLE_COOLDOWN_MS = 10 * 60_000;
+
+type AccessTokenCacheEntry = {
+  accessToken?: string;
+  blockedUntil?: number;
+  expiresAt?: number;
+  lastError?: Error;
+  refreshPromise?: Promise<string>;
+};
+
+const accessTokenCache = new Map<string, AccessTokenCacheEntry>();
+
 export function createMspCentralClient(config: DispatchConfig): MspCentralClient {
   if (config.dispatchDataSource === "msp-central-fixture") {
     return createMspCentralFixtureClient(config);
   }
 
   return createMspCentralLiveClient(config);
+}
+
+export function resetMspCentralAccessTokenCacheForTests() {
+  accessTokenCache.clear();
 }
 
 function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient {
@@ -75,7 +92,6 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
 }
 
 function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
-  let accessTokenPromise: Promise<string> | undefined;
   const configured = Boolean(
     config.mspCentral.baseUrl &&
       config.mspCentral.portal &&
@@ -93,8 +109,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     );
   };
   const apiRoot = buildMspCentralApiRoot(config);
-  const getAccessToken = () =>
-    (accessTokenPromise ??= refreshAccessToken(config));
+  const getAccessToken = () => getCachedAccessToken(config);
 
   return {
     async getRequest(requestId) {
@@ -246,9 +261,9 @@ async function refreshAccessToken(config: DispatchConfig) {
     },
     method: "POST",
   });
+  const payload = await readOAuthTokenResponse(response);
 
-  if (!response.ok) {
-    const payload = await readOAuthError(response);
+  if (!response.ok || payload.error) {
     throw new MspCentralConfigurationError(
       payload.error
         ? `MSP Central OAuth refresh failed (${payload.error}).`
@@ -256,19 +271,105 @@ async function refreshAccessToken(config: DispatchConfig) {
     );
   }
 
-  const payload = (await response.json()) as { access_token?: string };
   if (!payload.access_token) {
     throw new MspCentralConfigurationError(
       "MSP Central OAuth refresh response was incomplete.",
     );
   }
 
-  return payload.access_token;
+  return {
+    accessToken: payload.access_token,
+    expiresInSeconds:
+      Number.isFinite(payload.expires_in) && Number(payload.expires_in) > 0
+        ? Number(payload.expires_in)
+        : 3600,
+  };
 }
 
-async function readOAuthError(response: Response) {
+async function getCachedAccessToken(config: DispatchConfig) {
+  const key = accessTokenCacheKey(config);
+  const entry = accessTokenCache.get(key) ?? {};
+  accessTokenCache.set(key, entry);
+  const now = Date.now();
+
+  if (
+    entry.accessToken &&
+    entry.expiresAt &&
+    now < entry.expiresAt - ACCESS_TOKEN_REFRESH_BUFFER_MS
+  ) {
+    return entry.accessToken;
+  }
+
+  if (entry.refreshPromise) {
+    return entry.refreshPromise;
+  }
+
+  if (entry.blockedUntil && now < entry.blockedUntil && entry.lastError) {
+    if (entry.accessToken && entry.expiresAt && now < entry.expiresAt) {
+      return entry.accessToken;
+    }
+
+    throw entry.lastError;
+  }
+
+  const stillValidToken =
+    entry.accessToken && entry.expiresAt && now < entry.expiresAt
+      ? entry.accessToken
+      : undefined;
+  entry.refreshPromise = refreshAccessToken(config)
+    .then(({ accessToken, expiresInSeconds }) => {
+      entry.accessToken = accessToken;
+      entry.expiresAt = Date.now() + expiresInSeconds * 1000;
+      entry.blockedUntil = undefined;
+      entry.lastError = undefined;
+      return accessToken;
+    })
+    .catch((error: unknown) => {
+      const safeError =
+        error instanceof Error
+          ? error
+          : new MspCentralConfigurationError(
+              "MSP Central OAuth refresh failed.",
+            );
+      entry.lastError = safeError;
+
+      if (isAccessDenied(safeError)) {
+        entry.blockedUntil =
+          Date.now() + ACCESS_TOKEN_THROTTLE_COOLDOWN_MS;
+      }
+
+      if (stillValidToken) {
+        return stillValidToken;
+      }
+
+      throw safeError;
+    })
+    .finally(() => {
+      entry.refreshPromise = undefined;
+    });
+
+  return entry.refreshPromise;
+}
+
+function accessTokenCacheKey(config: DispatchConfig) {
+  return [
+    config.mspCentral.accountsUrl,
+    config.mspCentral.clientId,
+    config.mspCentral.refreshToken,
+  ].join("\n");
+}
+
+function isAccessDenied(error: Error) {
+  return error.message.includes("(Access Denied)");
+}
+
+async function readOAuthTokenResponse(response: Response) {
   try {
-    return (await response.json()) as { error?: string };
+    return (await response.json()) as {
+      access_token?: string;
+      error?: string;
+      expires_in?: number;
+    };
   } catch {
     return {};
   }

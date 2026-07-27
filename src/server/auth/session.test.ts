@@ -1,16 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { commandCentreAccessFromSession, isAuthDisabled } from "./session";
+import {
+  commandCentreAccessFromSession,
+  isAuthDisabled,
+  wallboardAccessFromSession,
+} from "./session";
 
 describe("Command Centre session access", () => {
   const env = {
     ALLOWED_AUTH_EMAILS:
       "simeon@egit.com.au,mattd@egit.com.au,jervy@egit.com.au,riley@egit.com.au",
   };
+  const wallboardSession = {
+    accessLevel: "wallboard" as const,
+    user: { name: "Command Centre Wallboard" },
+  };
 
   it("requires a Zoho-authenticated session", () => {
     expect(commandCentreAccessFromSession(null, env)).toEqual({
       status: "unauthenticated",
+    });
+  });
+
+  it("restricts a signed wallboard session to wallboard-only access", () => {
+    expect(commandCentreAccessFromSession(wallboardSession, env)).toEqual({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+  });
+
+  it("approves a signed wallboard session for wallboard access", () => {
+    expect(wallboardAccessFromSession(wallboardSession, env)).toEqual({
+      accessLevel: "wallboard",
+      name: "Command Centre Wallboard",
+      status: "approved",
     });
   });
 
@@ -55,16 +78,35 @@ describe("Command Centre session access", () => {
     }
   });
 
-  it("shows not-approved state for non-allowlisted Zoho users", () => {
+  it("allows approved staff to access the wallboard as staff", () => {
     expect(
-      commandCentreAccessFromSession(
-        { user: { email: "external@example.com", name: "External User" } },
+      wallboardAccessFromSession(
+        {
+          accessLevel: "staff",
+          user: { email: "simeon@egit.com.au", name: "Simeon" },
+        },
         env,
       ),
     ).toEqual({
+      accessLevel: "staff",
+      email: "simeon@egit.com.au",
+      name: "Simeon",
+      status: "approved",
+    });
+  });
+
+  it("shows not-approved state for non-allowlisted Zoho users", () => {
+    const session = {
+      accessLevel: "staff" as const,
+      user: { email: "external@example.com", name: "External User" },
+    };
+    const expected = {
       status: "not-approved",
       email: "external@example.com",
       name: "External User",
-    });
+    } as const;
+
+    expect(commandCentreAccessFromSession(session, env)).toEqual(expected);
+    expect(wallboardAccessFromSession(session, env)).toEqual(expected);
   });
 });

@@ -9,12 +9,19 @@ import type { DispatchRequest } from "@/server/dispatch/types";
 import CommandCentrePage from "./page";
 import { bookingCardPriorityClass, requestNotesSummary } from "./prototype";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
 vi.mock("@/server/dispatch/test-sync-dashboard", () => ({
   getTestSyncedDispatchDashboardData: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((target: string) => {
+    throw new Error(`NEXT_REDIRECT:${target}`);
+  }),
 }));
 
 const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
@@ -61,6 +68,17 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
   expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
+});
+
+test("redirects a wallboard-only session to the wallboard", async () => {
+  getCommandCentreAccessMock.mockResolvedValue({
+    name: "Command Centre Wallboard",
+    status: "wallboard-only",
+  });
+
+  await expect(CommandCentrePage()).rejects.toThrow(
+    "NEXT_REDIRECT:/wallboard",
+  );
 });
 
 test("does not crash when a live request contains an invalid due date", async () => {

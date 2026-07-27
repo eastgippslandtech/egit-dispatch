@@ -5,7 +5,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import DispatchPage from "./page";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 

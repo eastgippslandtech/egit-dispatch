@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  getWallboardAccess,
+  isApprovedStaffAccess,
+} from "@/server/auth/session";
 import { getConfiguredPresenceOverrideRepository } from "@/server/presence/repository";
 import { getWallboardSnapshot } from "@/server/presence/service";
 
 export async function GET() {
-  const access = await approvedAccess();
+  const access = await approvedWallboardAccess();
   if (access instanceof Response) return access;
 
   try {
@@ -16,7 +20,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const access = await approvedAccess();
+  const access = await approvedStaffAccess();
   if (access instanceof Response) return access;
 
   try {
@@ -75,12 +79,23 @@ export async function POST(request: Request) {
   }
 }
 
-async function approvedAccess() {
+async function approvedWallboardAccess() {
+  const access = await getWallboardAccess();
+  if (access.status === "unauthenticated") {
+    return noStoreJson({ error: "Authentication required." }, { status: 401 });
+  }
+  if (access.status !== "approved") {
+    return noStoreJson({ error: "Access not approved." }, { status: 403 });
+  }
+  return access;
+}
+
+async function approvedStaffAccess() {
   const access = await getCommandCentreAccess();
   if (access.status === "unauthenticated") {
     return noStoreJson({ error: "Authentication required." }, { status: 401 });
   }
-  if (access.status === "not-approved") {
+  if (!isApprovedStaffAccess(access)) {
     return noStoreJson({ error: "Access not approved." }, { status: 403 });
   }
   return access;

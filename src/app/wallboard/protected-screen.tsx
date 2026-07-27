@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 
 import { AccessNotApproved } from "@/app/auth/auth-screen";
-import { getCommandCentreAccess } from "@/server/auth/session";
+import { getWallboardAccess } from "@/server/auth/session";
 import { getWallboardSnapshot } from "@/server/presence/service";
 import { WallboardScreen } from "./wallboard-screen";
 
 export async function ProtectedWallboardScreen() {
-  const access = await getCommandCentreAccess();
+  const access = await getWallboardAccess();
 
   if (access.status === "unauthenticated") {
     redirect("/auth/sign-in?callbackUrl=/wallboard");
@@ -18,7 +18,9 @@ export async function ProtectedWallboardScreen() {
 
   return (
     <WallboardScreen
-      authDisabled={access.authDisabled}
+      authDisabled={
+        access.accessLevel === "staff" ? access.authDisabled : undefined
+      }
       initialSnapshot={await getWallboardSnapshot()}
     />
   );

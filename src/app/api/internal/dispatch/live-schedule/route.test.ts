@@ -6,7 +6,8 @@ import { createMspCentralClient } from "@/server/msp-central/client";
 
 import { POST } from "./route";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -23,6 +24,22 @@ const createGraphClientMock = vi.mocked(createGraphClient);
 const createMspCentralClientMock = vi.mocked(createMspCentralClient);
 
 describe("live dispatch schedule route", () => {
+  it("rejects a wallboard-only session", async () => {
+    getCommandCentreAccessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule", {
+        body: "{}",
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
   it("creates an Outlook event and updates MSP Central request schedule", async () => {
     const createEvent = vi.fn().mockResolvedValue({
       id: "event-1",

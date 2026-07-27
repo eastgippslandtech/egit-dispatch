@@ -5,7 +5,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import MobilePage from "./page";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -110,6 +111,15 @@ test("/mobile redirects unauthenticated users to Zoho sign-in", async () => {
   await expect(MobilePage()).rejects.toThrow(
     "NEXT_REDIRECT:/auth/sign-in?callbackUrl=/mobile",
   );
+});
+
+test("/mobile redirects wallboard-only sessions to the wallboard", async () => {
+  getCommandCentreAccessMock.mockResolvedValue({
+    name: "Command Centre Wallboard",
+    status: "wallboard-only",
+  });
+
+  await expect(MobilePage()).rejects.toThrow("NEXT_REDIRECT:/wallboard");
 });
 
 test("/mobile blocks Zoho users outside the Command Centre allowlist", async () => {

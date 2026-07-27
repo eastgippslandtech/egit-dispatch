@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  getWallboardAccess,
+} from "@/server/auth/session";
 import { getEmptyCommandCentreData } from "@/server/dispatch/mock-data";
 import { getConfiguredPresenceOverrideRepository } from "@/server/presence/repository";
 import { getWallboardSnapshot } from "@/server/presence/service";
 import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
 import { GET, POST } from "./route";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
+  getWallboardAccess: vi.fn(),
 }));
 vi.mock("@/server/presence/repository", () => ({
   getConfiguredPresenceOverrideRepository: vi.fn(),
@@ -18,6 +23,7 @@ vi.mock("@/server/presence/service", () => ({
 }));
 
 const accessMock = vi.mocked(getCommandCentreAccess);
+const wallboardAccessMock = vi.mocked(getWallboardAccess);
 const repositoryMock = vi.mocked(getConfiguredPresenceOverrideRepository);
 const snapshotMock = vi.mocked(getWallboardSnapshot);
 const technician = staffProfileToTechnician(getInitialStaffProfiles()[2]);
@@ -34,7 +40,13 @@ const snapshot = {
 
 describe("internal presence API", () => {
   beforeEach(() => {
+    vi.resetAllMocks();
     accessMock.mockResolvedValue({
+      email: "simeon@egit.com.au",
+      status: "approved",
+    });
+    wallboardAccessMock.mockResolvedValue({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });
@@ -42,7 +54,7 @@ describe("internal presence API", () => {
   });
 
   it("requires an approved Command Centre user", async () => {
-    accessMock.mockResolvedValueOnce({ status: "unauthenticated" });
+    wallboardAccessMock.mockResolvedValueOnce({ status: "unauthenticated" });
 
     const response = await GET();
 
@@ -55,6 +67,37 @@ describe("internal presence API", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual(snapshot);
+  });
+
+  it("returns the wallboard snapshot for a signed wallboard session", async () => {
+    wallboardAccessMock.mockResolvedValueOnce({
+      accessLevel: "wallboard",
+      name: "Command Centre Wallboard",
+      status: "approved",
+    });
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(wallboardAccessMock).toHaveBeenCalledOnce();
+    expect(accessMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects presence writes from a signed wallboard session", async () => {
+    accessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/presence", {
+        body: "{}",
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(snapshotMock).not.toHaveBeenCalled();
   });
 
   it("starts a 30-minute Lunch for an enabled technician", async () => {

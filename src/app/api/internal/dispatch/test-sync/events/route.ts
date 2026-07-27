@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  isApprovedStaffAccess,
+} from "@/server/auth/session";
 import {
   clearDispatchTestSyncEvents,
   listDispatchTestSyncEvents,
@@ -69,7 +72,7 @@ async function getApprovedAccess() {
     );
   }
 
-  if (access.status === "not-approved") {
+  if (!isApprovedStaffAccess(access)) {
     return NextResponse.json({ error: "Access not approved." }, { status: 403 });
   }
 

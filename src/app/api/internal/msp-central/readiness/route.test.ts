@@ -4,7 +4,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import { GET } from "./route";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -19,6 +20,17 @@ describe("MSP Central readiness route", () => {
     const response = await GET();
 
     expect(response.status).toBe(401);
+  });
+
+  it("rejects a wallboard-only session", async () => {
+    getCommandCentreAccessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await GET();
+
+    expect(response.status).toBe(403);
   });
 
   it("returns safe readiness status without secret values", async () => {

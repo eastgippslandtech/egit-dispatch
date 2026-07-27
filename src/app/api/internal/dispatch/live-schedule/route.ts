@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  isApprovedStaffAccess,
+} from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
 import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
@@ -26,7 +29,7 @@ export async function POST(request: Request) {
     return noStoreJson({ error: "Authentication required." }, { status: 401 });
   }
 
-  if (access.status === "not-approved") {
+  if (!isApprovedStaffAccess(access)) {
     return noStoreJson({ error: "Access not approved." }, { status: 403 });
   }
 

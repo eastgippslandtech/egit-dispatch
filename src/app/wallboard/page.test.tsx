@@ -1,13 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  getWallboardAccess,
+} from "@/server/auth/session";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getWallboardSnapshot } from "@/server/presence/service";
 import WallboardPage from "./page";
 
 vi.mock("@/server/auth/session", () => ({
   getCommandCentreAccess: vi.fn(),
+  getWallboardAccess: vi.fn(),
 }));
 vi.mock("@/server/presence/service", () => ({
   getWallboardSnapshot: vi.fn(),
@@ -18,14 +22,21 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-const accessMock = vi.mocked(getCommandCentreAccess);
+const commandCentreAccessMock = vi.mocked(getCommandCentreAccess);
+const wallboardAccessMock = vi.mocked(getWallboardAccess);
 const snapshotMock = vi.mocked(getWallboardSnapshot);
 
 beforeEach(() => {
-  accessMock.mockResolvedValue({
+  vi.clearAllMocks();
+  const staffAccess = {
     email: "simeon@egit.com.au",
     name: "Simeon",
     status: "approved",
+  } as const;
+  commandCentreAccessMock.mockResolvedValue(staffAccess);
+  wallboardAccessMock.mockResolvedValue({
+    ...staffAccess,
+    accessLevel: "staff",
   });
   const dashboard = getDispatchDesignMockData();
   snapshotMock.mockResolvedValue({
@@ -66,8 +77,29 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.queryByPlaceholderText("Search requests")).not.toBeInTheDocument();
 });
 
+test("renders the wallboard for a signed wallboard session", async () => {
+  commandCentreAccessMock.mockResolvedValue({
+    name: "Command Centre Wallboard",
+    status: "wallboard-only",
+  });
+  wallboardAccessMock.mockResolvedValue({
+    accessLevel: "wallboard",
+    name: "Command Centre Wallboard",
+    status: "approved",
+  });
+
+  render(await WallboardPage());
+
+  expect(
+    screen.getByRole("heading", { level: 1, name: "Command Centre Wallboard" }),
+  ).toBeInTheDocument();
+  expect(wallboardAccessMock).toHaveBeenCalledOnce();
+  expect(commandCentreAccessMock).not.toHaveBeenCalled();
+});
+
 test("redirects unauthenticated wallboard viewers to Zoho sign in", async () => {
-  accessMock.mockResolvedValue({ status: "unauthenticated" });
+  commandCentreAccessMock.mockResolvedValue({ status: "unauthenticated" });
+  wallboardAccessMock.mockResolvedValue({ status: "unauthenticated" });
 
   await expect(WallboardPage()).rejects.toThrow(
     "NEXT_REDIRECT:/auth/sign-in?callbackUrl=/wallboard",
@@ -75,11 +107,13 @@ test("redirects unauthenticated wallboard viewers to Zoho sign in", async () => 
 });
 
 test("blocks Zoho users outside the Command Centre allowlist", async () => {
-  accessMock.mockResolvedValue({
+  const access = {
     email: "external@example.com",
     name: "External",
     status: "not-approved",
-  });
+  } as const;
+  commandCentreAccessMock.mockResolvedValue(access);
+  wallboardAccessMock.mockResolvedValue(access);
 
   render(await WallboardPage());
 

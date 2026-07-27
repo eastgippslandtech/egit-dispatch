@@ -129,10 +129,55 @@ describe("technician presence derivation", () => {
       expect(
         derive({ appointments: [appointment({ bookingType })] }),
       ).toMatchObject({
+        context: `${bookingType}: OneHarvest`,
         status: "in_office",
       });
     }
   });
+
+  it("shows On site for an Outlook-only onsite booking with no MSP request", () => {
+    expect(
+      derive({
+        appointments: [
+          appointment({
+            bookingType: "Onsite",
+            customer: "ASI Solutions",
+            requestId: "237815",
+            source: "outlook",
+          }),
+        ],
+        requests: [],
+      }),
+    ).toMatchObject({
+      context: "ASI Solutions",
+      label: "On site",
+      source: "outlook",
+      status: "on_site",
+    });
+  });
+
+  it.each(["Remote", "In house"] as const)(
+    "shows active Outlook-only %s work as in office with job context",
+    (bookingType) => {
+      expect(
+        derive({
+          appointments: [
+            appointment({
+              bookingType,
+              customer: "ASI Solutions",
+              requestId: "237815",
+              source: "outlook",
+            }),
+          ],
+          requests: [],
+        }),
+      ).toMatchObject({
+        context: `${bookingType}: ASI Solutions`,
+        source: "outlook",
+        status: "in_office",
+      });
+    },
+  );
 
   it("shows a safe Personal state for private or personal Outlook time", () => {
     const result = derive({

@@ -225,10 +225,17 @@ function appointmentCandidates({
     ];
   }
 
+  const bookingType =
+    appointment.bookingType ??
+    request?.bookingType ??
+    (request?.onsite === false ? "Remote" : request?.onsite ? "Onsite" : undefined);
+  const appointmentSource =
+    appointment.source === "outlook" ? "outlook" : "schedule";
+
   if (
     activeJob &&
     appointment.source === "outlook" &&
-    !appointment.requestId &&
+    !bookingType &&
     !appointment.isAllDay
   ) {
     return [
@@ -241,10 +248,22 @@ function appointmentCandidates({
     ];
   }
 
-  const bookingType =
-    appointment.bookingType ??
-    request?.bookingType ??
-    (request?.onsite === false ? "Remote" : request?.onsite ? "Onsite" : undefined);
+  if (
+    activeJob &&
+    (bookingType === "Remote" || bookingType === "In house")
+  ) {
+    return [
+      appointmentCandidate({
+        appointment,
+        context: `${bookingType}: ${
+          appointment.customer || request?.customer || appointment.title
+        }`,
+        source: appointmentSource,
+        status: "in_office",
+      }),
+    ];
+  }
+
   if (bookingType !== "Onsite") {
     return [];
   }
@@ -259,7 +278,7 @@ function appointmentCandidates({
         appointment,
         context: `To ${appointment.customer || request?.customer || "site"}`,
         endTime: appointment.start,
-        source: "schedule",
+        source: appointmentSource,
         startTime: timeFromMinutes(startMinutes - travelTo),
         status: "driving",
       }),
@@ -272,7 +291,7 @@ function appointmentCandidates({
       appointmentCandidate({
         appointment,
         context: `${appointment.customer || request?.customer || "Customer"}${site}`,
-        source: "schedule",
+        source: appointmentSource,
         status: "on_site",
       }),
     );
@@ -286,7 +305,7 @@ function appointmentCandidates({
           technician.baseOfficeName ?? technician.storeLocation ?? "office"
         }`,
         endTime: timeFromMinutes(endMinutes + travelBack),
-        source: "schedule",
+        source: appointmentSource,
         startTime: appointment.end,
         status: "driving",
       }),

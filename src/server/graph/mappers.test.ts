@@ -70,6 +70,98 @@ describe("Graph event mapper", () => {
     });
   });
 
+  it("maps structured Outlook-only onsite service bookings without an MSP request", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: [
+          "Ticket #237815",
+          "Company: ASI Solutions",
+          "Site: Gippsland office",
+          "Contact: Taylor Smith",
+          "Contact Phone: 03 5100 1000",
+          "Address: 42 Main Street, Bairnsdale VIC 3875",
+        ].join("\n"),
+        location: { displayName: "On-Site" },
+        subject: "ASI Solutions - ASP Work/Ticket Waiting Acceptance",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      bookingType: "Onsite",
+      customer: "ASI Solutions",
+      outlookLinkedRequestNumber: "237815",
+      requestId: "237815",
+      siteAddress: "42 Main Street, Bairnsdale VIC 3875",
+    });
+  });
+
+  it.each([
+    ["Remote", "Remote"],
+    ["In-house", "In house"],
+    ["in house", "In house"],
+  ] as const)(
+    "maps the Outlook location %s to the %s booking type",
+    (location, bookingType) => {
+      const appointment = mapGraphEventToAppointment(
+        event({
+          bodyPreview: "Ticket #237815\nCompany: ASI Solutions",
+          location: { displayName: location },
+          subject: "ASI Solutions service booking",
+        }),
+        technician,
+      );
+
+      expect(appointment).toMatchObject({
+        bookingType,
+        customer: "ASI Solutions",
+      });
+    },
+  );
+
+  it("keeps an ordinary Outlook location as useful meeting context", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Weekly operations review",
+        location: { displayName: "Teams meeting" },
+        subject: "Operations meeting",
+      }),
+      technician,
+    );
+
+    expect(appointment.customer).toBe("Teams meeting");
+    expect(appointment.bookingType).toBeUndefined();
+  });
+
+  it("does not infer a booking type from ordinary meeting notes", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Discuss remote support options and upcoming on-site work",
+        location: { displayName: "Teams meeting" },
+        subject: "Service planning meeting",
+      }),
+      technician,
+    );
+
+    expect(appointment.bookingType).toBeUndefined();
+  });
+
+  it("uses the event title as context when a booking label has no Company field", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Ticket #237815",
+        location: { displayName: "Remote" },
+        subject: "ASI Solutions - Remote support session",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      bookingType: "Remote",
+      customer: "ASI Solutions - Remote support session",
+    });
+  });
+
   it("maps private or limited events safely", () => {
     const appointment = mapGraphEventToAppointment(
       event({
@@ -85,6 +177,8 @@ describe("Graph event mapper", () => {
     expect(appointment.customer).toBe("Private");
     expect(appointment.outlookIssue).toBe("private");
     expect(appointment.bodyPreview).toBeUndefined();
+    expect(appointment.bookingType).toBeUndefined();
+    expect(appointment.siteAddress).toBeUndefined();
   });
 
   it("treats personal Outlook events as redacted personal time", () => {

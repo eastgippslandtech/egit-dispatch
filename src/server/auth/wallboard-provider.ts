@@ -16,6 +16,7 @@ export function createWallboardProvider({
   }> = {
     id: "wallboard",
     name: "Wallboard",
+    type: "credentials",
     credentials: {
       username: { label: "Username", type: "text" },
       password: { label: "Password", type: "password" },

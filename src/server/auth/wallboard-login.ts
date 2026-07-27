@@ -6,16 +6,14 @@ import {
 } from "./wallboard-login-attempts";
 import { verifyWallboardPassword } from "./wallboard-password";
 
-type WallboardLoginEnvironment = Partial<
-  Pick<
-    NodeJS.ProcessEnv,
-    | "AUTH_SECRET"
-    | "DATABASE_URL"
-    | "NEXTAUTH_SECRET"
-    | "WALLBOARD_LOCAL_PASSWORD_HASH"
-    | "WALLBOARD_LOCAL_USERNAME"
-  >
->;
+type WallboardLoginEnvironment = {
+  [key: string]: string | undefined;
+  AUTH_SECRET?: string;
+  DATABASE_URL?: string;
+  NEXTAUTH_SECRET?: string;
+  WALLBOARD_LOCAL_PASSWORD_HASH?: string;
+  WALLBOARD_LOCAL_USERNAME?: string;
+};
 
 type WallboardLoginInput = {
   clientAddress: string;

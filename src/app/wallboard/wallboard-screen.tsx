@@ -34,13 +34,23 @@ import type {
 } from "@/server/presence/types";
 
 const STATUS_STYLE: Record<PresenceStatus, string> = {
-  driving: "border-sky-300/45 bg-sky-400/12 text-sky-100",
-  in_office: "border-emerald-300/35 bg-emerald-400/10 text-emerald-100",
-  leave: "border-violet-300/40 bg-violet-400/12 text-violet-100",
-  lunch: "border-amber-300/45 bg-amber-400/12 text-amber-100",
-  meeting: "border-cyan-300/40 bg-cyan-400/10 text-cyan-100",
-  on_site: "border-cc-orange/55 bg-cc-orange/12 text-orange-50",
-  personal: "border-fuchsia-300/35 bg-fuchsia-400/10 text-fuchsia-100",
+  driving: "border-sky-300/85 bg-sky-500/35 text-sky-50",
+  in_office: "border-emerald-300/80 bg-emerald-500/35 text-emerald-50",
+  leave: "border-violet-300/80 bg-violet-500/35 text-violet-50",
+  lunch: "border-amber-300/85 bg-amber-500/35 text-amber-50",
+  meeting: "border-indigo-300/80 bg-indigo-500/35 text-indigo-50",
+  on_site: "border-orange-300/90 bg-orange-500/40 text-orange-50",
+  personal: "border-fuchsia-300/80 bg-fuchsia-500/35 text-fuchsia-50",
+};
+
+const STATUS_ICON_STYLE: Record<PresenceStatus, string> = {
+  driving: "bg-sky-200 text-sky-950 ring-sky-50/80",
+  in_office: "bg-emerald-200 text-emerald-950 ring-emerald-50/80",
+  leave: "bg-violet-200 text-violet-950 ring-violet-50/80",
+  lunch: "bg-amber-200 text-amber-950 ring-amber-50/80",
+  meeting: "bg-indigo-200 text-indigo-950 ring-indigo-50/80",
+  on_site: "bg-orange-200 text-orange-950 ring-orange-50/80",
+  personal: "bg-fuchsia-200 text-fuchsia-950 ring-fuchsia-50/80",
 };
 
 export function WallboardScreen({
@@ -250,25 +260,32 @@ export function WallboardScreen({
             {presences.map(({ presence, technician }) => (
               <article
                 key={technician.id}
-                className={`min-w-0 rounded-md border px-3 py-2 ${STATUS_STYLE[presence.status]}`}
+                className={`min-w-0 rounded-md border-2 border-l-[6px] px-3 py-2 shadow-lg ${STATUS_STYLE[presence.status]}`}
+                data-presence-status={presence.status}
                 data-testid={`presence-${technician.id}`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
-                    <PresenceIcon status={presence.status} />
+                    <span
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${STATUS_ICON_STYLE[presence.status]}`}
+                    >
+                      <PresenceIcon status={presence.status} />
+                    </span>
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-white">
+                      <div className="truncate text-base font-bold text-white">
                         {technician.displayName}
                       </div>
-                      <div className="text-[10px] text-current/70">
+                      <div className="text-[11px] font-semibold text-white/75">
                         {technician.baseOfficeName ?? technician.storeLocation}
                       </div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-base font-bold">{presence.label}</div>
+                    <div className="text-lg font-black text-white drop-shadow-sm">
+                      {presence.label}
+                    </div>
                     {remainingLabel(presence, now) ? (
-                      <div className="font-mono text-[10px] text-current/80">
+                      <div className="font-mono text-[11px] font-semibold text-white/85">
                         {remainingLabel(presence, now)}
                       </div>
                     ) : null}
@@ -305,7 +322,7 @@ export function WallboardScreen({
 }
 
 function PresenceIcon({ status }: { status: PresenceStatus }) {
-  const className = "h-5 w-5 shrink-0";
+  const className = "h-5 w-5 shrink-0 stroke-[2.5]";
   if (status === "driving") return <CarFront className={className} />;
   if (status === "on_site") return <UserRound className={className} />;
   if (status === "lunch") return <Coffee className={className} />;

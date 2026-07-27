@@ -70,6 +70,17 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.getByText("Driving")).toBeInTheDocument();
   expect(screen.getByText("To OneHarvest")).toBeInTheDocument();
   expect(screen.getAllByText("In office")).toHaveLength(3);
+  expect(screen.getByTestId("presence-tech-matt")).toHaveAttribute(
+    "data-presence-status",
+    "driving",
+  );
+  expect(screen.getByTestId("presence-tech-matt")).toHaveClass(
+    "bg-sky-500/35",
+    "border-2",
+  );
+  expect(screen.getByTestId("presence-tech-jervy")).toHaveClass(
+    "bg-emerald-500/35",
+  );
   expect(screen.getByText("Technician timeline")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Dispatch" })).toHaveAttribute(
     "href",

@@ -12,6 +12,7 @@ export const TIMELINE_PIXELS_PER_MINUTE = 2;
 export const TIMELINE_TRACK_WIDTH_PX =
   TIMELINE_MINUTES * TIMELINE_PIXELS_PER_MINUTE;
 export const SNAP_MINUTES = 15;
+export const TIMELINE_END_LABEL_MINIMUM_GAP_PX = 76;
 
 export type ScheduleWarningCode =
   | "missing-technician-mapping"
@@ -174,6 +175,23 @@ export function buildTimelineMarkers({
   });
 
   return markers;
+}
+
+export function shouldShowTimelineHourLabel(
+  time: string,
+  trackWidth: number,
+  minimumEndGapPx = TIMELINE_END_LABEL_MINIMUM_GAP_PX,
+) {
+  if (time !== "17:00") {
+    return true;
+  }
+
+  const minutesToTimelineEnd =
+    WORKDAY_END_MINUTES - minutesFromTime(time);
+  const availableEndGap =
+    (Math.max(0, trackWidth) * minutesToTimelineEnd) / TIMELINE_MINUTES;
+
+  return availableEndGap >= minimumEndGapPx;
 }
 
 function formatTimelineMarkerLabel(totalMinutes: number) {

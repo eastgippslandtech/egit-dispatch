@@ -9,6 +9,7 @@ import {
   getTimelinePosition,
   moveAppointment,
   scheduleRequest,
+  shouldShowTimelineHourLabel,
   timelinePixelToTime,
   timelinePositionToTime,
 } from "./scheduling";
@@ -113,6 +114,13 @@ describe("mock dispatch scheduling helpers", () => {
       minutesFromStart: 510,
     });
     expect(endCap?.leftPx).not.toBe(fivePm?.leftPx);
+  });
+
+  it("hides only the 5 PM label when the final half-hour is too narrow", () => {
+    expect(shouldShowTimelineHourLabel("16:00", 1_100)).toBe(true);
+    expect(shouldShowTimelineHourLabel("17:00", 1_100)).toBe(false);
+    expect(shouldShowTimelineHourLabel("17:00", 1_400)).toBe(true);
+    expect(shouldShowTimelineHourLabel("17:30", 1_100)).toBe(true);
   });
 
   it("clamps fixed-track items to the internal track bounds", () => {

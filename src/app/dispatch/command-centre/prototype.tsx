@@ -61,6 +61,7 @@ import {
   minutesFromTime,
   moveAppointment,
   scheduleRequest,
+  shouldShowTimelineHourLabel,
   TIMELINE_TRACK_WIDTH_PX,
   timeFromMinutes,
   timelinePositionToTime,
@@ -2687,29 +2688,38 @@ function TimelineBoard({
             className="relative h-10 bg-[#0f1b2e]"
             style={{ width: timelineTrackWidth }}
           >
-            {markers.map((marker) => (
-              <div
-                key={marker.time}
-                className="absolute inset-y-0 border-l border-white/10"
-                style={{ left: scaleTimelineX(marker.leftPx, timelineTrackWidth) }}
-              >
-                {marker.kind === "end" ? (
-                  <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
-                    {marker.label}
-                  </span>
-                ) : (
-                  <span
-                    className={`absolute top-3 whitespace-nowrap px-3 text-xs font-semibold text-slate-300 ${
-                      marker.time === "17:00"
-                        ? "hidden min-[1180px]:inline"
-                        : ""
-                    }`}
-                  >
-                    {marker.label}
-                  </span>
-                )}
-              </div>
-            ))}
+            {markers.map((marker) => {
+              const showLabel = shouldShowTimelineHourLabel(
+                marker.time,
+                timelineTrackWidth,
+              );
+
+              return (
+                <div
+                  key={marker.time}
+                  className="absolute inset-y-0 border-l border-white/10"
+                  style={{
+                    left: scaleTimelineX(marker.leftPx, timelineTrackWidth),
+                  }}
+                >
+                  {marker.kind === "end" ? (
+                    <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
+                      {marker.label}
+                    </span>
+                  ) : (
+                    <span
+                      className={`absolute top-3 whitespace-nowrap text-xs font-semibold text-slate-300 ${
+                        marker.time === "17:00"
+                          ? "-translate-x-1/2 px-1"
+                          : "px-3"
+                      } ${showLabel ? "" : "hidden"}`}
+                    >
+                      {marker.label}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
             <CurrentTimeHeaderMarker
               indicator={currentTimeIndicator}
               trackWidth={timelineTrackWidth}

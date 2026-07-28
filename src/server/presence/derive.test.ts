@@ -84,11 +84,26 @@ function derive({
 }
 
 describe("technician presence derivation", () => {
-  it("defaults an unscheduled technician to their base office", () => {
-    expect(derive()).toMatchObject({
+  it("defaults an unscheduled technician to their base office during office hours", () => {
+    expect(
+      derive({ now: new Date("2026-07-26T23:15:00.000Z") }),
+    ).toMatchObject({
       context: "Bairnsdale",
       label: "In office",
       status: "in_office",
+      technicianId: "tech-jervy",
+    });
+  });
+
+  it.each([
+    ["before opening", "2026-07-26T22:59:00.000Z"],
+    ["at closing", "2026-07-27T07:00:00.000Z"],
+    ["on weekends", "2026-08-01T02:00:00.000Z"],
+  ])("shows Closed %s when there is no active work", (_label, now) => {
+    expect(derive({ now: new Date(now) })).toMatchObject({
+      context: "Outside office hours",
+      label: "Closed",
+      status: "closed",
       technicianId: "tech-jervy",
     });
   });
@@ -227,11 +242,13 @@ describe("technician presence derivation", () => {
       derive({
         appointments: [
           appointment({
+            date: "2026-07-27",
             outlookShowAs: "free",
             requestId: undefined,
             source: "outlook",
           }),
         ],
+        now: new Date("2026-07-26T23:15:00.000Z"),
         requests: [],
       }),
     ).toMatchObject({

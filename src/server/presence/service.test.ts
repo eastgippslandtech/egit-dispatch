@@ -86,7 +86,7 @@ describe("wallboard snapshot service", () => {
 
     const snapshot = await getWallboardSnapshot({
       getDashboard: vi.fn().mockResolvedValue(dashboard),
-      now: new Date("2026-07-26T02:15:00.000Z"),
+      now: new Date("2026-07-26T23:15:00.000Z"),
       peopleClient: {
         listApprovedLeave: vi.fn().mockRejectedValue(new Error("People offline")),
       },

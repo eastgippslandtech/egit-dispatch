@@ -25,9 +25,11 @@ const STATUS_PRIORITY: Record<PresenceStatus, number> = {
   personal: 4,
   meeting: 5,
   in_office: 6,
+  closed: 7,
 };
 
 const STATUS_LABEL: Record<PresenceStatus, string> = {
+  closed: "Closed",
   leave: "Leave",
   lunch: "Lunch",
   driving: "Driving",
@@ -132,27 +134,37 @@ function deriveOne({
     );
   }
 
-  const office: PresenceCandidate = {
-    context:
-      technician.baseOfficeName ??
-      technician.storeLocation ??
-      technician.baseOfficeId ??
-      "Office",
-    label: STATUS_LABEL.in_office,
-    source: "schedule",
-    status: "in_office",
-  };
-  candidates.push(office);
+  const fallback: PresenceCandidate = officeIsOpen(now)
+    ? {
+        context:
+          technician.baseOfficeName ??
+          technician.storeLocation ??
+          technician.baseOfficeId ??
+          "Office",
+        label: STATUS_LABEL.in_office,
+        source: "schedule",
+        status: "in_office",
+      }
+    : {
+        context: "Outside office hours",
+        label: STATUS_LABEL.closed,
+        source: "schedule",
+        status: "closed",
+      };
+  candidates.push(fallback);
   candidates.sort(
     (first, second) =>
       STATUS_PRIORITY[first.status] - STATUS_PRIORITY[second.status],
   );
-  const selected = candidates[0] ?? office;
+  const selected = candidates[0] ?? fallback;
   const conflicts = Array.from(
     new Set(
       candidates
         .slice(1)
-        .filter((candidate) => candidate.status !== "in_office")
+        .filter(
+          (candidate) =>
+            candidate.status !== "in_office" && candidate.status !== "closed",
+        )
         .map((candidate) => STATUS_LABEL[candidate.status]),
     ),
   );
@@ -381,6 +393,21 @@ function currentMelbourneMinutes(now: Date) {
   const part = (type: string) =>
     Number(parts.find((candidate) => candidate.type === type)?.value ?? 0);
   return part("hour") * 60 + part("minute");
+}
+
+function officeIsOpen(now: Date) {
+  const weekday = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+  }).format(now);
+  const minutes = currentMelbourneMinutes(now);
+
+  return (
+    weekday !== "Sat" &&
+    weekday !== "Sun" &&
+    minutes >= 9 * 60 &&
+    minutes < 17 * 60
+  );
 }
 
 function melbourneLocalTimestamp(dateKey: string, time: string) {

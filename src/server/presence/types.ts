@@ -1,4 +1,5 @@
 export type PresenceStatus =
+  | "closed"
   | "leave"
   | "lunch"
   | "driving"

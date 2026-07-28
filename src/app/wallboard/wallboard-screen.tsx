@@ -10,6 +10,7 @@ import {
   Coffee,
   LayoutDashboard,
   LogOut,
+  Moon,
   Palmtree,
   TriangleAlert,
   UserRound,
@@ -34,6 +35,7 @@ import type {
 } from "@/server/presence/types";
 
 const STATUS_STYLE: Record<PresenceStatus, string> = {
+  closed: "border-slate-400/80 bg-slate-700/75 text-slate-50",
   driving: "border-sky-300/85 bg-sky-500/35 text-sky-50",
   in_office: "border-emerald-300/80 bg-emerald-500/35 text-emerald-50",
   leave: "border-violet-300/80 bg-violet-500/35 text-violet-50",
@@ -44,6 +46,7 @@ const STATUS_STYLE: Record<PresenceStatus, string> = {
 };
 
 const STATUS_ICON_STYLE: Record<PresenceStatus, string> = {
+  closed: "bg-slate-300 text-slate-950 ring-slate-100/80",
   driving: "bg-sky-200 text-sky-950 ring-sky-50/80",
   in_office: "bg-emerald-200 text-emerald-950 ring-emerald-50/80",
   leave: "bg-violet-200 text-violet-950 ring-violet-50/80",
@@ -323,6 +326,7 @@ export function WallboardScreen({
 
 function PresenceIcon({ status }: { status: PresenceStatus }) {
   const className = "h-5 w-5 shrink-0 stroke-[2.5]";
+  if (status === "closed") return <Moon className={className} />;
   if (status === "driving") return <CarFront className={className} />;
   if (status === "on_site") return <UserRound className={className} />;
   if (status === "lunch") return <Coffee className={className} />;

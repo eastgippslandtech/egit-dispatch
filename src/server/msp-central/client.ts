@@ -25,6 +25,12 @@ type AccessTokenCacheEntry = {
   refreshPromise?: Promise<string>;
 };
 
+type MspCentralActionResponse = {
+  response_status?:
+    | { status?: string | null }
+    | Array<{ status?: string | null }>;
+};
+
 const accessTokenCache = new Map<string, AccessTokenCacheEntry>();
 
 export function createMspCentralClient(config: DispatchConfig): MspCentralClient {
@@ -81,6 +87,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
       return technicians.length > 0
         ? technicians
         : profiles.map(staffProfileToTechnician);
+    },
+    async mergeRequests() {
+      return undefined;
     },
     async refreshAccessToken() {
       return "fixture-access-token";
@@ -189,6 +198,27 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         ? technicians
         : getInitialStaffProfiles().map(staffProfileToTechnician);
     },
+    async mergeRequests(input) {
+      assertConfigured();
+
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.parentRequestId)}/merge_requests`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              merge_requests: [{ id: input.childRequestId }],
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central request merge failed.",
+        );
+      }
+    },
     async refreshAccessToken() {
       assertConfigured();
       return getAccessToken();
@@ -244,6 +274,18 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return (await response.json()) as T;
   }
+}
+
+function mspCentralActionSucceeded(payload: MspCentralActionResponse) {
+  const statuses = Array.isArray(payload.response_status)
+    ? payload.response_status
+    : payload.response_status
+      ? [payload.response_status]
+      : [];
+
+  return statuses.some(
+    (status) => status.status?.trim().toLowerCase() === "success",
+  );
 }
 
 async function refreshAccessToken(config: DispatchConfig) {

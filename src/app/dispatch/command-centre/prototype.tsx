@@ -10,6 +10,7 @@ import {
   Clock3,
   ExternalLink,
   Filter,
+  GitMerge,
   LogOut,
   MailWarning,
   Monitor,
@@ -239,6 +240,7 @@ export function CommandCentrePrototype({
   const [pendingSchedule, setPendingSchedule] = useState<
     PendingSchedule | undefined
   >();
+  const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
   const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
   const [toast, setToast] = useState<string | undefined>();
 
@@ -392,6 +394,45 @@ export function CommandCentrePrototype({
       requestId: appointment.requestId,
     });
     markTicketUpdateSeen(appointment.requestId);
+  }
+
+  async function mergeRequestIntoParent(parentRequestId: string) {
+    const childRequest = dashboard.requests.find(
+      (request) => request.id === mergeRequestId,
+    );
+    const parentRequest = dashboard.requests.find(
+      (request) => request.id === parentRequestId,
+    );
+
+    if (!childRequest || !parentRequest) {
+      throw new Error("The duplicate or surviving request is no longer available.");
+    }
+
+    await publishMspCentralRequestMerge({
+      childRequestId: childRequest.id,
+      parentRequestId: parentRequest.id,
+    });
+
+    setDashboard((current) => ({
+      ...current,
+      appointments: current.appointments.map((appointment) =>
+        appointment.requestId === childRequest.id
+          ? { ...appointment, requestId: parentRequest.id }
+          : appointment,
+      ),
+      requests: current.requests.filter(
+        (request) => request.id !== childRequest.id,
+      ),
+      selectedRequestId:
+        current.selectedRequestId === childRequest.id
+          ? parentRequest.id
+          : current.selectedRequestId,
+    }));
+    setSelection({ kind: "request", requestId: parentRequest.id });
+    setMergeRequestId(undefined);
+    setToast(
+      `${childRequest.requestNumber} merged into ${parentRequest.requestNumber}.`,
+    );
   }
 
   useEffect(() => {
@@ -1435,12 +1476,17 @@ export function CommandCentrePrototype({
                     request,
                     seenTicketUpdateIds,
                   )}
+                  mergeEnabled={
+                    request.sourceSystem === "msp-central" ||
+                    request.sourceSystem === "msp-central-fixture"
+                  }
                   request={request}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
                     beginDrag({ kind: "request", requestId: request.id })
                   }
+                  onMerge={() => setMergeRequestId(request.id)}
                   onSelect={() => selectRequest(request.id)}
                 />
               ))}
@@ -1568,6 +1614,16 @@ export function CommandCentrePrototype({
             )}
           />
         ) : null}
+        {mergeRequestId ? (
+          <MergeRequestModal
+            childRequest={dashboard.requests.find(
+              (request) => request.id === mergeRequestId,
+            )}
+            requests={dashboard.requests}
+            onCancel={() => setMergeRequestId(undefined)}
+            onConfirm={mergeRequestIntoParent}
+          />
+        ) : null}
         {toast ? (
           <div className="fixed bottom-5 right-5 z-50 rounded-md border border-emerald-300/30 bg-emerald-400/15 px-4 py-3 text-sm font-semibold text-emerald-50 shadow-2xl">
             <button
@@ -1635,6 +1691,26 @@ async function publishLiveSchedule(event: {
   return body?.event ?? {};
 }
 
+async function publishMspCentralRequestMerge(event: {
+  childRequestId: string;
+  parentRequestId: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/merge-requests", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central request merge failed.");
+  }
+}
+
 function testSyncErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
@@ -1671,6 +1747,267 @@ function technicianOutlookIdentity(technicians: Technician[], technicianId: stri
 
 function bookingTypeForRequest(request: DispatchRequest): BookingType {
   return request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite");
+}
+
+function MergeRequestModal({
+  childRequest,
+  onCancel,
+  onConfirm,
+  requests,
+}: {
+  childRequest?: DispatchRequest;
+  onCancel: () => void;
+  onConfirm: (parentRequestId: string) => Promise<void>;
+  requests: DispatchRequest[];
+}) {
+  const [step, setStep] = useState<"search" | "confirm">("search");
+  const [search, setSearch] = useState("");
+  const [parentRequestId, setParentRequestId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  if (!childRequest) {
+    return null;
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const searchResults = normalizedSearch
+    ? requests
+        .filter((request) => request.id !== childRequest.id)
+        .filter((request) =>
+          [
+            request.requestNumber,
+            request.subject,
+            request.customer,
+            request.site,
+            request.requester,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch),
+        )
+        .slice(0, 8)
+    : [];
+  const parentRequest = requests.find(
+    (request) => request.id === parentRequestId,
+  );
+
+  async function confirmMerge() {
+    if (!parentRequest) {
+      return;
+    }
+
+    setSaving(true);
+    setError(undefined);
+
+    try {
+      await onConfirm(parentRequest.id);
+    } catch (mergeError) {
+      setError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : "MSP Central request merge failed.",
+      );
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6">
+      <section
+        aria-label={step === "search" ? "Merge request" : "Confirm request merge"}
+        aria-modal="true"
+        className="w-full max-w-2xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+              MSP Central
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">
+              {step === "search" ? "Merge request" : "Confirm request merge"}
+            </h2>
+          </div>
+          <GitMerge className="h-5 w-5 text-cc-orange" />
+        </div>
+
+        {step === "search" ? (
+          <>
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Duplicate ticket
+              </p>
+              <MergeRequestSummary request={childRequest} tone="duplicate" />
+            </div>
+
+            <label className="mt-4 block text-sm font-semibold text-slate-200">
+              Find the surviving parent
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 focus-within:border-cc-orange/50">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                  placeholder="Search request number, subject or customer"
+                  type="search"
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setParentRequestId(undefined);
+                  }}
+                />
+              </div>
+            </label>
+
+            <div className="mt-3 max-h-64 space-y-2 overflow-auto">
+              {!normalizedSearch ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  Search the loaded Helpdesk requests.
+                </div>
+              ) : null}
+              {normalizedSearch && searchResults.length === 0 ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  No matching requests
+                </div>
+              ) : null}
+              {searchResults.map((request) => (
+                <button
+                  key={request.id}
+                  aria-label={`Select ${request.requestNumber} as surviving parent`}
+                  aria-pressed={parentRequestId === request.id}
+                  className={`w-full rounded-md border p-3 text-left transition ${
+                    parentRequestId === request.id
+                      ? "border-cc-orange/70 bg-cc-orange/12"
+                      : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                  }`}
+                  type="button"
+                  onClick={() => setParentRequestId(request.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-mono text-xs text-cc-orange">
+                        {request.requestNumber}
+                      </div>
+                      <div className="mt-1 font-semibold text-slate-100">
+                        {request.subject}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {request.customer} / {request.site}
+                      </div>
+                    </div>
+                    <PriorityChip priority={request.priority} />
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
+                type="button"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!parentRequest}
+                type="button"
+                onClick={() => setStep("confirm")}
+              >
+                Review merge
+              </button>
+            </div>
+          </>
+        ) : parentRequest ? (
+          <>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                  Duplicate removed
+                </p>
+                <MergeRequestSummary request={childRequest} tone="duplicate" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                  Surviving parent
+                </p>
+                <MergeRequestSummary request={parentRequest} tone="parent" />
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-start gap-3 rounded-md border border-rose-300/30 bg-rose-400/10 p-3 text-sm text-rose-50">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-semibold">
+                  This merge is effectively irreversible.
+                </div>
+                <p className="mt-1 text-rose-100/80">
+                  {childRequest.requestNumber} will disappear and its history will
+                  be merged into {parentRequest.requestNumber}.
+                </p>
+              </div>
+            </div>
+
+            {error ? (
+              <div className="mt-3 rounded-md border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">
+                {error}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-40"
+                disabled={saving}
+                type="button"
+                onClick={() => {
+                  setError(undefined);
+                  setStep("search");
+                }}
+              >
+                Back
+              </button>
+              <button
+                className="rounded-md bg-rose-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50"
+                disabled={saving}
+                type="button"
+                onClick={confirmMerge}
+              >
+                {saving ? "Merging..." : "Merge duplicate into parent"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function MergeRequestSummary({
+  request,
+  tone,
+}: {
+  request: DispatchRequest;
+  tone: "duplicate" | "parent";
+}) {
+  return (
+    <div
+      className={`mt-2 rounded-md border p-3 ${
+        tone === "duplicate"
+          ? "border-rose-300/20 bg-rose-400/[0.06]"
+          : "border-emerald-300/20 bg-emerald-400/[0.06]"
+      }`}
+    >
+      <div className="font-mono text-xs text-cc-orange">
+        {request.requestNumber}
+      </div>
+      <div className="mt-1 font-semibold text-slate-100">{request.subject}</div>
+      <div className="mt-1 text-xs text-slate-400">
+        {request.customer} / {request.site}
+      </div>
+    </div>
+  );
 }
 
 function ScheduleConfirmModal({
@@ -2497,77 +2834,99 @@ function QueueFilterMenu({
 function RequestQueueCard({
   active,
   hasUnreadUpdate,
+  mergeEnabled,
   onDragEnd,
   onDragStart,
+  onMerge,
   onSelect,
   request,
   technician,
 }: {
   active: boolean;
   hasUnreadUpdate: boolean;
+  mergeEnabled: boolean;
   onDragEnd: () => void;
   onDragStart: () => void;
+  onMerge: () => void;
   onSelect: () => void;
   request: DispatchRequest;
   technician: string;
 }) {
   return (
-    <button
-      aria-label={`${request.requestNumber} ${request.subject}`}
+    <article
       draggable
-      className={`w-full rounded-md border p-2.5 text-left transition ${
+      className={`w-full overflow-hidden rounded-md border text-left transition ${
         active
           ? "border-cc-orange/80 bg-cc-orange/15 shadow-[0_0_0_1px_rgba(255,130,58,0.28),0_14px_32px_rgba(255,130,58,0.16)]"
           : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.06]"
       }`}
-      type="button"
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", `request:${request.id}`);
         onDragStart();
       }}
-      onClick={onSelect}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="font-mono text-[11px] text-cc-orange">
-            {request.requestNumber}
+      <button
+        aria-label={`${request.requestNumber} ${request.subject}`}
+        className="w-full p-2.5 text-left"
+        type="button"
+        onClick={onSelect}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-mono text-[11px] text-cc-orange">
+              {request.requestNumber}
+            </div>
+            <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
+              {request.subject}
+            </div>
           </div>
-          <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
-            {request.subject}
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <PriorityChip priority={request.priority} />
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge dataTestId={`queue-ticket-update-${request.id}`} />
+            ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <PriorityChip priority={request.priority} />
-          {hasUnreadUpdate ? (
-            <TicketUpdateBadge dataTestId={`queue-ticket-update-${request.id}`} />
-          ) : null}
+        <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
+          <span>{request.customer}</span>
+          <span>/</span>
+          <span>{request.site}</span>
         </div>
-      </div>
-      <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
-        <span>{request.customer}</span>
-        <span>/</span>
-        <span>{request.site}</span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1">
-        <Badge tone="info">{request.status}</Badge>
-        <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
-          {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
-        </Badge>
-        {request.warnings.slice(0, 2).map((warning) => (
-          <Badge key={warning} tone="warning">
-            {warning}
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge tone="info">{request.status}</Badge>
+          <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
+            {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
           </Badge>
-        ))}
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400">
-        <span>Age {request.ageHours}h</span>
-        <span>{request.billable ? "Billable" : "Non-billable"}</span>
-        <span>{technician}</span>
-        <span>Due {formatTime(request.dueAt)}</span>
-      </div>
-    </button>
+          {request.warnings.slice(0, 2).map((warning) => (
+            <Badge key={warning} tone="warning">
+              {warning}
+            </Badge>
+          ))}
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400">
+          <span>Age {request.ageHours}h</span>
+          <span>{request.billable ? "Billable" : "Non-billable"}</span>
+          <span>{technician}</span>
+          <span>Due {formatTime(request.dueAt)}</span>
+        </div>
+      </button>
+      {mergeEnabled ? (
+        <div className="flex justify-end border-t border-white/[0.07] px-2 py-1">
+          <button
+            aria-label={`Merge ${request.requestNumber}`}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
+            draggable={false}
+            type="button"
+            onClick={onMerge}
+          >
+            <GitMerge className="h-3.5 w-3.5" />
+            Merge
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }
 

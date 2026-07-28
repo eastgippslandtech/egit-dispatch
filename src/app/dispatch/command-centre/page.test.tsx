@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
@@ -45,6 +51,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 test("renders the locked Command Centre prototype with shared mock data", async () => {
@@ -316,6 +323,88 @@ test("saves Work Log locally and save-and-complete marks the request resolved", 
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+});
+
+test("merges the queue duplicate into a searched surviving parent after confirmation", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central",
+    })),
+  });
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      childRequestId: "100284",
+      ok: true,
+      parentRequestId: "100301",
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+
+  const queue = screen.getByTestId("request-queue");
+  fireEvent.click(
+    within(queue).getByRole("button", {
+      name: "Merge REQ-100284",
+    }),
+  );
+
+  let dialog = screen.getByRole("dialog", { name: "Merge request" });
+  expect(within(dialog).getByText("Duplicate ticket")).toBeInTheDocument();
+  expect(within(dialog).getByText("REQ-100284")).toBeInTheDocument();
+
+  fireEvent.change(
+    within(dialog).getByPlaceholderText("Search request number, subject or customer"),
+    {
+      target: { value: "Finance workstation" },
+    },
+  );
+  fireEvent.click(
+    within(dialog).getByRole("button", {
+      name: "Select REQ-100301 as surviving parent",
+    }),
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Review merge" }));
+
+  dialog = screen.getByRole("dialog", { name: "Confirm request merge" });
+  expect(within(dialog).getByText("Duplicate removed")).toBeInTheDocument();
+  expect(within(dialog).getByText("Surviving parent")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("This merge is effectively irreversible."),
+  ).toBeInTheDocument();
+
+  fireEvent.click(
+    within(dialog).getByRole("button", {
+      name: "Merge duplicate into parent",
+    }),
+  );
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/internal/msp-central/merge-requests",
+      expect.objectContaining({
+        body: JSON.stringify({
+          childRequestId: "100284",
+          parentRequestId: "100301",
+        }),
+        method: "POST",
+      }),
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      within(screen.getByTestId("request-queue")).queryByRole("button", {
+        name: "REQ-100284 Packhouse label printer offline",
+      }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(screen.getByText("REQ-100284 merged into REQ-100301.")).toBeInTheDocument();
 });
 
 test("renders overlapping timeline appointments as an inspectable stack", async () => {

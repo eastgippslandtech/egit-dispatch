@@ -80,6 +80,10 @@ export type MspCentralClient = {
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;
   listSites(): Promise<Array<{ id: string; name: string }>>;
   listTechnicians(): Promise<Technician[]>;
+  mergeRequests(input: {
+    childRequestId: string;
+    parentRequestId: string;
+  }): Promise<void>;
   refreshAccessToken(): Promise<string>;
   updateRequestSchedule(input: {
     requestId: string;

@@ -277,6 +277,101 @@ describe("MSP Central live client", () => {
     });
   });
 
+  it("merges a duplicate child request into the surviving parent request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          response_status: {
+            status: "success",
+            status_code: 2000,
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.mergeRequests({
+      childRequestId: "duplicate-123",
+      parentRequestId: "surviving-456",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://mspcentral.manageengine.com.au/app/memsp1783593801295/api/v3/requests/surviving-456/merge_requests",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: "Zoho-oauthtoken msp-access-token",
+        }),
+      }),
+    );
+    const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
+      merge_requests: [{ id: "duplicate-123" }],
+    });
+  });
+
+  it("does not accept an HTTP 200 merge response when MSP Central reports failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response_status: {
+              messages: [{ message: "Merge was rejected" }],
+              status: "failed",
+              status_code: 4000,
+            },
+          }),
+        }),
+    );
+
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(
+      client.mergeRequests({
+        childRequestId: "duplicate-123",
+        parentRequestId: "surviving-456",
+      }),
+    ).rejects.toEqual(
+      new MspCentralConfigurationError("MSP Central request merge failed."),
+    );
+  });
+
   it("reports the safe Zoho OAuth error code without exposing credentials", async () => {
     vi.stubGlobal(
       "fetch",

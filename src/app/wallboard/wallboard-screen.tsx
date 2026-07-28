@@ -348,11 +348,26 @@ function fallbackPresence(
 
 function remainingLabel(presence: TechnicianPresence, now: Date) {
   if (!presence.endsAt) return "";
+  const endTime = new Date(presence.endsAt).getTime();
+  if (!Number.isFinite(endTime)) return "";
   const minutes = Math.max(
     0,
-    Math.ceil((new Date(presence.endsAt).getTime() - now.getTime()) / 60_000),
+    Math.ceil((endTime - now.getTime()) / 60_000),
   );
-  return minutes > 0 ? `${minutes}m remaining` : "";
+  if (minutes <= 0) return "";
+  if (minutes <= 90) return `${minutes}m remaining`;
+
+  if (minutes >= 1_440) {
+    const roundedHours = Math.ceil(minutes / 60);
+    const days = Math.floor(roundedHours / 24);
+    const hours = roundedHours % 24;
+    return `${days}d${hours > 0 ? ` ${hours}h` : ""} remaining`;
+  }
+
+  const remainingMinutes = minutes % 60;
+  return `${Math.floor(minutes / 60)}h${
+    remainingMinutes > 0 ? ` ${remainingMinutes}m` : ""
+  } remaining`;
 }
 
 function formatClock(value: string) {

@@ -153,3 +153,64 @@ test("blocks Zoho users outside the Command Centre allowlist", async () => {
   ).toBeInTheDocument();
   expect(screen.queryByText("Team status")).not.toBeInTheDocument();
 });
+
+test.each([
+  { expected: "90m remaining", minutes: 90 },
+  { expected: "1h 31m remaining", minutes: 91 },
+  { expected: "2h remaining", minutes: 120 },
+  { expected: "2h 30m remaining", minutes: 150 },
+  { expected: "1d remaining", minutes: 1_440 },
+  { expected: "1d 1h remaining", minutes: 1_499 },
+  { expected: "1d 2h remaining", minutes: 1_560 },
+])(
+  "formats a $minutes minute staff status as $expected",
+  async ({ expected, minutes }) => {
+    const now = new Date();
+    const dashboard = getDispatchDesignMockData();
+    snapshotMock.mockResolvedValue({
+      dashboard,
+      peopleStatus: "not_configured",
+      presences: dashboard.technicians.map((technician, index) => ({
+        conflicts: [],
+        context: technician.storeLocation,
+        endsAt:
+          index === 0
+            ? new Date(now.getTime() + minutes * 60_000).toISOString()
+            : undefined,
+        label: index === 0 ? "On site" : "In office",
+        source: "schedule",
+        status: index === 0 ? "on_site" : "in_office",
+        technicianId: technician.id,
+      })),
+      sourceWarnings: [],
+      updatedAt: now.toISOString(),
+    });
+
+    render(await WallboardPage());
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  },
+);
+
+test("does not show a remaining duration for an invalid status end time", async () => {
+  const dashboard = getDispatchDesignMockData();
+  snapshotMock.mockResolvedValue({
+    dashboard,
+    peopleStatus: "not_configured",
+    presences: dashboard.technicians.map((technician, index) => ({
+      conflicts: [],
+      context: technician.storeLocation,
+      endsAt: index === 0 ? "not-a-date" : undefined,
+      label: index === 0 ? "On site" : "In office",
+      source: "schedule",
+      status: index === 0 ? "on_site" : "in_office",
+      technicianId: technician.id,
+    })),
+    sourceWarnings: [],
+    updatedAt: new Date().toISOString(),
+  });
+
+  render(await WallboardPage());
+
+  expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+});

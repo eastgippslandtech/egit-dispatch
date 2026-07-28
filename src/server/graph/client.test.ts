@@ -49,6 +49,55 @@ describe("Graph client", () => {
     );
   });
 
+  it("follows calendarView pagination so busy calendars return every event", async () => {
+    const nextLink =
+      "https://graph.microsoft.com/v1.0/users/jervy%40egit.com.au/calendar/calendarView?$skiptoken=next-page";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "token-value" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          "@odata.nextLink": nextLink,
+          value: [{ id: "event-1", subject: "Earlier booking" }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          value: [{ id: "event-2", subject: "Command centre training" }],
+        }),
+      });
+
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    const events = await client.listCalendarView({
+      endDateTime: "2026-08-01T00:00:00",
+      startDateTime: "2026-07-27T00:00:00",
+      userPrincipalName: "jervy@egit.com.au",
+    });
+
+    expect(events.map((event) => event.id)).toEqual(["event-1", "event-2"]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      nextLink,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-value",
+        }),
+        method: "GET",
+      }),
+    );
+  });
+
   it("throws safe errors without leaking secrets or tokens", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

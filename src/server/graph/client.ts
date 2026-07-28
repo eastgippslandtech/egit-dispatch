@@ -89,28 +89,45 @@ export function createGraphClient({
   }: ListCalendarViewInput) {
     const token = await acquireToken();
     const params = new URLSearchParams({ startDateTime, endDateTime });
-    const response = await fetchImpl(
+    let nextUrl: string | undefined =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
         userPrincipalName,
-      )}/calendar/calendarView?${params.toString()}`,
-      {
+      )}/calendar/calendarView?${params.toString()}`;
+    const events: MicrosoftGraphEvent[] = [];
+    const visitedUrls = new Set<string>();
+
+    while (nextUrl) {
+      if (visitedUrls.has(nextUrl) || visitedUrls.size >= 100) {
+        throw new GraphApiError(
+          `Microsoft Graph calendar pagination failed for ${userPrincipalName}.`,
+        );
+      }
+      visitedUrls.add(nextUrl);
+
+      const response = await fetchImpl(nextUrl, {
         headers: {
           Authorization: `Bearer ${token}`,
           Prefer: `outlook.timezone="${outlookTimezone}"`,
         },
         method: "GET",
-      },
-    );
+      });
 
-    if (!response.ok) {
-      throw new GraphApiError(
-        `Microsoft Graph calendar read failed for ${userPrincipalName}.`,
-        response.status,
-      );
+      if (!response.ok) {
+        throw new GraphApiError(
+          `Microsoft Graph calendar read failed for ${userPrincipalName}.`,
+          response.status,
+        );
+      }
+
+      const payload = (await response.json()) as {
+        "@odata.nextLink"?: string;
+        value?: MicrosoftGraphEvent[];
+      };
+      events.push(...(payload.value ?? []));
+      nextUrl = trustedGraphNextLink(payload["@odata.nextLink"]);
     }
 
-    const payload = (await response.json()) as { value?: MicrosoftGraphEvent[] };
-    return payload.value ?? [];
+    return events;
   }
 
   async function createEvent(input: MicrosoftGraphEventDraft) {
@@ -173,6 +190,23 @@ export function createGraphClient({
     listCalendarView,
     updateEvent,
   };
+}
+
+function trustedGraphNextLink(nextLink?: string) {
+  if (!nextLink) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(nextLink);
+    if (url.protocol === "https:" && url.hostname === "graph.microsoft.com") {
+      return url.toString();
+    }
+  } catch {
+    // Fall through to a safe Graph error without sending the access token.
+  }
+
+  throw new GraphApiError("Microsoft Graph calendar pagination link was invalid.");
 }
 
 function graphEventBody(input: MicrosoftGraphEventDraft, timezone: string) {

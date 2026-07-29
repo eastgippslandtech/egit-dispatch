@@ -250,6 +250,23 @@ describe("mobile API service", () => {
     );
   });
 
+  it("uses real Outlook bookings instead of samples when the database is unavailable", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: null,
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
+    });
+  });
+
   it("does not duplicate an Outlook event already linked to a Command Centre job", async () => {
     const response = await listMobileJobs({
       auth: rileyMobileAuth,
@@ -373,6 +390,21 @@ describe("mobile API service", () => {
         canWriteWorklog: false,
         readOnlyReason: "Outlook calendar events are read-only.",
       },
+    });
+  });
+
+  it("opens an Outlook-only booking when the database is unavailable", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: null,
+      jobId: "outlook-tech-riley-event-outlook-1",
+      outlookCalendar: createOutlookCalendar(),
+    });
+
+    expect(response.job).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
     });
   });
 

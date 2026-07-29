@@ -115,6 +115,20 @@ export async function listMobileJobs({
     };
   }
 
+  if (outlookCalendar) {
+    const staff = fixtureStaffAsDatabaseRow(auth);
+    return {
+      jobs: (
+        await listOutlookMobileJobs({
+          from,
+          outlookCalendar,
+          staff,
+          to,
+        })
+      ).sort((left, right) => left.startAt.localeCompare(right.startAt)),
+    };
+  }
+
   return {
     jobs: MOBILE_JOB_FIXTURES.filter(
       (job) => job.technician.email.toLowerCase() === auth.email.toLowerCase(),
@@ -162,6 +176,17 @@ export async function getMobileJob({
       });
     }
     return { job: mapDatabaseJob(job) };
+  }
+
+  if (outlookCalendar && jobId.startsWith("outlook-")) {
+    const outlookJob = await findOutlookMobileJob({
+      jobId,
+      outlookCalendar,
+      staff: fixtureStaffAsDatabaseRow(auth),
+    });
+    if (outlookJob) {
+      return { job: outlookJob };
+    }
   }
 
   const job = findOwnedJob(auth, jobId);
@@ -398,6 +423,34 @@ function findOwnedJob(auth: MobileAuthContext, jobId: string): MobileJob {
     });
   }
   return job;
+}
+
+function fixtureStaffAsDatabaseRow(auth: MobileAuthContext): DatabaseStaffRow {
+  const staff = MOBILE_STAFF_FIXTURES.find(
+    (candidate) =>
+      candidate.email.toLowerCase() === auth.email.toLowerCase() ||
+      candidate.zohoEmail.toLowerCase() === auth.email.toLowerCase(),
+  );
+  if (!staff) {
+    throw Object.assign(new Error("Mobile staff profile was not found."), {
+      code: "UNAUTHORIZED",
+      status: 401,
+    });
+  }
+
+  return {
+    active: staff.active,
+    baseOffice: staff.baseOffice,
+    displayName: staff.displayName,
+    dispatchEnabled: true,
+    id: staff.id,
+    mspCentralEmail: staff.mspCentralEmail,
+    mspCentralTechnicianId: staff.mspCentralTechnicianId,
+    outlookEmail: staff.outlookEmail,
+    outlookUserPrincipalName: staff.outlookUserPrincipalName,
+    role: staff.role,
+    zohoEmail: staff.zohoEmail,
+  };
 }
 
 async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string) {

@@ -102,7 +102,30 @@ describe("MSP Central shared OAuth token coordinator", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("falls back to its local cache when shared storage is unavailable", async () => {
+  it("does not bypass a shared cooldown with a token cached by a warm instance", async () => {
+    const now = Date.now();
+    const store = new MemoryTokenStore();
+    await store.saveToken("shared-key", {
+      accessToken: "now-rejected-access-token",
+      expiresAt: now + 3_600_000,
+    });
+    const refresh = vi.fn();
+    const coordinator = new MspOAuthAccessTokenCoordinator({
+      now: () => now,
+      store,
+    });
+
+    await coordinator.getToken("shared-key", refresh);
+    await store.invalidateToken("shared-key", "now-rejected-access-token");
+    await store.blockRefresh("shared-key", now + 600_000);
+
+    await expect(coordinator.getToken("shared-key", refresh)).rejects.toThrow(
+      "temporarily throttled",
+    );
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of refreshing Zoho when shared storage is unavailable", async () => {
     const store: MspOAuthTokenStore = {
       blockRefresh: vi.fn().mockRejectedValue(new Error("database unavailable")),
       getRefreshBlockedUntil: vi
@@ -120,13 +143,10 @@ describe("MSP Central shared OAuth token coordinator", () => {
     });
     const coordinator = new MspOAuthAccessTokenCoordinator({ store });
 
-    await expect(coordinator.getToken("shared-key", refresh)).resolves.toBe(
-      "local-access-token",
+    await expect(coordinator.getToken("shared-key", refresh)).rejects.toThrow(
+      "shared token coordination is unavailable",
     );
-    await expect(coordinator.getToken("shared-key", refresh)).resolves.toBe(
-      "local-access-token",
-    );
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("shares Zoho Access Denied cooldown across isolated server instances", async () => {

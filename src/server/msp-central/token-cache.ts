@@ -91,7 +91,7 @@ export class MspOAuthAccessTokenCoordinator {
     this.entries.set(cacheKey, entry);
     const now = this.now();
 
-    if (isFresh(entry, now, this.refreshBufferMs)) {
+    if (!this.store && isFresh(entry, now, this.refreshBufferMs)) {
       return entry.accessToken as string;
     }
 
@@ -125,7 +125,7 @@ export class MspOAuthAccessTokenCoordinator {
           entry.blockedUntil = this.now() + this.throttleCooldownMs;
         }
 
-        if (stillValidToken) {
+        if (stillValidToken && isAccessDenied(safeError)) {
           return stillValidToken;
         }
 
@@ -179,7 +179,7 @@ export class MspOAuthAccessTokenCoordinator {
         this.store.getToken(cacheKey),
       ]);
     } catch {
-      return this.refreshAndSaveLocally(entry, refresh);
+      throw sharedCoordinationError();
     }
 
     if (sharedToken && isFresh(sharedToken, this.now(), this.refreshBufferMs)) {
@@ -204,7 +204,7 @@ export class MspOAuthAccessTokenCoordinator {
         this.now() + this.refreshLeaseMs,
       );
     } catch {
-      return this.refreshAndSaveLocally(entry, refresh);
+      throw sharedCoordinationError();
     }
 
     if (acquired) {
@@ -281,7 +281,7 @@ export class MspOAuthAccessTokenCoordinator {
           this.store?.getToken(cacheKey),
         ]);
       } catch {
-        return this.refreshAndSaveLocally(entry, refresh);
+        throw sharedCoordinationError();
       }
 
       if (token && isFresh(token, this.now(), this.refreshBufferMs)) {
@@ -355,5 +355,11 @@ function isAccessDenied(error: Error) {
 function throttledRefreshError() {
   return new MspCentralConfigurationError(
     "MSP Central OAuth refresh is temporarily throttled.",
+  );
+}
+
+function sharedCoordinationError() {
+  return new MspCentralConfigurationError(
+    "MSP Central shared token coordination is unavailable.",
   );
 }

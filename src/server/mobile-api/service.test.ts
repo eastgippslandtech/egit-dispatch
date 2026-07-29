@@ -5,6 +5,7 @@ import {
   completeMobileJob,
   listMobileJobs,
   getMobileJob,
+  registerMobilePushToken,
   rileyMobileAuth,
   saveMobileWorklog,
 } from "./service";
@@ -122,6 +123,27 @@ describe("mobile API service", () => {
     expect(
       response.jobs.every((job) => job.technician.email === "riley@egit.com.au"),
     ).toBe(true);
+  });
+
+  it("stores the Expo push token against the authenticated technician", async () => {
+    const registerDevice = vi.fn(async () => undefined);
+
+    await registerMobilePushToken({
+      appVersion: "1.0.0",
+      auth: rileyMobileAuth,
+      installationId: "riley-iphone",
+      platform: "ios",
+      pushToken: "ExponentPushToken[riley]",
+      repository: { registerDevice },
+    });
+
+    expect(registerDevice).toHaveBeenCalledWith({
+      appVersion: "1.0.0",
+      installationId: "riley-iphone",
+      platform: "ios",
+      pushToken: "ExponentPushToken[riley]",
+      staffEmail: "riley@egit.com.au",
+    });
   });
 
   it("rejects a write to an Outlook-only event", async () => {

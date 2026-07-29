@@ -55,6 +55,7 @@ export type DispatchRequest = {
   helpdeskUrl?: string;
   notes?: string;
   updatedAt?: string;
+  updatedByEmail?: string;
   updateInfo?: {
     at: string;
     detail?: string;

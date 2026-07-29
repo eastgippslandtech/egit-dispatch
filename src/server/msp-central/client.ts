@@ -50,6 +50,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
   const profiles = getInitialStaffProfiles();
 
   return {
+    async assignRequest() {
+      return undefined;
+    },
     async getRequest(requestId) {
       return (await this.listRequests()).find(
         (request) => request.id === requestId || request.requestNumber === requestId,
@@ -121,6 +124,20 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   const getAccessToken = () => getCachedAccessToken(config);
 
   return {
+    async assignRequest(input) {
+      assertConfigured();
+      await requestJson(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request: { technician: { name: input.technicianName } },
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+    },
     async getRequest(requestId) {
       assertConfigured();
       const payload = await getJson<MspCentralRequestDetailResponse>(

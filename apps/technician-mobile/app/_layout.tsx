@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import * as Notifications from "expo-notifications";
 import { StatusBar } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -7,6 +8,15 @@ import {
   useSession,
 } from "../src/providers/app-providers";
 import { colours } from "../src/theme/tokens";
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 export function RootNavigator() {
   const { session } = useSession();

@@ -76,6 +76,10 @@ vi.mock("@expo/vector-icons/MaterialCommunityIcons", () => ({
   default: "MaterialCommunityIcons",
 }));
 
+vi.mock("expo-notifications", () => ({
+  setNotificationHandler: vi.fn(),
+}));
+
 vi.mock("expo-router", () => {
   function Stack({ children }: PropsWithChildren) {
     return createElement(Fragment, null, children);

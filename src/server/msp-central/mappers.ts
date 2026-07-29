@@ -52,6 +52,7 @@ export function mapMspCentralRequest(
   raw: MspCentralRawRequest,
   options: MapRequestOptions = {},
 ): DispatchRequest {
+  const now = options.now ?? new Date();
   const profiles = options.profiles ?? getInitialStaffProfiles();
   const match = findStaffForMspCentralTechnician(
     normalizeTechnician(raw.technician),
@@ -84,6 +85,7 @@ export function mapMspCentralRequest(
         siteTown,
         text: [readString(raw.subject), notes],
         technicianHasIdentity: hasTechnicianIdentity(raw.technician),
+        now,
       });
   const warnings = [
     ...assetWarnings(raw),
@@ -94,7 +96,7 @@ export function mapMspCentralRequest(
 
   return {
     id: readString(raw.id) ?? requestNumber,
-    ageHours: estimateAgeHours(readDateTime(raw.created_time), options.now),
+    ageHours: estimateAgeHours(readDateTime(raw.created_time), now),
     assetNames: raw.assets
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
@@ -130,7 +132,7 @@ export function mapMspCentralRequest(
     slaState: mapMspCentralSlaState(
       readString(raw.sla?.status) ?? readString(raw.sla_status),
       dueAt,
-      options.now,
+      now,
     ),
     sourceSystem: options.sourceSystem ?? "msp-central-fixture",
     status: mapMspCentralStatus(readPriorityStatusName(raw.status), scheduledStart),
@@ -140,6 +142,9 @@ export function mapMspCentralRequest(
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,
     updatedAt: readDateTime(raw.updated_time),
+    updatedByEmail:
+      readString(raw.updated_by?.email) ??
+      readString(raw.last_updated_by?.email),
     warnings,
   };
 }
@@ -253,6 +258,7 @@ function autoAssignAdvancedWorksTechnician({
   siteTown,
   text,
   technicianHasIdentity,
+  now,
 }: {
   customer: string;
   site: string;
@@ -262,8 +268,13 @@ function autoAssignAdvancedWorksTechnician({
   siteTown?: string;
   text: Array<string | undefined>;
   technicianHasIdentity: boolean;
+  now: Date;
 }) {
-  if (technicianHasIdentity || !isAdvancedWorksCustomer(customer)) {
+  if (
+    technicianHasIdentity ||
+    !isAdvancedWorksCustomer(customer) ||
+    !isOutsideDispatchHours(now)
+  ) {
     return undefined;
   }
 
@@ -287,6 +298,27 @@ function autoAssignAdvancedWorksTechnician({
     technicianId:
       bairnsdaleDistance <= saleDistance ? "tech-jervy" : "tech-matt",
   };
+}
+
+export function isOutsideDispatchHours(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+  }).formatToParts(now);
+  const weekday = parts.find((part) => part.type === "weekday")?.value;
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  const weekdays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+  const minutes = hour * 60 + minute;
+
+  return !weekday ||
+    !weekdays.has(weekday) ||
+    !Number.isFinite(minutes) ||
+    minutes < 9 * 60 ||
+    minutes >= 17 * 60;
 }
 
 function isAdvancedWorksCustomer(customer: string) {

@@ -13,6 +13,7 @@ import {
 
 describe("MSP Central request mappers", () => {
   const now = new Date("2026-07-09T09:00:00+10:00");
+  const afterHours = new Date("2026-07-09T19:00:00+10:00");
 
   it("maps fixture-style requests into Command Centre requests", () => {
     const request = mapMspCentralRequest(
@@ -141,6 +142,26 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("does not auto-assign Advanced Works during office hours", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: { name: "Advanced Works" },
+        request_number: "REQ-AW-DAYTIME",
+        site: {
+          city: "Bairnsdale",
+          name: "Bairnsdale client site",
+        },
+        technician: null,
+      },
+      { now },
+    );
+
+    expect(request.technicianId).toBeUndefined();
+    expect(request.warnings).not.toContain(
+      "Auto-assigned by Advanced Works/Viridian IT site proximity.",
+    );
+  });
+
   it("maps priority, status, due, and scheduled classification", () => {
     expect(mapMspCentralPriority("urgent")).toBe("Critical");
     expect(mapMspCentralPriority("low")).toBe("Low");
@@ -180,7 +201,7 @@ describe("MSP Central request mappers", () => {
         request_number: "REQ-MSP-NAME",
         technician: { name: "Riley" },
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(displayNameOnly.technicianId).toBe("tech-riley");
@@ -218,7 +239,7 @@ describe("MSP Central request mappers", () => {
         },
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
     const saleRequest = mapMspCentralRequest(
       {
@@ -231,7 +252,7 @@ describe("MSP Central request mappers", () => {
         },
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(bairnsdaleRequest.technicianId).toBe("tech-jervy");
@@ -260,7 +281,7 @@ describe("MSP Central request mappers", () => {
           name: "Jervy",
         },
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(request.technicianId).toBe("tech-jervy");
@@ -277,7 +298,7 @@ describe("MSP Central request mappers", () => {
         subject: "Printer offline at Lakes Entrance office",
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
     const descriptionLocation = mapMspCentralRequest(
       {
@@ -287,7 +308,7 @@ describe("MSP Central request mappers", () => {
         subject: "POS issue",
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(subjectLocation.technicianId).toBe("tech-jervy");

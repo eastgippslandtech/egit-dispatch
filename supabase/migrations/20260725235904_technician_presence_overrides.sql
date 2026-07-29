@@ -47,7 +47,7 @@ create table if not exists public.technician_presence_overrides (
   )
 );
 
-create index technician_presence_overrides_active_idx
+create index if not exists technician_presence_overrides_active_idx
   on public.technician_presence_overrides (
     staff_profile_id,
     starts_at,

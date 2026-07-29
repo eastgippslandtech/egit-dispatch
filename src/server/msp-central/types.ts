@@ -53,6 +53,8 @@ export type MspCentralRawRequest = {
   technician?: MspCentralRawTechnician | null;
   udf_fields?: Record<string, unknown> | null;
   updated_time?: MspCentralTimestamp | null;
+  updated_by?: { email?: string | null; name?: string | null } | null;
+  last_updated_by?: { email?: string | null; name?: string | null } | null;
 };
 
 export type MspCentralRequestListResponse = {
@@ -74,6 +76,10 @@ export type MspCentralListRequestsParams = {
 };
 
 export type MspCentralClient = {
+  assignRequest(input: {
+    requestId: string;
+    technicianName: string;
+  }): Promise<void>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
   listCustomers(): Promise<Array<{ id: string; name: string }>>;

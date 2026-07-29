@@ -37,6 +37,10 @@ import {
   type DatabaseStaffRow,
   type MobileDatabase,
 } from "./database";
+import {
+  getConfiguredNotificationRepository,
+  type PushRegistrationRepository,
+} from "@/server/notifications/repository";
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -319,14 +323,29 @@ export async function completeMobileJob({
 
 export async function registerMobilePushToken({
   appVersion,
+  auth,
   installationId,
   platform,
+  repository = getConfiguredNotificationRepository(),
+  pushToken,
 }: {
   appVersion: string;
+  auth: MobileAuthContext;
   installationId: string;
   platform: string;
+  repository?: PushRegistrationRepository | null;
   pushToken: string;
 }) {
+  if (repository) {
+    await repository.registerDevice({
+      appVersion,
+      installationId,
+      platform,
+      pushToken,
+      staffEmail: auth.email,
+    });
+  }
+
   return {
     device: {
       appVersion,

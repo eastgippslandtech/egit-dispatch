@@ -1,5 +1,6 @@
 export type MobileApiFailureCode =
   | "BAD_REQUEST"
+  | "INTERNAL_ERROR"
   | "NOT_APPROVED"
   | "NOT_FOUND"
   | "READ_ONLY_SOURCE"

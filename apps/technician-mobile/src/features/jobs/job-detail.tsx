@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { MobileJob } from "../../contracts/mobile";
 import { AppButton } from "../../components/app-button";
+import { getMobileRuntimeConfig } from "../../config/runtime";
 import { useTechnicianRepository } from "../../providers/app-providers";
 import { colours } from "../../theme/tokens";
 import { useActiveTimer } from "../timer/active-timer-provider";
@@ -24,7 +25,13 @@ export function JobDetail({ jobId }: JobDetailProps) {
     stopActiveTimer,
     timerMessage,
   } = useActiveTimer();
-  const actions = useMemo(() => createNativeActions(), []);
+  const actions = useMemo(
+    () =>
+      createNativeActions({
+        paymentsAppUrl: getMobileRuntimeConfig().paymentsAppUrl,
+      }),
+    [],
+  );
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<MobileJob | null>(null);
 
@@ -137,6 +144,25 @@ export function JobDetail({ jobId }: JobDetailProps) {
               disabled={!job.outlookWebLink}
               label="Open Outlook event"
               onPress={() => void actions.openOutlookEvent(job.outlookWebLink)}
+            />
+            <ActionButton
+              disabled={!job.requestNumber || !job.customerName}
+              label="Take payment"
+              onPress={() => {
+                void actions
+                  .takePayment({
+                    customerName: job.customerName,
+                    requestNumber: job.requestNumber,
+                  })
+                  .then((opened) => {
+                    if (!opened) {
+                      Alert.alert(
+                        "Payments app unavailable",
+                        "Install or update the EGIT Payments app, then try again.",
+                      );
+                    }
+                  });
+              }}
             />
           </View>
         </Section>

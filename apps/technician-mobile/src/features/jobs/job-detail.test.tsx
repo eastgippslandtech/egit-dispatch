@@ -1,4 +1,5 @@
 import { Fragment, createElement, type PropsWithChildren } from "react";
+import { Alert, Linking } from "react-native";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -126,6 +127,8 @@ async function pressButton(rendered: ReactTestRenderer, label: string) {
 describe("job detail", () => {
   beforeEach(() => {
     secureStore.values.clear();
+    vi.mocked(Alert.alert).mockClear();
+    vi.mocked(Linking.openURL).mockClear();
   });
 
   afterEach(() => {
@@ -243,6 +246,58 @@ describe("job detail", () => {
     expect(customerFacing.props.accessibilityState).toMatchObject({
       selected: true,
     });
+  });
+
+  it("shows Take payment on the native job detail screen and opens EGIT Payments with job context", async () => {
+    const job: MobileJob = {
+      ...MOBILE_JOB_FIXTURES[0],
+      customerName: "East Gippsland Health & Tech / Bairnsdale #1",
+      requestNumber: "REQ/100 284",
+    };
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+
+    const rendered = await renderJobDetail(job.id, repository);
+
+    expect(button(rendered, "Take payment").props.disabled).toBe(false);
+
+    await pressButton(rendered, "Take payment");
+
+    expect(Linking.openURL).toHaveBeenCalledWith(
+      "egitpayments://take-payment?jobNumber=REQ%2F100+284&customerName=East+Gippsland+Health+%26+Tech+%2F+Bairnsdale+%231",
+    );
+  });
+
+  it("disables Take payment when required payment context is missing", async () => {
+    const job: MobileJob = {
+      ...MOBILE_JOB_FIXTURES[0],
+      customerName: null,
+      requestNumber: "REQ-100301",
+    };
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+
+    const rendered = await renderJobDetail(job.id, repository);
+
+    expect(button(rendered, "Take payment").props.disabled).toBe(true);
+  });
+
+  it("shows a friendly message when EGIT Payments is unavailable", async () => {
+    vi.mocked(Linking.openURL).mockRejectedValueOnce(
+      new Error("No app can open this URL"),
+    );
+    const rendered = await renderJobDetail("firewall-riley");
+
+    await pressButton(rendered, "Take payment");
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      "Payments app unavailable",
+      "Install or update the EGIT Payments app, then try again.",
+    );
   });
 
   it("stops a timer restored after the app was closed", async () => {

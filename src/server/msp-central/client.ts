@@ -16,6 +16,7 @@ import type {
 
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60_000;
 const ACCESS_TOKEN_THROTTLE_COOLDOWN_MS = 10 * 60_000;
+const MSP_REQUEST_TIMEOUT_MS = 10_000;
 
 type AccessTokenCacheEntry = {
   accessToken?: string;
@@ -281,6 +282,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           : {}),
       },
       method: init.method,
+      signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -319,6 +321,7 @@ async function refreshAccessToken(config: DispatchConfig) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     method: "POST",
+    signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
   });
   const payload = await readOAuthTokenResponse(response);
 

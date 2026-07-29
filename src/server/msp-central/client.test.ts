@@ -310,6 +310,7 @@ describe("MSP Central live client", () => {
     expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
       request: { technician: { name: "Jervy" } },
     });
+    expect(fetchMock.mock.calls[1][1].signal).toBeInstanceOf(AbortSignal);
   });
 
   it("merges a duplicate child request into the surviving parent request", async () => {

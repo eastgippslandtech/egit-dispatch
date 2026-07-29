@@ -114,6 +114,53 @@ describe("technician notification poll", () => {
     expect(sendPush).toHaveBeenCalledTimes(1);
   });
 
+  it("uses batched repository reads and writes when available", async () => {
+    const states = new Map<
+      string,
+      Parameters<NotificationRepository["saveState"]>[0]
+    >();
+    const getState = vi.fn(async () => undefined);
+    const listPushTokens = vi.fn(async () => []);
+    const saveState = vi.fn(async () => undefined);
+    const getStates = vi.fn(async () => states);
+    const listPushTokensByTechnician = vi.fn(
+      async () =>
+        new Map([["tech-jervy", ["ExponentPushToken[jervy]"]]]),
+    );
+    const saveStates = vi.fn(async (nextStates) => {
+      for (const state of nextStates) {
+        states.set(state.requestId, state);
+      }
+    });
+    const repository: NotificationRepository = {
+      getState,
+      getStates,
+      listPushTokens,
+      listPushTokensByTechnician,
+      recordDelivery: vi.fn(async () => undefined),
+      saveState,
+      saveStates,
+    };
+    const client = {
+      assignRequest: vi.fn(async () => undefined),
+      listRequests: async () => [request],
+    } as unknown as MspCentralClient;
+
+    await processTechnicianNotifications({
+      client,
+      now: new Date("2026-07-29T19:02:00+10:00"),
+      repository,
+      sendPush: vi.fn(async () => ({ receiptId: "expo-batch" })),
+    });
+
+    expect(getStates).toHaveBeenCalledWith(["aw-1001"]);
+    expect(listPushTokensByTechnician).toHaveBeenCalledWith(["tech-jervy"]);
+    expect(saveStates).toHaveBeenCalledOnce();
+    expect(getState).not.toHaveBeenCalled();
+    expect(listPushTokens).not.toHaveBeenCalled();
+    expect(saveState).not.toHaveBeenCalled();
+  });
+
   it("notifies a technician when a recent assigned request is first observed", async () => {
     const assignedRequest = {
       ...request,

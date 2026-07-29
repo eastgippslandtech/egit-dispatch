@@ -16,9 +16,16 @@ const AUTO_ASSIGNMENT_WARNING =
 
 export type NotificationRepository = {
   getState(requestId: string): Promise<NotificationRequestState | undefined>;
+  getStates?(
+    requestIds: string[],
+  ): Promise<Map<string, NotificationRequestState>>;
   listPushTokens(technicianId: string): Promise<string[]>;
+  listPushTokensByTechnician?(
+    technicianIds: string[],
+  ): Promise<Map<string, string[]>>;
   recordDelivery(input: NotificationDelivery): Promise<void>;
   saveState(state: NotificationRequestState): Promise<void>;
+  saveStates?(states: NotificationRequestState[]): Promise<void>;
 };
 
 export async function processTechnicianNotifications({
@@ -33,16 +40,37 @@ export async function processTechnicianNotifications({
   sendPush?: (message: PushMessage) => Promise<{ receiptId?: string }>;
 }) {
   const requests = await client.listRequests();
+  const requestIds = requests.map((request) => request.id);
+  const technicianIds = [
+    ...new Set(
+      requests
+        .map((request) => request.technicianId)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const states = repository.getStates
+    ? await repository.getStates(requestIds)
+    : undefined;
+  const pushTokens = repository.listPushTokensByTechnician
+    ? await repository.listPushTokensByTechnician(technicianIds)
+    : undefined;
+  const nextStates: NotificationRequestState[] = [];
   let sent = 0;
   let skipped = 0;
 
   for (const request of requests) {
-    const previous = await repository.getState(request.id);
+    const previous = states
+      ? states.get(request.id)
+      : await repository.getState(request.id);
     const state = requestState(request);
     const event = notificationEvent(request, previous, now);
 
     if (!event || !request.technicianId) {
-      await repository.saveState(state);
+      if (repository.saveStates) {
+        nextStates.push(state);
+      } else {
+        await repository.saveState(state);
+      }
       skipped += 1;
       continue;
     }
@@ -54,7 +82,9 @@ export async function processTechnicianNotifications({
       });
     }
 
-    const tokens = await repository.listPushTokens(request.technicianId);
+    const tokens = pushTokens
+      ? (pushTokens.get(request.technicianId) ?? [])
+      : await repository.listPushTokens(request.technicianId);
     const title = event.title;
     const body = `${request.requestNumber}: ${request.subject}`;
     const eventKey = [
@@ -101,7 +131,15 @@ export async function processTechnicianNotifications({
       technicianId: request.technicianId,
       title,
     });
-    await repository.saveState(state);
+    if (repository.saveStates) {
+      nextStates.push(state);
+    } else {
+      await repository.saveState(state);
+    }
+  }
+
+  if (repository.saveStates && nextStates.length > 0) {
+    await repository.saveStates(nextStates);
   }
 
   return { observed: requests.length, sent, skipped };

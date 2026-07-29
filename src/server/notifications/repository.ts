@@ -97,6 +97,24 @@ export class PostgresNotificationRepository
     return rows[0]?.snapshot;
   }
 
+  async getStates(requestIds: string[]) {
+    if (requestIds.length === 0) {
+      return new Map<string, NotificationRequestState>();
+    }
+
+    const rows = await this.sql<
+      Array<{ requestId: string; snapshot: NotificationRequestState }>
+    >`
+      select
+        request_id as "requestId",
+        snapshot
+      from public.dispatch_request_notification_state
+      where request_id in ${this.sql(requestIds)}
+    `;
+
+    return new Map(rows.map((row) => [row.requestId, row.snapshot]));
+  }
+
   async saveState(state: NotificationRequestState) {
     await this.sql`
       insert into public.dispatch_request_notification_state (
@@ -115,6 +133,40 @@ export class PostgresNotificationRepository
         ${this.sql.json(state)},
         now()
       )
+      on conflict (request_id) do update set
+        request_number = excluded.request_number,
+        technician_id = excluded.technician_id,
+        fingerprint = excluded.fingerprint,
+        snapshot = excluded.snapshot,
+        last_observed_at = now(),
+        updated_at = now()
+    `;
+  }
+
+  async saveStates(states: NotificationRequestState[]) {
+    if (states.length === 0) {
+      return;
+    }
+
+    const values = states.map((state) => ({
+      fingerprint: state.fingerprint,
+      request_id: state.requestId,
+      request_number: state.requestNumber,
+      snapshot: this.sql.json(state),
+      technician_id: state.technicianId ?? null,
+    }));
+
+    await this.sql`
+      insert into public.dispatch_request_notification_state ${
+        this.sql(
+          values,
+          "request_id",
+          "request_number",
+          "technician_id",
+          "fingerprint",
+          "snapshot",
+        )
+      }
       on conflict (request_id) do update set
         request_number = excluded.request_number,
         technician_id = excluded.technician_id,
@@ -144,6 +196,46 @@ export class PostgresNotificationRepository
     `;
 
     return [...new Set(rows.map((row) => row.pushToken))];
+  }
+
+  async listPushTokensByTechnician(technicianIds: string[]) {
+    const profiles = getInitialStaffProfiles().filter((candidate) =>
+      technicianIds.includes(`tech-${candidate.displayName.toLowerCase()}`),
+    );
+    if (profiles.length === 0) {
+      return new Map<string, string[]>();
+    }
+
+    const emails = profiles.map((profile) => profile.zohoEmail.toLowerCase());
+    const rows = await this.sql<
+      Array<{ pushToken: string; staffEmail: string }>
+    >`
+      select
+        mpd.push_token as "pushToken",
+        lower(sp.zoho_email) as "staffEmail"
+      from public.mobile_push_devices mpd
+      join public.staff_profiles sp on sp.id = mpd.staff_profile_id
+      where lower(sp.zoho_email) in ${this.sql(emails)}
+        and mpd.active = true
+      order by mpd.last_registered_at desc
+    `;
+
+    return new Map(
+      profiles.map((profile) => {
+        const email = profile.zohoEmail.toLowerCase();
+        const technicianId = `tech-${profile.displayName.toLowerCase()}`;
+        return [
+          technicianId,
+          [
+            ...new Set(
+              rows
+                .filter((row) => row.staffEmail === email)
+                .map((row) => row.pushToken),
+            ),
+          ],
+        ];
+      }),
+    );
   }
 
   async recordDelivery(input: NotificationDelivery) {

@@ -43,6 +43,14 @@ export async function POST(request: Request) {
       timezone: config.microsoft.timezone,
     });
     const mspClient = createMspCentralClient(config);
+    const liveRequest = await mspClient.getRequest(command.requestId);
+
+    if (!liveRequest || liveRequest.sourceSystem !== "msp-central") {
+      throw new Error(
+        "The Helpdesk request no longer exists. Refresh Command Centre before scheduling it.",
+      );
+    }
+
     const graphInput = {
       bodyPreview: [
         command.requestNumber,

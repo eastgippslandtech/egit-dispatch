@@ -2,6 +2,7 @@ export type Severity = "critical" | "warning" | "info" | "healthy";
 export type SlaState = "overdue" | "due-soon" | "normal";
 export type Priority = "Critical" | "High" | "Medium" | "Low";
 export type BookingType = "Remote" | "Onsite" | "In house";
+export type RequestSentiment = "positive" | "neutral" | "negative";
 export type RequestStatus =
   | "Open"
   | "Ready for Scheduling"
@@ -77,6 +78,7 @@ export type DispatchRequest = {
   requester: string;
   contact: string;
   priority: Priority;
+  sentiment?: RequestSentiment;
   status: RequestStatus;
   bookingType?: BookingType;
   technicianId?: string;

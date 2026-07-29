@@ -6,6 +6,7 @@ import {
   mapMspCentralPriority,
   mapMspCentralRequest,
   mapMspCentralRequests,
+  mapMspCentralSentiment,
   mapMspCentralSlaState,
   mapMspCentralStatus,
   mapMspCentralTechnicians,
@@ -177,6 +178,23 @@ describe("MSP Central request mappers", () => {
         now,
       ),
     ).toBe("due-soon");
+  });
+
+  it("maps supported Zia sentiment values and hides unknown sentiment", () => {
+    expect(mapMspCentralSentiment("Positive")).toBe("positive");
+    expect(mapMspCentralSentiment("Neutral")).toBe("neutral");
+    expect(mapMspCentralSentiment("Very negative")).toBe("negative");
+    expect(mapMspCentralSentiment("Not calculated")).toBeUndefined();
+
+    expect(
+      mapMspCentralRequest(
+        {
+          request_number: "REQ-SENTIMENT",
+          sentiment_analysis: { name: "Negative" },
+        },
+        { now },
+      ).sentiment,
+    ).toBe("negative");
   });
 
   it("prefers MSP technician ID and warns on display-name-only matches", () => {

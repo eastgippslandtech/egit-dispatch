@@ -11,6 +11,7 @@ import {
 import type { MobileJob, NoteVisibility, WorkLogType } from "../../contracts/mobile";
 import { useTechnicianRepository } from "../../providers/app-providers";
 import { colours } from "../../theme/tokens";
+import { getMobileChargeableTime } from "./chargeable-time";
 import { createWorklogDraftStore, saveWorklogWithDraft } from "./worklog-service";
 
 export function WorklogForm({
@@ -21,8 +22,11 @@ export function WorklogForm({
   technicianId: string;
 }) {
   const repository = useTechnicianRepository();
+  const chargeableTime = getMobileChargeableTime(job);
   const [billable, setBillable] = useState(true);
-  const [durationMinutes, setDurationMinutes] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState(
+    chargeableTime.totalMinutes > 0 ? String(chargeableTime.totalMinutes) : "",
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [visibility, setVisibility] = useState<NoteVisibility>("external");
@@ -48,6 +52,12 @@ export function WorklogForm({
         <InfoLine label="Scheduled time" value={`${job.startAt} - ${job.endAt}`} />
         <InfoLine label="Due time" value={job.slaDueAt} />
         <InfoLine label="Booking type" value={job.bookingType} />
+        {chargeableTime.travelMinutes > 0 ? (
+          <InfoLine
+            label="Chargeable time"
+            value={`${chargeableTime.jobMinutes} min job + ${chargeableTime.travelMinutes} min travel = ${chargeableTime.totalMinutes} min`}
+          />
+        ) : null}
         <InfoLine label="Contact" value={job.contactName} />
         <InfoLine
           label="Site/address"

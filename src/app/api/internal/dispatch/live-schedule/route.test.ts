@@ -46,6 +46,10 @@ describe("live dispatch schedule route", () => {
       webLink: "https://outlook/event-1",
     });
     const updateRequestSchedule = vi.fn().mockResolvedValue(undefined);
+    const getRequest = vi.fn().mockResolvedValue({
+      id: "123",
+      sourceSystem: "msp-central",
+    });
     getCommandCentreAccessMock.mockResolvedValue({
       accessLevel: "staff",
       email: "simeon@egit.com.au",
@@ -59,7 +63,7 @@ describe("live dispatch schedule route", () => {
       updateEvent: vi.fn(),
     });
     createMspCentralClientMock.mockReturnValue({
-      getRequest: vi.fn(),
+      getRequest,
       getTechnician: vi.fn(),
       listCustomers: vi.fn(),
       listRequests: vi.fn(),
@@ -105,5 +109,52 @@ describe("live dispatch schedule route", () => {
       scheduledStart: "2026-07-24T10:00:00+10:00",
       technicianName: "Matt",
     });
+    expect(getRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      createEvent.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not create an Outlook event when the Helpdesk request is missing", async () => {
+    const createEvent = vi.fn();
+    getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
+      email: "simeon@egit.com.au",
+      name: "Simeon",
+      status: "approved",
+    });
+    createGraphClientMock.mockReturnValue({
+      acquireToken: vi.fn(),
+      createEvent,
+      listCalendarView: vi.fn(),
+      updateEvent: vi.fn(),
+    });
+    createMspCentralClientMock.mockReturnValue({
+      getRequest: vi.fn().mockResolvedValue(undefined),
+      getTechnician: vi.fn(),
+      listCustomers: vi.fn(),
+      listRequests: vi.fn(),
+      listSites: vi.fn(),
+      listTechnicians: vi.fn(),
+      refreshAccessToken: vi.fn(),
+      updateRequestSchedule: vi.fn(),
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule", {
+        body: JSON.stringify({
+          date: "2026-07-24",
+          end: "11:00",
+          requestId: "missing",
+          requestNumber: "REQ-MISSING",
+          start: "10:00",
+          subject: "Missing request",
+          userPrincipalName: "mattd@egit.com.au",
+        }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createEvent).not.toHaveBeenCalled();
   });
 });

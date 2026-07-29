@@ -18,6 +18,7 @@ import type {
 
 import type { MobileAuthContext, MobileWorklogCommand } from "./contracts";
 import { mockIsoTime } from "@/server/dispatch/date-scope";
+import { readDispatchConfig } from "@/server/dispatch/env";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import {
   applyDispatchTestSyncEvents,
@@ -45,6 +46,8 @@ import {
   getConfiguredMobileOutlookCalendar,
   type MobileOutlookCalendar,
 } from "./outlook";
+import { createMspCentralClient } from "@/server/msp-central/client";
+import type { MspCentralClient } from "@/server/msp-central/types";
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -198,11 +201,13 @@ export async function saveMobileWorklog({
   command,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
 }: {
   auth: MobileAuthContext;
   command: MobileWorklogCommand;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
 }) {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -231,6 +236,13 @@ export async function saveMobileWorklog({
         status: 400,
       });
     }
+
+    await writeMobileWorklogToMsp({
+      body,
+      command,
+      mspClient,
+      requestId: job.sdpRequestId,
+    });
 
     const saved = await database.saveWorklog({
       billable: command.billable,
@@ -290,11 +302,13 @@ export async function completeMobileJob({
   command,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
 }: {
   auth: MobileAuthContext;
   command: MobileWorklogCommand;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
 }) {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -319,6 +333,19 @@ export async function completeMobileJob({
       throw Object.assign(new Error("Completion worklog body is required."), {
         code: "BAD_REQUEST",
         status: 400,
+      });
+    }
+
+    await writeMobileWorklogToMsp({
+      body,
+      command,
+      mspClient,
+      requestId: job.sdpRequestId,
+    });
+    if (mspClient?.updateRequestStatus) {
+      await mspClient.updateRequestStatus({
+        requestId: job.sdpRequestId,
+        status: command.followUpNeeded ? "Needs Follow-up" : "Resolved",
       });
     }
 
@@ -423,6 +450,43 @@ function findOwnedJob(auth: MobileAuthContext, jobId: string): MobileJob {
     });
   }
   return job;
+}
+
+function getConfiguredMobileMspClient() {
+  const config = readDispatchConfig();
+  return config.dispatchDataSource === "msp-central"
+    ? createMspCentralClient(config)
+    : null;
+}
+
+async function writeMobileWorklogToMsp({
+  body,
+  command,
+  mspClient,
+  requestId,
+}: {
+  body: string;
+  command: MobileWorklogCommand;
+  mspClient: MspCentralClient | null;
+  requestId: string;
+}) {
+  if (!mspClient?.addRequestWorklog) {
+    return;
+  }
+
+  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
+  const startedAt =
+    command.startedAt ??
+    new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+
+  await mspClient.addRequestWorklog({
+    description: body,
+    durationMinutes,
+    endedAt,
+    requestId,
+    startedAt,
+  });
 }
 
 function fixtureStaffAsDatabaseRow(auth: MobileAuthContext): DatabaseStaffRow {

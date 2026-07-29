@@ -13,6 +13,7 @@ const config: ExpoConfig = {
     bundleIdentifier: "au.com.egit.commandcentre",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
+      LSApplicationQueriesSchemes: ["egitpayments"],
       NSCameraUsageDescription:
         "Command Centre uses the camera only when you choose to capture job evidence.",
       NSLocationWhenInUseUsageDescription:

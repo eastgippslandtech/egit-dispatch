@@ -125,6 +125,58 @@ describe("MSP Central live client", () => {
     ).toHaveLength(1);
   });
 
+  it("refreshes once and retries when MSP Central rejects a cached access token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "stale-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "replacement-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ requests: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "retry-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "retry-client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "retry-refresh-token",
+      }),
+    );
+
+    await client.listRequests();
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining("/requests?"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Zoho-oauthtoken replacement-access-token",
+        }),
+      }),
+    );
+  });
+
   it("reuses one Zoho access token across separate client instances", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -273,6 +325,52 @@ describe("MSP Central live client", () => {
         scheduled_end_time: { value: "2026-07-24T11:00:00+10:00" },
         scheduled_start_time: { value: "2026-07-24T10:00:00+10:00" },
         technician: { name: "Matt" },
+      },
+    });
+  });
+
+  it("adds charged time to a request Work Log", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestWorklog?.({
+      description: "Resolved printer fault.",
+      durationMinutes: 95,
+      endedAt: "2026-07-24T11:35:00+10:00",
+      requestId: "123",
+      startedAt: "2026-07-24T10:00:00+10:00",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://mspcentral.manageengine.com.au/app/memsp1783593801295/api/v3/requests/123/worklogs",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
+      worklog: {
+        description: "Resolved printer fault.",
+        time_spent: { hours: "1", minutes: "35" },
       },
     });
   });

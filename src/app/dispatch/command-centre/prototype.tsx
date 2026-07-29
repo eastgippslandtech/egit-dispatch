@@ -10,12 +10,15 @@ import {
   Clock3,
   ExternalLink,
   Filter,
+  Frown,
   GitMerge,
   LogOut,
   MailWarning,
+  Meh,
   Monitor,
   RefreshCw,
   Search,
+  Smile,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -34,6 +37,7 @@ import type {
   Severity,
   Technician,
 } from "@/server/dispatch/types";
+import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
   buildTimelineLayout,
@@ -489,7 +493,7 @@ export function CommandCentrePrototype({
     setDropPreview(undefined);
   }
 
-  function saveWorkLog({
+  async function saveWorkLog({
     billable,
     complete,
     minutes,
@@ -506,14 +510,58 @@ export function CommandCentrePrototype({
   }) {
     const requestId = workLogRequestId;
     if (!requestId) return;
+    const selectedWorklogRequest = dashboard.requests.find(
+      (candidate) => candidate.id === requestId,
+    );
+    const worklogAppointment = dashboard.appointments.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (!selectedWorklogRequest) return;
 
     const trimmedNotes = notes.trim();
     if (!trimmedNotes) {
       setToast("Work Log notes are required.");
       return;
     }
+    const durationMinutes = Math.round(Number(minutes));
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+      setToast("Work Log time must be greater than zero.");
+      return;
+    }
 
     const updateAt = new Date().toISOString();
+    const liveWorklog =
+      dashboard.dispatchDataSource === "msp-central" &&
+      selectedWorklogRequest.sourceSystem === "msp-central";
+
+    if (liveWorklog) {
+      const endedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.end)
+        : updateAt;
+      const startedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.start)
+        : new Date(
+            new Date(endedAt).getTime() - durationMinutes * 60_000,
+          ).toISOString();
+
+      try {
+        await publishMspCentralWorklog({
+          complete,
+          description: trimmedNotes,
+          durationMinutes,
+          endedAt,
+          requestId,
+          startedAt,
+        });
+      } catch (error) {
+        setToast(
+          error instanceof Error
+            ? `Work Log did not save: ${error.message}`
+            : "Work Log did not save.",
+        );
+        return;
+      }
+    }
 
     setDashboard((current) => {
       const requests = current.requests.map((request) => {
@@ -522,11 +570,11 @@ export function CommandCentrePrototype({
         }
 
         const metadata = [
-          `${minutes || "0"} min`,
+          `${durationMinutes} min`,
           workTypeLabel(workType),
           visibility === "external" ? "customer-facing" : "internal",
           billable ? "billable" : "non-billable",
-          "mock/test-sync only",
+          liveWorklog ? "MSP Central" : "mock/test-sync",
         ].join(" · ");
 
         return {
@@ -557,9 +605,13 @@ export function CommandCentrePrototype({
     markTicketUpdateSeen(requestId);
     setWorkLogRequestId(undefined);
     setToast(
-      complete
-        ? "Work Log saved and ticket resolved locally for test sync."
-        : "Work Log saved locally for test sync.",
+      liveWorklog
+        ? complete
+          ? "Work Log saved and ticket resolved in MSP Central."
+          : "Work Log saved in MSP Central."
+        : complete
+          ? "Work Log saved and ticket resolved locally for test sync."
+          : "Work Log saved locally for test sync.",
     );
   }
 
@@ -956,7 +1008,7 @@ export function CommandCentrePrototype({
         return;
       }
 
-      const liveSchedule = canUseLiveSchedule(dashboard);
+      const liveSchedule = canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
       const appointmentId = liveSchedule
         ? `pending-live-${request.id}-${Date.now()}`
@@ -1081,7 +1133,8 @@ export function CommandCentrePrototype({
       const bookingType =
         currentAppointment?.bookingType ?? (request ? bookingTypeForRequest(request) : undefined);
 
-      const liveSchedule = Boolean(request) && canUseLiveSchedule(dashboard);
+      const liveSchedule =
+        Boolean(request) && canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
 
       try {
@@ -1185,7 +1238,11 @@ export function CommandCentrePrototype({
   }
 
   async function syncSelectedCalendarEvent() {
-    if (!selectedAppointment || !selectedRequest || !canUseLiveSchedule(dashboard)) {
+    if (
+      !selectedAppointment ||
+      !selectedRequest ||
+      !canUseLiveSchedule(dashboard, selectedRequest)
+    ) {
       return;
     }
 
@@ -1602,6 +1659,12 @@ export function CommandCentrePrototype({
             appointment={dashboard.appointments.find(
               (appointment) => appointment.requestId === workLogRequestId,
             )}
+            liveWriteback={
+              dashboard.dispatchDataSource === "msp-central" &&
+              dashboard.requests.find(
+                (request) => request.id === workLogRequestId,
+              )?.sourceSystem === "msp-central"
+            }
             onCancel={() => setWorkLogRequestId(undefined)}
             onSave={saveWorkLog}
             request={dashboard.requests.find(
@@ -1711,6 +1774,30 @@ async function publishMspCentralRequestMerge(event: {
   }
 }
 
+async function publishMspCentralWorklog(event: {
+  complete: boolean;
+  description: string;
+  durationMinutes: number;
+  endedAt: string;
+  requestId: string;
+  startedAt: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/worklogs", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central Work Log save failed.");
+  }
+}
+
 function testSyncErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
@@ -1725,8 +1812,12 @@ function liveScheduleErrorMessage(error: unknown) {
   return `Live schedule did not save: ${message}`;
 }
 
-function canUseLiveSchedule(dashboard: DispatchDashboardData) {
+function canUseLiveSchedule(
+  dashboard: DispatchDashboardData,
+  request?: DispatchRequest,
+) {
   return (
+    request?.sourceSystem === "msp-central" &&
     dashboard.dispatchDataSource === "msp-central" &&
     dashboard.calendarDataSource === "outlook" &&
     dashboard.calendarReadOnly === false
@@ -2232,12 +2323,14 @@ function ScheduleConfirmModal({
 
 function WorkLogModal({
   appointment,
+  liveWriteback,
   onCancel,
   onSave,
   request,
   technician,
 }: {
   appointment?: Appointment;
+  liveWriteback: boolean;
   onCancel: () => void;
   onSave: (input: {
     billable: boolean;
@@ -2250,8 +2343,22 @@ function WorkLogModal({
   request?: DispatchRequest;
   technician: string;
 }) {
+  const resolvedBookingType =
+    appointment?.bookingType ??
+    request?.bookingType ??
+    (request?.onsite === true
+      ? "Onsite"
+      : request?.onsite === false
+        ? "Remote"
+        : undefined);
+  const chargeableTime = getChargeableTicketTime({
+    appointment,
+    bookingType: resolvedBookingType,
+  });
   const [billable, setBillable] = useState(request?.billable ?? true);
-  const [minutes, setMinutes] = useState("");
+  const [minutes, setMinutes] = useState(
+    String(Math.max(1, chargeableTime.totalMinutes)),
+  );
   const [notes, setNotes] = useState("");
   const [visibility, setVisibility] = useState<"external" | "internal">(
     "external",
@@ -2267,8 +2374,7 @@ function WorkLogModal({
     : request.scheduledStart
       ? `${formatTime(request.scheduledStart)}-${formatTime(request.scheduledEnd ?? request.scheduledStart)}`
       : "Not scheduled";
-  const bookingType =
-    request.onsite === true ? "Onsite" : request.onsite === false ? "Remote" : "Not set";
+  const bookingType = resolvedBookingType ?? "Not set";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
@@ -2281,7 +2387,7 @@ function WorkLogModal({
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
-              Mock/test-sync only
+              {liveWriteback ? "MSP Central" : "Mock/test-sync only"}
             </p>
             <h2 id="work-log-title" className="mt-2 text-xl font-semibold">
               Work Log
@@ -2314,6 +2420,12 @@ function WorkLogModal({
             <DetailInline label="Scheduled time" value={scheduledTime} />
             <DetailInline label="Due time" value={formatDateTime(request.dueAt)} />
             <DetailInline label="Booking type" value={bookingType} />
+            {chargeableTime.travelMinutes > 0 ? (
+              <DetailInline
+                label="Chargeable time"
+                value={`${chargeableTime.jobMinutes} min job + ${chargeableTime.travelMinutes} min travel = ${chargeableTime.totalMinutes} min`}
+              />
+            ) : null}
             <DetailInline
               label="Contact"
               value={`${request.requester} / ${request.contact}`}
@@ -2413,8 +2525,9 @@ function WorkLogModal({
         </div>
 
         <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
-          MSP Central live Work Log writeback is not enabled here. These actions
-          are local/test-sync only and do not use Zoho login tokens for MSP API calls.
+          {liveWriteback
+            ? "Saving writes this Work Log and its charged time to MSP Central. Onsite travel is included in the ticket time."
+            : "This request is not a live MSP Central ticket. The Work Log remains local/test-sync only."}
         </div>
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -3499,6 +3612,7 @@ function WeekAppointmentCard({
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const priorityClass = bookingCardPriorityClass(request?.priority);
 
   return (
     <button
@@ -3509,9 +3623,7 @@ function WeekAppointmentCard({
       className={`w-full cursor-pointer rounded-md border px-2 py-1.5 text-left text-xs transition hover:-translate-y-0.5 ${
         active
           ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
-          : warning
-            ? "border-amber-300/50 bg-amber-300/15 text-amber-50"
-            : "border-sky-300/40 bg-sky-300/12 text-sky-50"
+          : `${priorityClass} ${warning ? "ring-1 ring-amber-200/70" : ""}`
       }`}
       type="button"
       onClick={onSelect}
@@ -3527,6 +3639,7 @@ function WeekAppointmentCard({
           {appointment.start}
         </span>
         <span className="flex shrink-0 items-center gap-1">
+          <SentimentIcon sentiment={request?.sentiment} />
           {hasUnreadUpdate ? (
             <TicketUpdateBadge
               compact
@@ -3646,6 +3759,7 @@ function TimelineOverlapGroup({
     frontAppointment.end,
     trackWidth,
   );
+  const frontPriorityClass = bookingCardPriorityClass(frontRequest?.priority);
 
   return (
     <div
@@ -3675,7 +3789,7 @@ function TimelineOverlapGroup({
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
             ? "border-cc-orange bg-cc-orange/24 text-cc-orange ring-2 ring-cc-orange"
-            : "border-rose-200/70 bg-rose-300/18 text-rose-50"
+            : `${frontPriorityClass} ring-1 ring-rose-200/70`
         }`}
         style={{
           height: item.cardHeight,
@@ -3707,7 +3821,10 @@ function TimelineOverlapGroup({
             {frontAppointment.title}
           </span>
           <span className="shrink-0 rounded-full border border-rose-100/40 bg-rose-100/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-50">
-            +{item.overlapCount - 1}
+            <span className="flex items-center gap-1">
+              <SentimentIcon sentiment={frontRequest?.sentiment} />
+              +{item.overlapCount - 1}
+            </span>
           </span>
         </div>
         <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] font-semibold leading-4 text-white/90">
@@ -3765,8 +3882,9 @@ function TimelineOverlapGroup({
                     <span className="line-clamp-2 font-semibold leading-snug text-slate-50">
                       {appointment.title}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-cc-orange">
-                      {appointment.start}-{appointment.end}
+                    <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-cc-orange">
+                      <SentimentIcon sentiment={request?.sentiment} />
+                      <span>{appointment.start}-{appointment.end}</span>
                     </span>
                   </div>
                   <div className="mt-1 truncate text-[11px] text-slate-300">
@@ -3870,6 +3988,7 @@ function TimelineAppointment({
             {appointment.title}
           </span>
           <span className="flex shrink-0 items-center gap-1">
+            <SentimentIcon sentiment={request?.sentiment} />
             {hasUnreadUpdate ? (
               <TicketUpdateBadge
                 compact
@@ -4114,6 +4233,12 @@ function DetailDrawer({
               <DetailRow label="Source" value={requestSourceLabel(request)} />
               <DetailRow label="Status" value={request.status} />
               <DetailRow label="Due time" value={formatDateTime(request.dueAt)} />
+              {request.sentiment ? (
+                <DetailRow
+                  label="Sentiment"
+                  value={sentimentLabel(request.sentiment)}
+                />
+              ) : null}
               <DetailRow
                 label="Notes"
                 value={requestNotesSummary(request)}
@@ -4490,6 +4615,45 @@ function PriorityChip({ priority }: { priority: DispatchRequest["priority"] }) {
       {priority}
     </span>
   );
+}
+
+function SentimentIcon({
+  sentiment,
+}: {
+  sentiment?: DispatchRequest["sentiment"];
+}) {
+  if (!sentiment) {
+    return null;
+  }
+
+  const config = {
+    negative: {
+      className: "text-rose-200",
+      Icon: Frown,
+      label: "Negative sentiment",
+    },
+    neutral: {
+      className: "text-slate-200",
+      Icon: Meh,
+      label: "Neutral sentiment",
+    },
+    positive: {
+      className: "text-emerald-200",
+      Icon: Smile,
+      label: "Positive sentiment",
+    },
+  }[sentiment];
+
+  return (
+    <config.Icon
+      aria-label={config.label}
+      className={`h-3.5 w-3.5 shrink-0 ${config.className}`}
+    />
+  );
+}
+
+function sentimentLabel(sentiment: NonNullable<DispatchRequest["sentiment"]>) {
+  return `${sentiment[0].toUpperCase()}${sentiment.slice(1)}`;
 }
 
 function TicketUpdateBadge({

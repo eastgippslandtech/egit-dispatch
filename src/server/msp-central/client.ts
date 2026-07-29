@@ -51,6 +51,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
   const profiles = getInitialStaffProfiles();
 
   return {
+    async addRequestWorklog() {
+      return undefined;
+    },
     async assignRequest() {
       return undefined;
     },
@@ -101,6 +104,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
     async updateRequestSchedule() {
       return undefined;
     },
+    async updateRequestStatus() {
+      return undefined;
+    },
   };
 }
 
@@ -125,6 +131,36 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   const getAccessToken = () => getCachedAccessToken(config);
 
   return {
+    async addRequestWorklog(input) {
+      assertConfigured();
+      const durationMinutes = Math.max(1, Math.round(input.durationMinutes));
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/worklogs`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              worklog: {
+                description: input.description,
+                end_time: { value: new Date(input.endedAt).getTime() },
+                include_nonoperational_hours: true,
+                start_time: { value: new Date(input.startedAt).getTime() },
+                time_spent: {
+                  hours: String(Math.floor(durationMinutes / 60)),
+                  minutes: String(durationMinutes % 60),
+                },
+              },
+            }),
+          }),
+          method: "POST",
+        },
+      );
+
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central Work Log save failed.",
+        );
+      }
+    },
     async assignRequest(input) {
       assertConfigured();
       await requestJson(
@@ -261,6 +297,20 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         },
       );
     },
+    async updateRequestStatus(input) {
+      assertConfigured();
+      await requestJson(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request: { status: { name: input.status } },
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+    },
   };
 
   async function getJson<T>(url: string): Promise<T> {
@@ -269,29 +319,51 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
   async function requestJson<T>(
     url: string,
-    init: { body?: URLSearchParams; method: "GET" | "PUT" },
+    init: { body?: URLSearchParams; method: "GET" | "POST" | "PUT" },
   ): Promise<T> {
-    const token = await getAccessToken();
-    const response = await fetch(url, {
-      body: init.body,
-      headers: {
-        Accept: "application/vnd.manageengine.sdp.v3+json",
-        Authorization: `Zoho-oauthtoken ${token}`,
-        ...(init.body
-          ? { "Content-Type": "application/x-www-form-urlencoded" }
-          : {}),
-      },
-      method: init.method,
-      signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
-    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const token = await getAccessToken();
+      const response = await fetch(url, {
+        body: init.body,
+        headers: {
+          Accept: "application/vnd.manageengine.sdp.v3+json",
+          Authorization: `Zoho-oauthtoken ${token}`,
+          ...(init.body
+            ? { "Content-Type": "application/x-www-form-urlencoded" }
+            : {}),
+        },
+        method: init.method,
+        signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
+      });
 
-    if (!response.ok) {
-      throw new MspCentralConfigurationError(
-        `MSP Central API request failed with status ${response.status}.`,
-      );
+      if ((response.status === 401 || response.status === 403) && attempt === 0) {
+        invalidateCachedAccessToken(config);
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new MspCentralConfigurationError(
+          `MSP Central API request failed with status ${response.status}.`,
+        );
+      }
+
+      const payload = (await response.json()) as T;
+      if (mspCentralAccessDenied(payload)) {
+        if (attempt === 0) {
+          invalidateCachedAccessToken(config);
+          continue;
+        }
+        throw new MspCentralConfigurationError(
+          "MSP Central API request was denied.",
+        );
+      }
+
+      return payload;
     }
 
-    return (await response.json()) as T;
+    throw new MspCentralConfigurationError(
+      "MSP Central API request was denied.",
+    );
   }
 }
 
@@ -419,6 +491,30 @@ function accessTokenCacheKey(config: DispatchConfig) {
     config.mspCentral.clientId,
     config.mspCentral.refreshToken,
   ].join("\n");
+}
+
+function invalidateCachedAccessToken(config: DispatchConfig) {
+  const entry = accessTokenCache.get(accessTokenCacheKey(config));
+  if (!entry) {
+    return;
+  }
+
+  entry.accessToken = undefined;
+  entry.expiresAt = undefined;
+  entry.blockedUntil = undefined;
+  entry.lastError = undefined;
+}
+
+function mspCentralAccessDenied(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const error = "error" in payload ? payload.error : undefined;
+  return (
+    typeof error === "string" &&
+    error.trim().toLowerCase().replaceAll("_", " ") === "access denied"
+  );
 }
 
 function isAccessDenied(error: Error) {

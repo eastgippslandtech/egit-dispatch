@@ -35,6 +35,18 @@ export type MspCentralRawRequest = {
   requester_name?: string | null;
   scheduled_end_time?: MspCentralTimestamp | null;
   scheduled_start_time?: MspCentralTimestamp | null;
+  sentiment?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
+  sentiment_analysis?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
+  requester_sentiment?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
   site?: {
     address?: string | null;
     area?: string | null;
@@ -76,6 +88,13 @@ export type MspCentralListRequestsParams = {
 };
 
 export type MspCentralClient = {
+  addRequestWorklog?(input: {
+    description: string;
+    durationMinutes: number;
+    endedAt: string;
+    requestId: string;
+    startedAt: string;
+  }): Promise<void>;
   assignRequest(input: {
     requestId: string;
     technicianName: string;
@@ -96,5 +115,9 @@ export type MspCentralClient = {
     scheduledEnd: string;
     scheduledStart: string;
     technicianName?: string;
+  }): Promise<void>;
+  updateRequestStatus?(input: {
+    requestId: string;
+    status: string;
   }): Promise<void>;
 };

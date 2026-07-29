@@ -1,6 +1,7 @@
 import type {
   DispatchRequest,
   Priority,
+  RequestSentiment,
   RequestStatus,
   SlaState,
 } from "@/server/dispatch/types";
@@ -122,6 +123,11 @@ export function mapMspCentralRequest(
       readString(raw.requester_name) ??
       "Unknown requester",
     requestNumber,
+    sentiment: mapMspCentralSentiment(
+      readSentiment(raw.sentiment) ??
+        readSentiment(raw.sentiment_analysis) ??
+        readSentiment(raw.requester_sentiment),
+    ),
     scheduledEnd: scheduledEnd ?? undefined,
     scheduledStart: scheduledStart ?? undefined,
     site,
@@ -300,6 +306,38 @@ function autoAssignAdvancedWorksTechnician({
   };
 }
 
+export function mapMspCentralSentiment(
+  value?: string,
+): RequestSentiment | undefined {
+  const normalized = value?.trim().toLowerCase();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (
+    normalized.includes("negative") ||
+    normalized.includes("unhappy") ||
+    normalized.includes("dissatisfied")
+  ) {
+    return "negative";
+  }
+
+  if (
+    normalized.includes("positive") ||
+    normalized.includes("happy") ||
+    normalized.includes("satisfied")
+  ) {
+    return "positive";
+  }
+
+  if (normalized.includes("neutral")) {
+    return "neutral";
+  }
+
+  return undefined;
+}
+
 export function isOutsideDispatchHours(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-AU", {
     hour: "2-digit",
@@ -385,6 +423,19 @@ function readPriorityStatusName(
   value?: string | { name?: string | null } | null,
 ) {
   return typeof value === "string" ? value : readString(value?.name);
+}
+
+function readSentiment(
+  value?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null,
+) {
+  if (typeof value === "string") {
+    return readString(value);
+  }
+
+  return readString(value?.name) ?? readString(value?.value);
 }
 
 function normalizeTechnician(technician?: MspCentralRawTechnician | null) {

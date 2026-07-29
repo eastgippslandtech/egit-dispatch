@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 const BLOCK_THRESHOLD = 5;
 const BLOCK_WINDOW_MS = 15 * 60 * 1000;
 const RETENTION_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -90,10 +92,6 @@ function getPostgresSql(databaseUrl: string) {
     throw new Error("DATABASE_URL is required for wallboard login attempts.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 3,
-    prepare: false,
-    ssl: "require",
-  });
+  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
   return sqlSingleton;
 }

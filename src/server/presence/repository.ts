@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 import type {
   PresenceOverride,
   PresenceOverrideSource,
@@ -246,11 +248,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for presence overrides.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 3,
-    prepare: false,
-    ssl: "require",
-  });
+  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
   return sqlSingleton;
 }
 

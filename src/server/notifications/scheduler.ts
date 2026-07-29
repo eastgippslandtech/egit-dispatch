@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 const JOB_NAME = "command-centre-technician-notifications";
 const SECRET_NAME = "command_centre_cron_secret";
 
@@ -17,11 +19,7 @@ export async function configureNotificationScheduler({
     throw new Error("The notification scheduler endpoint must use HTTPS.");
   }
 
-  const sql = postgres(databaseUrl, {
-    max: 1,
-    prepare: false,
-    ssl: "require",
-  });
+  const sql = postgres(databaseUrl, getServerlessPostgresOptions());
 
   try {
     await sql.unsafe("create extension if not exists pg_net with schema extensions");

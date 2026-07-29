@@ -1,5 +1,6 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
 import { getInitialStaffProfiles } from "@/server/staff/profiles";
 
 export type PushDeviceRegistration = {
@@ -179,11 +180,7 @@ export function getConfiguredNotificationRepository(
     return null;
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 3,
-    prepare: false,
-    ssl: "require",
-  });
+  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
   repositorySingleton ??= new PostgresNotificationRepository(sqlSingleton);
   return repositorySingleton;
 }

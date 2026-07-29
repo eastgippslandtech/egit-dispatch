@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 import type { NoteVisibility } from "../../../apps/technician-mobile/src/contracts/mobile";
 
 export type DatabaseSyncStatus =
@@ -216,11 +218,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for Command Centre database access.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 5,
-    prepare: false,
-    ssl: "require",
-  });
+  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
 
   return sqlSingleton;
 }

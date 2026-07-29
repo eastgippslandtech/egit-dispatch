@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 import { mockIsoTime } from "./date-scope";
 import { buildDispatchHealthItems } from "./health";
 import { applyTravelToAppointment, type TravelEstimate } from "./travel";
@@ -354,11 +356,12 @@ async function getDispatchTestSyncClient() {
     throw new Error("DATABASE_URL is required for dispatcher-to-mobile test sync.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 5,
-    prepare: false,
-    ssl: shouldUseSsl(databaseUrl) ? "require" : false,
-  });
+  sqlSingleton ??= postgres(
+    databaseUrl,
+    getServerlessPostgresOptions(
+      shouldUseSsl(databaseUrl) ? "require" : false,
+    ),
+  );
 
   return sqlSingleton;
 }

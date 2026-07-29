@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
 import type {
@@ -123,11 +125,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for Command Centre dispatch data.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 5,
-    prepare: false,
-    ssl: "require",
-  });
+  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
 
   return sqlSingleton;
 }

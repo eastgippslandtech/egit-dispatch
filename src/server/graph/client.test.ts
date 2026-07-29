@@ -187,6 +187,47 @@ describe("Graph client", () => {
     );
   });
 
+  it("reads one Outlook event for mobile schedule detail", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "token-value" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          end: { dateTime: "2026-07-24T11:00:00" },
+          id: "event/with+characters",
+          start: { dateTime: "2026-07-24T10:00:00" },
+          subject: "Command Centre training",
+        }),
+      });
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    const event = await client.getEvent({
+      eventId: "event/with+characters",
+      userPrincipalName: "riley@egit.com.au",
+    });
+
+    expect(event.subject).toBe("Command Centre training");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://graph.microsoft.com/v1.0/users/riley%40egit.com.au/events/event%2Fwith%2Bcharacters",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-value",
+        }),
+      }),
+    );
+  });
+
   it("shares one access-token request across concurrent calendar reads", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) =>
       String(input).includes("/oauth2/v2.0/token")

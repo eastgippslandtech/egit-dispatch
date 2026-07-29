@@ -19,6 +19,11 @@ type ListCalendarViewInput = GraphCalendarRange & {
   userPrincipalName: string;
 };
 
+type GetCalendarEventInput = {
+  eventId: string;
+  userPrincipalName: string;
+};
+
 export class GraphApiError extends Error {
   constructor(
     message: string,
@@ -130,6 +135,34 @@ export function createGraphClient({
     return events;
   }
 
+  async function getEvent({
+    eventId,
+    userPrincipalName,
+  }: GetCalendarEventInput) {
+    const token = await acquireToken();
+    const response = await fetchImpl(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
+        userPrincipalName,
+      )}/events/${encodeURIComponent(eventId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Prefer: `outlook.timezone="${outlookTimezone}"`,
+        },
+        method: "GET",
+      },
+    );
+
+    if (!response.ok) {
+      throw new GraphApiError(
+        `Microsoft Graph calendar event read failed for ${userPrincipalName}.`,
+        response.status,
+      );
+    }
+
+    return (await response.json()) as MicrosoftGraphEvent;
+  }
+
   async function createEvent(input: MicrosoftGraphEventDraft) {
     const token = await acquireToken();
     const response = await fetchImpl(
@@ -187,6 +220,7 @@ export function createGraphClient({
   return {
     acquireToken,
     createEvent,
+    getEvent,
     listCalendarView,
     updateEvent,
   };

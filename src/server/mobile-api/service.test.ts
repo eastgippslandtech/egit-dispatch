@@ -10,6 +10,7 @@ import {
   saveMobileWorklog,
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
+import type { Appointment } from "@/server/dispatch/types";
 
 vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
   const actual =
@@ -85,6 +86,37 @@ const dbJob: DatabaseJobRow = {
   technicianId: "staff-db-riley",
   updatedAt: "2026-07-14T01:20:00.000Z",
 };
+
+const outlookAppointment: Appointment = {
+  bookingType: "Remote",
+  bodyPreview: "Weekly Command Centre operations review.",
+  calendarOwnerEmail: "riley@egit.com.au",
+  customer: "Microsoft Teams Meeting",
+  date: "2026-07-14",
+  end: "15:00",
+  id: "outlook-tech-riley-event-outlook-1",
+  outlookEventId: "event-outlook-1",
+  outlookWebLink: "https://outlook.office.com/calendar/item/event-outlook-1",
+  readOnly: true,
+  source: "outlook",
+  start: "14:00",
+  status: "busy",
+  technicianId: "tech-riley",
+  title: "Command Centre training",
+};
+
+function createOutlookCalendar(
+  appointments: Appointment[] = [outlookAppointment],
+) {
+  return {
+    async findAppointment() {
+      return appointments[0] ?? null;
+    },
+    async listAppointments() {
+      return appointments;
+    },
+  };
+}
 
 function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase {
   return {
@@ -187,6 +219,58 @@ describe("mobile API service", () => {
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
   });
 
+  it("adds Outlook-only calendar bookings to the technician schedule", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [];
+        },
+      }),
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toContainEqual(
+      expect.objectContaining({
+        bookingType: "Remote",
+        id: "outlook-tech-riley-event-outlook-1",
+        outlookEventId: "event-outlook-1",
+        source: "outlook",
+        title: "Command Centre training",
+        technician: expect.objectContaining({
+          email: "riley@egit.com.au",
+        }),
+        permissions: expect.objectContaining({
+          canStartTimer: false,
+          canWriteWorklog: false,
+        }),
+      }),
+    );
+  });
+
+  it("does not duplicate an Outlook event already linked to a Command Centre job", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [{ ...dbJob, outlookEventId: "event-outlook-1" }];
+        },
+      }),
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "link-100900",
+      outlookEventId: "event-outlook-1",
+      source: "msp_central",
+    });
+  });
+
   it("adds dispatcher test-sync schedules to the technician mobile job list", async () => {
     listDispatchTestSyncEventsMock.mockResolvedValueOnce([
       {
@@ -260,6 +344,35 @@ describe("mobile API service", () => {
       authorName: "Command Centre",
       body: "Customer confirmed VPN works after reboot.",
       visibility: "external",
+    });
+  });
+
+  it("returns an Outlook-only booking detail as read-only", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async findJobForStaff() {
+          return null;
+        },
+      }),
+      jobId: "outlook-tech-riley-event-outlook-1",
+      outlookCalendar: createOutlookCalendar(),
+    });
+
+    expect(response.job).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
+      permissions: {
+        canAddPart: false,
+        canAttachEvidence: false,
+        canComplete: false,
+        canSignOff: false,
+        canStartTimer: false,
+        canUpdateStatus: false,
+        canWriteWorklog: false,
+        readOnlyReason: "Outlook calendar events are read-only.",
+      },
     });
   });
 

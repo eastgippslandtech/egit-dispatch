@@ -41,6 +41,10 @@ import {
   getConfiguredNotificationRepository,
   type PushRegistrationRepository,
 } from "@/server/notifications/repository";
+import {
+  getConfiguredMobileOutlookCalendar,
+  type MobileOutlookCalendar,
+} from "./outlook";
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -69,11 +73,13 @@ export async function listMobileJobs({
   auth,
   database = getConfiguredMobileDatabase(),
   from,
+  outlookCalendar = getConfiguredMobileOutlookCalendar(),
   to,
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   from: string;
+  outlookCalendar?: MobileOutlookCalendar | null;
   to: string;
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
@@ -84,11 +90,28 @@ export async function listMobileJobs({
       to,
     });
     const testJobs = await listTestSyncedMobileJobs({ auth, from, to });
+    const outlookJobs = await listOutlookMobileJobs({
+      from,
+      outlookCalendar,
+      staff,
+      to,
+    });
+    const linkedOutlookEventIds = new Set(
+      [...jobs.map(mapDatabaseJob), ...testJobs]
+        .map((job) => job.outlookEventId)
+        .filter((eventId): eventId is string => Boolean(eventId)),
+    );
 
     return {
-      jobs: [...jobs.map(mapDatabaseJob), ...testJobs].sort((left, right) =>
-        left.startAt.localeCompare(right.startAt),
-      ),
+      jobs: [
+        ...jobs.map(mapDatabaseJob),
+        ...testJobs,
+        ...outlookJobs.filter(
+          (job) =>
+            !job.outlookEventId ||
+            !linkedOutlookEventIds.has(job.outlookEventId),
+        ),
+      ].sort((left, right) => left.startAt.localeCompare(right.startAt)),
     };
   }
 
@@ -109,10 +132,12 @@ export async function getMobileJob({
   auth,
   database = getConfiguredMobileDatabase(),
   jobId,
+  outlookCalendar = getConfiguredMobileOutlookCalendar(),
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   jobId: string;
+  outlookCalendar?: MobileOutlookCalendar | null;
 }): Promise<{ job: MobileJob }> {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -121,6 +146,14 @@ export async function getMobileJob({
       const testJob = await findTestSyncedMobileJob({ auth, jobId });
       if (testJob) {
         return { job: testJob };
+      }
+      const outlookJob = await findOutlookMobileJob({
+        jobId,
+        outlookCalendar,
+        staff,
+      });
+      if (outlookJob) {
+        return { job: outlookJob };
       }
 
       throw Object.assign(new Error("Mobile job was not found."), {
@@ -388,6 +421,143 @@ const WRITABLE_PERMISSIONS: MobileJobPermissions = {
   canWriteWorklog: true,
   readOnlyReason: null,
 };
+
+const OUTLOOK_READ_ONLY_PERMISSIONS: MobileJobPermissions = {
+  canAddPart: false,
+  canAttachEvidence: false,
+  canComplete: false,
+  canSignOff: false,
+  canStartTimer: false,
+  canUpdateStatus: false,
+  canWriteWorklog: false,
+  readOnlyReason: "Outlook calendar events are read-only.",
+};
+
+async function listOutlookMobileJobs({
+  from,
+  outlookCalendar,
+  staff,
+  to,
+}: {
+  from: string;
+  outlookCalendar: MobileOutlookCalendar | null;
+  staff: DatabaseStaffRow;
+  to: string;
+}) {
+  if (!outlookCalendar) {
+    return [];
+  }
+
+  try {
+    const appointments = await outlookCalendar.listAppointments({
+      from,
+      staff,
+      to,
+    });
+    return appointments
+      .map((appointment) => mapOutlookAppointment(staff, appointment))
+      .filter((job): job is MobileJob => Boolean(job));
+  } catch (error) {
+    console.error("Mobile Outlook calendar read failed", safeError(error));
+    return [];
+  }
+}
+
+async function findOutlookMobileJob({
+  jobId,
+  outlookCalendar,
+  staff,
+}: {
+  jobId: string;
+  outlookCalendar: MobileOutlookCalendar | null;
+  staff: DatabaseStaffRow;
+}) {
+  if (!outlookCalendar) {
+    return null;
+  }
+
+  try {
+    const appointment = await outlookCalendar.findAppointment({ jobId, staff });
+    return appointment ? mapOutlookAppointment(staff, appointment) : null;
+  } catch (error) {
+    console.error("Mobile Outlook calendar event read failed", safeError(error));
+    return null;
+  }
+}
+
+function mapOutlookAppointment(
+  staff: DatabaseStaffRow,
+  appointment: Appointment,
+): MobileJob | null {
+  if (!appointment.date) {
+    return null;
+  }
+
+  const startAt = melbourneIsoTime(appointment.date, appointment.start);
+  const endAt = melbourneIsoTime(appointment.date, appointment.end);
+  return {
+    attachments: [],
+    bookingType: appointment.bookingType ?? "In house",
+    contactEmail: null,
+    contactName: null,
+    contactPhone: null,
+    customerName: appointment.customer,
+    customerSignOff: null,
+    description: appointment.bodyPreview ?? null,
+    endAt,
+    id: appointment.id,
+    isAllDay: Boolean(appointment.isAllDay),
+    outlookEventId: appointment.outlookEventId ?? null,
+    outlookWebLink: appointment.outlookWebLink ?? null,
+    parts: [],
+    permissions: OUTLOOK_READ_ONLY_PERMISSIONS,
+    previousNotes: [],
+    priority: null,
+    requestNumber: appointment.outlookLinkedRequestNumber
+      ? `REQ-${appointment.outlookLinkedRequestNumber}`
+      : null,
+    siteAddress: appointment.siteAddress ?? null,
+    siteName: appointment.siteArea ?? null,
+    siteTown: appointment.siteTown ?? null,
+    slaDueAt: null,
+    source: "outlook",
+    startAt,
+    status: "Scheduled",
+    syncState: "synced",
+    tags: [
+      "Outlook only",
+      appointment.outlookIssue === "private" ? "Private" : undefined,
+      appointment.isAllDay ? "All day" : undefined,
+    ].filter((tag): tag is string => Boolean(tag)),
+    technician: mapDatabaseStaff(staff),
+    timezone: "Australia/Melbourne",
+    title: appointment.title,
+    travel: null,
+    updatedAt: startAt,
+    version: `outlook-${appointment.outlookEventId ?? appointment.id}-${startAt}-${endAt}`,
+  };
+}
+
+function melbourneIsoTime(dateKey: string, time: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const approximateInstant = new Date(
+    Date.UTC(year, month - 1, day, hour, minute),
+  );
+  const offsetName = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    timeZoneName: "longOffset",
+  })
+    .formatToParts(approximateInstant)
+    .find((part) => part.type === "timeZoneName")?.value;
+  const offset = offsetName?.match(/GMT([+-]\d{2}:\d{2})/)?.[1] ?? "+10:00";
+
+  return `${dateKey}T${time}:00${offset}`;
+}
+
+function safeError(error: unknown) {
+  return error instanceof Error ? { message: error.message } : { message: "Unknown error" };
+}
 
 async function listTestSyncedMobileJobs({
   auth,

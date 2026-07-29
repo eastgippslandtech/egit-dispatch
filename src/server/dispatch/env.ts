@@ -12,6 +12,7 @@ export type DispatchConfig = {
   calendarDataSource: CalendarDataSource;
   dispatchDataSource: DispatchDataSource;
   mode: DispatchRuntimeMode;
+  trainingSamplesEnabled: boolean;
   timezone: string;
   appBaseUrl?: string;
   databaseUrl?: string;
@@ -68,6 +69,8 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
     calendarDataSource,
     dispatchDataSource,
     mode,
+    trainingSamplesEnabled:
+      normalizedEnv.COMMAND_CENTRE_TRAINING_SAMPLES === "true",
     timezone: normalizedEnv.DEFAULT_TIMEZONE ?? "Australia/Melbourne",
     appBaseUrl: normalizedEnv.APP_BASE_URL,
     databaseUrl: normalizedEnv.DATABASE_URL,

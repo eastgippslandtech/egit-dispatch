@@ -6,7 +6,7 @@ import {
 } from "./travel";
 
 export const WORKDAY_START_MINUTES = 9 * 60;
-export const WORKDAY_END_MINUTES = 17 * 60 + 30;
+export const WORKDAY_END_MINUTES = 17 * 60;
 export const TIMELINE_MINUTES = WORKDAY_END_MINUTES - WORKDAY_START_MINUTES;
 export const TIMELINE_PIXELS_PER_MINUTE = 2;
 export const TIMELINE_TRACK_WIDTH_PX =
@@ -182,6 +182,10 @@ export function shouldShowTimelineHourLabel(
   trackWidth: number,
   minimumEndGapPx = TIMELINE_END_LABEL_MINIMUM_GAP_PX,
 ) {
+  if (minutesFromTime(time) >= WORKDAY_END_MINUTES) {
+    return true;
+  }
+
   if (time !== "17:00") {
     return true;
   }
@@ -291,7 +295,7 @@ export function detectScheduleWarnings({
   if (startMinutes < WORKDAY_START_MINUTES || endMinutes > WORKDAY_END_MINUTES) {
     warnings.push({
       code: "out-of-hours",
-      message: "This booking sits outside 9:00 AM to 5:30 PM.",
+      message: "This booking sits outside 9:00 AM to 5:00 PM.",
     });
   }
 

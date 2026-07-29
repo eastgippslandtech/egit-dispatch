@@ -68,7 +68,7 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByRole("button", { name: /More Health/ })).toBeInTheDocument();
   expect(screen.getByText("Schedule")).toBeInTheDocument();
   expect(screen.getByText("Request")).toBeInTheDocument();
-  expect(screen.getByText("9:00 AM - 5:30 PM")).toBeInTheDocument();
+  expect(screen.getByText("9:00 AM - 5:00 PM")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Wallboard" })).toHaveAttribute(
     "href",
     "/wallboard",

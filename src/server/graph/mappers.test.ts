@@ -229,7 +229,7 @@ describe("Graph event mapper", () => {
 
     expect(appointment).toMatchObject({
       date: "2026-07-08",
-      end: "17:30",
+      end: "17:00",
       isAllDay: true,
       outlookIssue: "all-day",
       start: "09:00",

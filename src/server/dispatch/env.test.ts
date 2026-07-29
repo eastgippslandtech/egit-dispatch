@@ -10,6 +10,15 @@ describe("dispatch runtime config", () => {
     expect(config.calendarDataSource).toBe("mock");
     expect(config.dispatchDataSource).toBe("mock");
     expect(config.timezone).toBe("Australia/Melbourne");
+    expect(config.trainingSamplesEnabled).toBe(false);
+  });
+
+  it("can enable local Command Centre training samples", () => {
+    const config = readDispatchConfig({
+      COMMAND_CENTRE_TRAINING_SAMPLES: "true",
+    });
+
+    expect(config.trainingSamplesEnabled).toBe(true);
   });
 
   it("can select MSP Central fixture dispatch data without live API mode", () => {

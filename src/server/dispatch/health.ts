@@ -89,7 +89,7 @@ export function buildDispatchHealthItems(data: HealthInput): HealthItem[] {
       label: "Out-of-Hours Bookings",
       count: data.appointments.filter(isOutOfHours).length,
       severity: "warning",
-      description: "Appointments outside 9:00 AM to 5:30 PM.",
+      description: "Appointments outside 9:00 AM to 5:00 PM.",
     },
     {
       key: "unlinked-outlook",
@@ -166,7 +166,7 @@ function isOutOfHours(appointment: Appointment) {
   }
 
   return minutesSinceMidnight(appointment.start) < 9 * 60 ||
-    minutesSinceMidnight(appointment.end) > 17 * 60 + 30;
+    minutesSinceMidnight(appointment.end) > 17 * 60;
 }
 
 function overlaps(first: Appointment, second: Appointment) {

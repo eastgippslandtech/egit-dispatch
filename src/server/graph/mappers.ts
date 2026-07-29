@@ -48,7 +48,7 @@ export function mapGraphEventToAppointment(
     );
   const date = graphDateKey(event.start.dateTime);
   const start = isAllDay ? "09:00" : graphTime(event.start.dateTime);
-  const end = isAllDay ? "17:30" : graphTime(event.end.dateTime);
+  const end = isAllDay ? "17:00" : graphTime(event.end.dateTime);
   const subject = isPrivate
     ? sensitivity === "personal" ||
       event.categories?.some(

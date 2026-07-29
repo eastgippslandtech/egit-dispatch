@@ -129,7 +129,7 @@ const requests: DispatchRequest[] = [
     technicianId: "tech-matt",
     scheduledStart: "2026-07-08T09:30:00+10:00",
     scheduledEnd: "2026-07-08T10:45:00+10:00",
-    dueAt: "2026-07-08T17:30:00+10:00",
+    dueAt: "2026-07-08T17:00:00+10:00",
     ageHours: 31,
     billable: true,
     readyToBook: false,

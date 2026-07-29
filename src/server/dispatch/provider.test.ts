@@ -22,6 +22,31 @@ describe("dispatch dashboard provider", () => {
     );
   });
 
+  it("adds local training requests without creating helpdesk records", async () => {
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        COMMAND_CENTRE_TRAINING_SAMPLES: "true",
+      }),
+    );
+
+    expect(data.requests).toHaveLength(8);
+    expect(data.requests.every((request) => request.sourceSystem === "mock")).toBe(
+      true,
+    );
+    expect(data.requests.map((request) => request.technicianId)).toEqual(
+      expect.arrayContaining([
+        "tech-simeon",
+        "tech-matt",
+        "tech-jervy",
+        "tech-riley",
+      ]),
+    );
+    expect(data.selectedRequestId).toBe(data.requests[0].id);
+    expect(
+      data.healthItems.find((item) => item.key === "unscheduled")?.count,
+    ).toBe(8);
+  });
+
   it("keeps MSP Central data mock-only when calendar source remains mock", async () => {
     const config = readDispatchConfig({
       MOCK_INTEGRATIONS: "false",

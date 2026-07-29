@@ -1507,7 +1507,7 @@ export function CommandCentrePrototype({
                 <p className="mt-0.5 text-xs text-slate-400">
                   {viewMode === "week"
                     ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
-                    : "9:00 AM - 5:30 PM"}
+                    : "9:00 AM - 5:00 PM"}
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-300">
@@ -2523,7 +2523,7 @@ export function ReadOnlyDispatchCalendar({
           <p className="text-[11px] text-slate-400">
             {viewMode === "week"
               ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
-              : "9:00 AM - 5:30 PM"}
+              : "9:00 AM - 5:00 PM"}
           </p>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-slate-300">
@@ -4920,7 +4920,7 @@ function appointmentIsOutOfHours(appointment: Appointment) {
   }
 
   return minutesFromTime(appointment.start) < 9 * 60 ||
-    minutesFromTime(appointment.end) > 17 * 60 + 30;
+    minutesFromTime(appointment.end) > 17 * 60;
 }
 
 function appointmentIsClosedDay(appointment: Appointment) {
@@ -5061,7 +5061,7 @@ function formatDuration(minutes: number) {
 
 function scheduleTimeOptions() {
   const options: string[] = [];
-  for (let minutes = 9 * 60; minutes <= 17 * 60 + 30; minutes += 15) {
+  for (let minutes = 9 * 60; minutes <= 17 * 60; minutes += 15) {
     const hours = Math.floor(minutes / 60);
     const remainder = minutes % 60;
     options.push(

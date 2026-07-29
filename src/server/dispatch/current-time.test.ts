@@ -36,7 +36,7 @@ describe("dispatch current-time indicator", () => {
         "2026-07-08",
         new Date("2026-07-08T02:00:00.000Z"),
       ).positionPercent,
-    ).toBeCloseTo(35.29, 2);
+    ).toBeCloseTo(37.5, 2);
 
     expect(
       getCurrentTimeIndicator(

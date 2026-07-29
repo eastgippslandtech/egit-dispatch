@@ -15,6 +15,7 @@ import { createMspCentralClient } from "@/server/msp-central/client";
 import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures";
 import type { MspCentralClient } from "@/server/msp-central/types";
 import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
+import { getCommandCentreTrainingRequests } from "./training-data";
 
 export async function getDispatchDashboardData(
   config: DispatchConfig = readDispatchConfig(),
@@ -34,11 +35,14 @@ export async function getDispatchDashboardData(
       throw new Error("DATABASE_URL is required for Command Centre database dispatch data.");
     }
 
-    return buildDatabaseDispatchDashboardData(await database.getDashboardData());
+    return addTrainingSamples(
+      buildDatabaseDispatchDashboardData(await database.getDashboardData()),
+      config,
+    );
   }
 
   if (config.dispatchDataSource === "msp-central-fixture") {
-    return getMspCentralFixtureDashboardData(config);
+    return addTrainingSamples(getMspCentralFixtureDashboardData(config), config);
   }
 
   if (config.dispatchDataSource === "msp-central") {
@@ -91,24 +95,24 @@ export async function getDispatchDashboardData(
         range: buildGraphWorkWeekRange(todayDateKey()),
       });
 
-      return {
+      return addTrainingSamples({
         ...outlookData,
         calendarError: joinErrors(mspCentralError, outlookData.calendarError),
         dispatchDataSource: "msp-central",
-      };
+      }, config);
     }
 
-    return dashboard;
+    return addTrainingSamples(dashboard, config);
   }
 
   if (config.calendarDataSource === "mock") {
-    return {
+    return addTrainingSamples({
       ...emptyCommandCentreData,
       calendarDataSource: "mock",
       calendarReadOnly: false,
       calendarStatusLabel: "No Sample Data",
       dispatchDataSource: "mock",
-    };
+    }, config);
   }
 
   const outlookData = await buildOutlookCalendarDashboardData({
@@ -117,11 +121,39 @@ export async function getDispatchDashboardData(
     range: buildGraphWorkWeekRange(todayDateKey()),
   });
 
-  return {
+  return addTrainingSamples({
     ...outlookData,
     requests: [],
     selectedRequestId: "",
     dispatchDataSource: "mock",
+  }, config);
+}
+
+function addTrainingSamples(
+  dashboard: DispatchDashboardData,
+  config: DispatchConfig,
+): DispatchDashboardData {
+  if (!config.trainingSamplesEnabled) {
+    return dashboard;
+  }
+
+  const existingRequestIds = new Set(
+    dashboard.requests.map((request) => request.id),
+  );
+  const trainingRequests = getCommandCentreTrainingRequests(todayDateKey()).filter(
+    (request) => !existingRequestIds.has(request.id),
+  );
+  const requests = [...dashboard.requests, ...trainingRequests];
+
+  return {
+    ...dashboard,
+    healthItems: buildDispatchHealthItems({
+      appointments: dashboard.appointments,
+      requests,
+      technicians: dashboard.technicians,
+    }),
+    requests,
+    selectedRequestId: dashboard.selectedRequestId || requests[0]?.id || "",
   };
 }
 

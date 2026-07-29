@@ -15,14 +15,16 @@ export function getWallboardDateAfterRefresh({
   selectedDateKey: string;
 }) {
   const currentDateKey = todayDateKey(now);
+  const refreshedSelectedDateKey =
+    selectedDateKey < currentDateKey ? currentDateKey : selectedDateKey;
   if (
-    selectedDateKey !== currentDateKey ||
+    refreshedSelectedDateKey !== currentDateKey ||
     lastAutoAdvancedDateKey === currentDateKey ||
     melbourneMinutesSinceMidnight(now) < OFFICE_CLOSE_MINUTES
   ) {
     return {
       autoAdvancedFromDateKey: undefined,
-      selectedDateKey,
+      selectedDateKey: refreshedSelectedDateKey,
     };
   }
 

@@ -42,6 +42,19 @@ describe("wallboard date auto-advance", () => {
     });
   });
 
+  it("catches up to today when the display missed the previous evening refresh", () => {
+    expect(
+      getWallboardDateAfterRefresh({
+        lastAutoAdvancedDateKey: undefined,
+        now: new Date("2026-07-29T23:30:00.000Z"),
+        selectedDateKey: "2026-07-29",
+      }),
+    ).toEqual({
+      autoAdvancedFromDateKey: undefined,
+      selectedDateKey: "2026-07-30",
+    });
+  });
+
   it("does not override a manually selected date", () => {
     expect(
       getWallboardDateAfterRefresh({

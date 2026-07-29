@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 import { ReadOnlyDispatchCalendar } from "@/app/dispatch/command-centre/prototype";
@@ -33,6 +33,8 @@ import type {
   TechnicianPresence,
   WallboardSnapshot,
 } from "@/server/presence/types";
+
+import { getWallboardDateAfterRefresh } from "./auto-advance";
 
 const STATUS_STYLE: Record<PresenceStatus, string> = {
   closed: "border-slate-400/80 bg-slate-700/75 text-slate-50",
@@ -70,6 +72,7 @@ export function WallboardScreen({
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [now, setNow] = useState(() => new Date());
   const [refreshDelayed, setRefreshDelayed] = useState(false);
+  const lastAutoAdvancedDateKey = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const clock = window.setInterval(() => setNow(new Date()), 60_000);
@@ -81,6 +84,19 @@ export function WallboardScreen({
 
     async function refresh() {
       if (document.visibilityState === "hidden") return;
+      const refreshedAt = new Date();
+      setNow(refreshedAt);
+      setSelectedDateKey((current) => {
+        const result = getWallboardDateAfterRefresh({
+          lastAutoAdvancedDateKey: lastAutoAdvancedDateKey.current,
+          now: refreshedAt,
+          selectedDateKey: current,
+        });
+        if (result.autoAdvancedFromDateKey) {
+          lastAutoAdvancedDateKey.current = result.autoAdvancedFromDateKey;
+        }
+        return result.selectedDateKey;
+      });
       try {
         const response = await fetch("/api/internal/presence", {
           cache: "no-store",

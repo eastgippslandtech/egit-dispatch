@@ -18,6 +18,8 @@ export function createNativeActions({
 }: {
   paymentsAppUrl?: string;
 } = {}): NativeActions {
+  let paymentOpenInFlight = false;
+
   return {
     openEmail: (email) =>
       openIfSupported(email ? `mailto:${encodeURIComponent(email)}` : null),
@@ -29,14 +31,24 @@ export function createNativeActions({
       ),
     openOutlookEvent: (url) => openIfSupported(url),
     openPhone: (phone) => openIfSupported(phone ? `tel:${phone}` : null),
-    takePayment: ({ customerName, requestNumber }) =>
-      openCustomApp(
-        buildPaymentUrl({
-          baseUrl: paymentsAppUrl,
-          customerName,
-          requestNumber,
-        }),
-      ),
+    takePayment: async ({ customerName, requestNumber }) => {
+      if (paymentOpenInFlight) {
+        return false;
+      }
+
+      paymentOpenInFlight = true;
+      try {
+        return await openCustomApp(
+          buildPaymentUrl({
+            baseUrl: paymentsAppUrl,
+            customerName,
+            requestNumber,
+          }),
+        );
+      } finally {
+        paymentOpenInFlight = false;
+      }
+    },
   };
 }
 

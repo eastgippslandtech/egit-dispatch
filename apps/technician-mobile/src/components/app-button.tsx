@@ -14,7 +14,7 @@ export function AppButton({
   accessibilityLabel?: string;
   disabled?: boolean;
   label: string;
-  onPress: () => void;
+  onPress: () => void | Promise<void>;
   variant?: AppButtonVariant;
 }) {
   return (

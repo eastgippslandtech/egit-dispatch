@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -34,6 +34,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
   );
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<MobileJob | null>(null);
+  const paymentOpeningRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +78,29 @@ export function JobDetail({ jobId }: JobDetailProps) {
   const readOnly = Boolean(job.permissions.readOnlyReason);
   const activeForThisJob = isTimerForJob(job.id);
   const timerRunningElsewhere = Boolean(activeTimer && !activeForThisJob);
+  const hasPaymentContext = Boolean(job.requestNumber && job.customerName);
+
+  const takePayment = async () => {
+    if (!hasPaymentContext || paymentOpeningRef.current) {
+      return;
+    }
+
+    paymentOpeningRef.current = true;
+    try {
+      const opened = await actions.takePayment({
+        customerName: job.customerName,
+        requestNumber: job.requestNumber,
+      });
+      if (!opened) {
+        Alert.alert(
+          "Payments app unavailable",
+          "Install or update the EGIT Payments app, then try again.",
+        );
+      }
+    } finally {
+      paymentOpeningRef.current = false;
+    }
+  };
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -145,24 +169,16 @@ export function JobDetail({ jobId }: JobDetailProps) {
               label="Open Outlook event"
               onPress={() => void actions.openOutlookEvent(job.outlookWebLink)}
             />
+            {!hasPaymentContext ? (
+              <Text style={styles.muted}>
+                Payment needs a request number and customer name before it can
+                open EGIT Payments.
+              </Text>
+            ) : null}
             <ActionButton
-              disabled={!job.requestNumber || !job.customerName}
+              disabled={!hasPaymentContext}
               label="Take payment"
-              onPress={() => {
-                void actions
-                  .takePayment({
-                    customerName: job.customerName,
-                    requestNumber: job.requestNumber,
-                  })
-                  .then((opened) => {
-                    if (!opened) {
-                      Alert.alert(
-                        "Payments app unavailable",
-                        "Install or update the EGIT Payments app, then try again.",
-                      );
-                    }
-                  });
-              }}
+              onPress={takePayment}
             />
           </View>
         </Section>

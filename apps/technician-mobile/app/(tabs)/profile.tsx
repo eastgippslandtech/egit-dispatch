@@ -31,6 +31,10 @@ export default function ProfileRoute() {
         };
   const mobileSession =
     session.status === "approved" ? session.mobileSession : undefined;
+  const [lunchStatus, setLunchStatus] = useState(
+    mobileSession ? "Ready" : "Sign in with Zoho to start lunch.",
+  );
+  const [lunchBusy, setLunchBusy] = useState(false);
 
   const enableNotifications = async () => {
     const config = getMobileRuntimeConfig();
@@ -64,6 +68,29 @@ export default function ProfileRoute() {
   const enableLocation = async () => {
     setLocationStatus(await enableWhileUsingLocation(Location));
   };
+  const startLunch = async () => {
+    if (!mobileSession) {
+      setLunchStatus("Sign in with Zoho to start lunch.");
+      return;
+    }
+
+    setLunchBusy(true);
+    try {
+      const config = getMobileRuntimeConfig();
+      await createApiClient({
+        accessToken: mobileSession.accessToken,
+        baseUrl: config.mobileApiBaseUrl,
+      }).request("/presence", {
+        body: { action: "start_lunch" },
+        method: "POST",
+      });
+      setLunchStatus("Lunch started: 30 minutes");
+    } catch {
+      setLunchStatus("Lunch could not be started. Please try again.");
+    } finally {
+      setLunchBusy(false);
+    }
+  };
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -86,6 +113,17 @@ export default function ProfileRoute() {
         <Text style={styles.value}>{notificationStatus}</Text>
         <Text style={styles.label}>Location</Text>
         <Text style={styles.value}>{locationStatus}</Text>
+        <Text style={styles.sectionTitle}>Availability</Text>
+        <Text style={styles.label}>Lunch</Text>
+        <Text style={styles.value}>{lunchStatus}</Text>
+      </View>
+
+      <View style={styles.buttonGap}>
+        <AppButton
+          disabled={!mobileSession || lunchBusy}
+          label={lunchBusy ? "Starting lunch…" : "Start lunch"}
+          onPress={startLunch}
+        />
       </View>
 
       <AppButton

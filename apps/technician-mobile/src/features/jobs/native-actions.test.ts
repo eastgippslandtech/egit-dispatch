@@ -44,6 +44,31 @@ describe("native payment handoff", () => {
     );
   });
 
+  it("round-trips the agreed Command Centre example including ampersand and slash", () => {
+    const url = buildPaymentUrl({
+      baseUrl: "egitpayments://take-payment",
+      customerName: "OneHarvest & Sons/Bairnsdale",
+      requestNumber: "REQ-100301",
+    });
+    const params = new URLSearchParams(url?.split("?")[1]);
+
+    expect(url?.startsWith("egitpayments://take-payment?")).toBe(true);
+    expect(params.get("jobNumber")).toBe("REQ-100301");
+    expect(params.get("customerName")).toBe("OneHarvest & Sons/Bairnsdale");
+  });
+
+  it("round-trips apostrophes and Unicode customer names", () => {
+    const url = buildPaymentUrl({
+      baseUrl: "egitpayments://take-payment",
+      customerName: "O'Brien Café / 測試",
+      requestNumber: "REQ-ユニコード/100 301",
+    });
+    const params = new URLSearchParams(url?.split("?")[1]);
+
+    expect(params.get("jobNumber")).toBe("REQ-ユニコード/100 301");
+    expect(params.get("customerName")).toBe("O'Brien Café / 測試");
+  });
+
   it("supports an overridden Payments app base URL", () => {
     expect(
       buildPaymentUrl({
@@ -100,5 +125,25 @@ describe("native payment handoff", () => {
     ).resolves.toBe(false);
 
     expect(Linking.openURL).not.toHaveBeenCalled();
+  });
+
+  it("prevents accidental repeated Payments launches while one open is already in flight", async () => {
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(resolve, 5)),
+    );
+    const actions = createNativeActions();
+    const firstOpen = actions.takePayment({
+      customerName: "OneHarvest",
+      requestNumber: "REQ-100301",
+    });
+    const secondOpen = actions.takePayment({
+      customerName: "OneHarvest",
+      requestNumber: "REQ-100301",
+    });
+
+    await expect(secondOpen).resolves.toBe(false);
+    await expect(firstOpen).resolves.toBe(true);
+
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
   });
 });

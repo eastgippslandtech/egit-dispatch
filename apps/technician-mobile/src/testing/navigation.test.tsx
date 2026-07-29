@@ -521,6 +521,49 @@ describe("technician navigation", () => {
     expect(navigationHarness.routerPush).toHaveBeenCalledWith("/(tabs)/sync");
   });
 
+  it("starts a 30 minute lunch from profile settings", async () => {
+    const liveRileySession: TechnicianSession = {
+      ...approvedRileySession,
+      mobileSession: {
+        accessToken: "access-riley",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        refreshToken: "refresh-riley",
+        staffEmail: riley.email,
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            override: {
+              endsAt: "2026-07-26T02:30:00.000Z",
+              id: "lunch",
+              status: "lunch",
+            },
+          },
+          meta: { requestId: "mobile-test", serverTime: "2026-07-26T02:00:00.000Z" },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    try {
+      const profile = renderProfileSettings(liveRileySession);
+      await pressButtonAsync(profile, "Start lunch");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://command.egit.com.au/api/mobile/v1/presence",
+        expect.objectContaining({
+          body: JSON.stringify({ action: "start_lunch" }),
+          method: "POST",
+        }),
+      );
+      expect(textValues(profile.root)).toContain("Lunch started: 30 minutes");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("restores the saved mobile session without asking for Zoho again", async () => {
     const restoredSession = {
       accessToken: "access-riley",

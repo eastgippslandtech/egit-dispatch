@@ -119,7 +119,7 @@ function button(rendered: ReactTestRenderer, label: string) {
 
 async function pressButton(rendered: ReactTestRenderer, label: string) {
   await act(async () => {
-    button(rendered, label).props.onPress();
+    await button(rendered, label).props.onPress();
     await Promise.resolve();
   });
 }
@@ -284,6 +284,9 @@ describe("job detail", () => {
     const rendered = await renderJobDetail(job.id, repository);
 
     expect(button(rendered, "Take payment").props.disabled).toBe(true);
+    expect(textValues(rendered)).toContain(
+      "Payment needs a request number and customer name before it can open EGIT Payments.",
+    );
   });
 
   it("shows a friendly message when EGIT Payments is unavailable", async () => {
@@ -298,6 +301,24 @@ describe("job detail", () => {
       "Payments app unavailable",
       "Install or update the EGIT Payments app, then try again.",
     );
+  });
+
+  it("ignores rapid repeated Take payment taps without showing an unavailable alert", async () => {
+    vi.mocked(Linking.openURL).mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(resolve, 5)),
+    );
+    const rendered = await renderJobDetail("firewall-riley");
+    const takePayment = button(rendered, "Take payment");
+
+    await act(async () => {
+      const firstTap = takePayment.props.onPress();
+      const secondTap = takePayment.props.onPress();
+      await secondTap;
+      await firstTap;
+    });
+
+    expect(Linking.openURL).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).not.toHaveBeenCalled();
   });
 
   it("stops a timer restored after the app was closed", async () => {

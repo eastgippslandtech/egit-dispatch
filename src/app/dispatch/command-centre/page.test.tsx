@@ -15,6 +15,8 @@ import type { DispatchRequest } from "@/server/dispatch/types";
 import CommandCentrePage from "./page";
 import { bookingCardPriorityClass, requestNotesSummary } from "./prototype";
 
+const routerRefreshMock = vi.fn();
+
 vi.mock("@/server/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn((target: string) => {
     throw new Error(`NEXT_REDIRECT:${target}`);
   }),
+  useRouter: () => ({ refresh: routerRefreshMock }),
 }));
 
 const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
@@ -36,6 +39,7 @@ const getTestSyncedDispatchDashboardDataMock = vi.mocked(
 );
 
 beforeEach(() => {
+  routerRefreshMock.mockReset();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-08T02:00:00Z"));
   getCommandCentreAccessMock.mockResolvedValue({
@@ -323,6 +327,20 @@ test("saves Work Log locally and save-and-complete marks the request resolved", 
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+});
+
+test("retries server data while the MSP Central unavailable warning is visible", async () => {
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    calendarError:
+      "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.",
+  });
+
+  render(await CommandCentrePage());
+  await vi.advanceTimersByTimeAsync(30_000);
+
+  expect(routerRefreshMock).toHaveBeenCalledOnce();
 });
 
 test("merges the queue duplicate into a searched surviving parent after confirmation", async () => {

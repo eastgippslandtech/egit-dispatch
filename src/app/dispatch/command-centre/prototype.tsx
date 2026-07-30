@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -223,6 +224,7 @@ export function CommandCentrePrototype({
   authDisabled?: boolean;
   data: DispatchDashboardData;
 }) {
+  const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
@@ -247,6 +249,15 @@ export function CommandCentrePrototype({
   const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
   const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
   const [toast, setToast] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!data.calendarError?.includes("MSP Central is temporarily unavailable")) {
+      return;
+    }
+
+    const retry = window.setInterval(() => router.refresh(), 30_000);
+    return () => window.clearInterval(retry);
+  }, [data.calendarError, router]);
 
   const selectedDateLabel = formatSelectedDateLabel(selectedDateKey);
   const weekDays = useMemo(() => getWeekRange(selectedDateKey), [selectedDateKey]);

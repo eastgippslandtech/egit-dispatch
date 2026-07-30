@@ -14,6 +14,7 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn((target: string) => {
     throw new Error(`NEXT_REDIRECT:${target}`);
   }),
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 
 const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);

@@ -26,5 +26,11 @@ export async function ProtectedCommandCentreScreen() {
 
   const data = await getTestSyncedDispatchDashboardData();
 
-  return <CommandCentrePrototype authDisabled={access.authDisabled} data={data} />;
+  return (
+    <CommandCentrePrototype
+      authDisabled={access.authDisabled}
+      data={data}
+      key={`${data.dispatchDataSource}:${data.calendarError ?? "healthy"}`}
+    />
+  );
 }

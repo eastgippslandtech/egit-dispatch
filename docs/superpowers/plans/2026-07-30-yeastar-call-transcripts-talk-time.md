@@ -16,7 +16,7 @@ Supabase projections only. Yeastar and Zoho CRM credentials remain server-side
 and separate from login, MSP Central, and existing Yeastar recording behavior.
 
 **Tech Stack:** Next.js App Router, React 19, TypeScript, Postgres/Supabase,
-Supabase `pg_cron` and `pg_net`, Vitest, Vercel.
+Vercel Cron, Vitest, Vercel.
 
 ---
 
@@ -45,7 +45,7 @@ Supabase `pg_cron` and `pg_net`, Vitest, Vercel.
 - Create using CLI: `supabase/migrations/*_yeastar_call_reporting.sql`
 - Update: `.env.example`
 
-- [ ] Review current Supabase cron, `pg_net`, RLS, and security guidance.
+- [ ] Review current Supabase RLS and security guidance.
 - [ ] Create the migration with `supabase migration new`.
 - [ ] Add call, segment, staff mapping, customer mapping, webhook event, token,
       sync-state, settings, and job-run tables with indexes and constraints.
@@ -86,18 +86,16 @@ Supabase `pg_cron` and `pg_net`, Vitest, Vercel.
 - Create: `src/app/api/internal/yeastar/process/route.ts`
 - Create: `src/app/api/internal/yeastar/reconcile/route.ts`
 - Create: `src/app/api/internal/yeastar/health/route.ts`
-- Create: `src/app/api/internal/yeastar/scheduler/route.ts`
+- Create: `vercel.json`
 - Create: `src/app/api/internal/calls/route.ts`
 - Create: `src/app/api/internal/calls/[callId]/route.ts`
 - Create: `src/app/api/internal/calls/[callId]/retry/route.ts`
-- Create: `src/server/yeastar/scheduler.ts`
-- Create: `src/server/yeastar/scheduler.test.ts`
 
 - [ ] Add signed, replay-safe webhook route with a quick response.
 - [ ] Add cron-authorized processing and reconciliation routes.
 - [ ] Add staff-protected read APIs and admin-protected mutation APIs.
-- [ ] Add scheduler configuration for one-minute processing and five-minute
-      reconciliation using Vault-backed authorization.
+- [ ] Add Vercel Cron configuration for one-minute processing and five-minute
+      reconciliation using `CRON_SECRET` authorization.
 - [ ] Test unauthenticated, wallboard, staff, admin, replay, and disabled-config
       behavior.
 
@@ -136,7 +134,7 @@ Supabase `pg_cron` and `pg_net`, Vitest, Vercel.
 - [ ] Run `pnpm lint`.
 - [ ] Run `pnpm build`.
 - [ ] Apply the linked Supabase migration and run security/performance advisors.
-- [ ] Configure cron jobs when `INTEGRATION_CRON_SECRET` is available.
+- [ ] Verify Vercel Cron jobs use the existing `CRON_SECRET`.
 - [ ] Deploy the production build to Vercel.
 - [ ] Browser-verify Dispatch, Wallboard, Calls, and integration status screens.
 - [ ] Confirm missing external credentials remain non-blocking and report the

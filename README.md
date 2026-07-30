@@ -313,20 +313,17 @@ ZOHO_CRM_CLIENT_ID=
 ZOHO_CRM_CLIENT_SECRET=
 ZOHO_CRM_REFRESH_TOKEN=
 ZOHO_CRM_API_DOMAIN=https://www.zohoapis.com.au
-INTEGRATION_CRON_SECRET=
 ```
 
-`INTEGRATION_CRON_SECRET` may fall back to the existing `CRON_SECRET`.
 Configure the PBX webhook as:
 
 ```text
 POST https://command.egit.com.au/api/integrations/yeastar/webhook
 ```
 
-After deployment, authorize one request to
-`POST /api/internal/yeastar/scheduler` with the cron bearer secret. This stores
-the secret in Supabase Vault and installs the one-minute processor and
-five-minute reconciliation schedules.
+The production schedules are declared in `vercel.json`. Vercel calls the
+processor every minute and reconciliation every five minutes, authorizing both
+with the existing `CRON_SECRET`.
 
 ## Current Scope
 

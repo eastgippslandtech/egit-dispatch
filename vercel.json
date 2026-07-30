@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/internal/yeastar/process",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/yeastar/reconcile",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

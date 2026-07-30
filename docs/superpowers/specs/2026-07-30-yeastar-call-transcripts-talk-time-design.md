@@ -41,7 +41,7 @@ connected PBX before enabling production ingestion.
 
 ## Architecture
 
-Use signed Yeastar webhooks for low-latency discovery and Supabase cron for
+Use signed Yeastar webhooks for low-latency discovery and Vercel Cron for
 durable processing and reconciliation.
 
 1. Yeastar sends completed-call event `30012` to
@@ -49,14 +49,14 @@ durable processing and reconciliation.
 2. The route reads the raw body, verifies `X-Signature` with the configured
    webhook secret, stores the event idempotently, queues the CDR, and returns
    quickly.
-3. Supabase cron calls `/api/internal/yeastar/process` every minute.
+3. Vercel Cron calls `/api/internal/yeastar/process` every minute.
 4. Processing retrieves CDR v2 detail, identifies external answered legs,
    maps connected segments to staff, and stores call/segment data.
 5. Processing retrieves Yeastar AI transcript and summary data when available.
 6. A separate server-side Zoho CRM service token searches Contacts first and
    Accounts second by normalized phone number.
-7. Supabase cron calls `/api/internal/yeastar/reconcile` every five minutes to
-   discover calls missed by webhooks.
+7. Vercel Cron calls `/api/internal/yeastar/reconcile` every five minutes to
+discover calls missed by webhooks.
 8. Dispatch and wallboard read local Supabase projections only. They never call
    Yeastar or Zoho while rendering.
 
@@ -297,7 +297,7 @@ roles cannot change integration settings.
 
 ## Scheduling and Caching
 
-- Processing runs every minute through Supabase `pg_cron` and `pg_net`.
+- Processing runs every minute through Vercel Cron.
 - Reconciliation runs every five minutes with a small cursor overlap.
 - Unique constraints make webhook and reconciliation ingestion idempotent.
 - The wallboard weekly total query aggregates indexed local segment rows.

@@ -210,6 +210,40 @@ describe("MSP Central live client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not discard a valid access token for an API-level access denial", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "valid-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ error: "Access Denied" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "api-denied-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "api-denied-client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "api-denied-refresh-token",
+      }),
+    );
+
+    await expect(client.listTechnicians()).rejects.toThrow(
+      "MSP Central API request was denied.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses one Zoho access token across separate client instances", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

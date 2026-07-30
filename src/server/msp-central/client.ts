@@ -345,10 +345,6 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
       const payload = (await response.json()) as T;
       if (mspCentralAccessDenied(payload)) {
-        if (attempt === 0) {
-          await invalidateCachedAccessToken(config, token);
-          continue;
-        }
         throw new MspCentralConfigurationError(
           "MSP Central API request was denied.",
         );

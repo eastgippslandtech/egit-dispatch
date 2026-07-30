@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildStackedTimelineLayout,
   buildTimelineLayout,
   getTimelineAppointmentSegments,
 } from "./timeline-layout";
@@ -51,6 +52,44 @@ describe("timeline layout", () => {
     });
     expect(layout.laneCount).toBe(1);
     expect(layout.rowHeight).toBe(92);
+  });
+
+  it("places overlapping wallboard appointments in separate vertical lanes", () => {
+    const layout = buildStackedTimelineLayout([
+      appointment({ id: "a", start: "10:00", end: "12:00" }),
+      appointment({ id: "b", start: "11:15", end: "12:30" }),
+      appointment({ id: "c", start: "12:30", end: "13:00" }),
+    ]);
+
+    expect(layout.items.map((item) => [item.appointment.id, item.lane])).toEqual([
+      ["a", 0],
+      ["b", 1],
+      ["c", 0],
+    ]);
+    expect(layout.items.every((item) => !item.isOverlapGroup)).toBe(true);
+    expect(layout.laneCount).toBe(2);
+    expect(layout.rowHeight).toBeGreaterThan(92);
+  });
+
+  it("uses travel blocked windows when stacking wallboard appointments", () => {
+    const layout = buildStackedTimelineLayout([
+      appointment({
+        id: "a",
+        start: "10:00",
+        end: "11:00",
+        travelBackToOfficeMinutes: 20,
+      }),
+      appointment({
+        id: "b",
+        start: "11:15",
+        end: "12:00",
+      }),
+    ]);
+
+    expect(layout.items.map((item) => [item.appointment.id, item.lane])).toEqual([
+      ["a", 0],
+      ["b", 1],
+    ]);
   });
 
   it("does not group appointments that only touch at their edges", () => {

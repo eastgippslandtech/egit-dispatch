@@ -7,6 +7,7 @@ import {
   getCommandCentreAccess,
   getWallboardAccess,
 } from "@/server/auth/session";
+import { todayDateKey } from "@/server/dispatch/date-scope";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getWallboardSnapshot } from "@/server/presence/service";
 import WallboardPage from "./page";
@@ -94,6 +95,66 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.queryByText("Unscheduled Requests")).not.toBeInTheDocument();
   expect(screen.queryByTestId("command-centre-drawer")).not.toBeInTheDocument();
   expect(screen.queryByPlaceholderText("Search requests")).not.toBeInTheDocument();
+});
+
+test("shows overlapping wallboard bookings in separate vertical lanes", async () => {
+  const dashboard = getDispatchDesignMockData();
+  const technician = dashboard.technicians[0];
+  dashboard.appointments = [
+    {
+      customer: "Customer A",
+      date: todayDateKey(),
+      end: "11:30",
+      id: "wallboard-overlap-a",
+      readOnly: true,
+      source: "outlook",
+      start: "10:00",
+      status: "confirmed",
+      technicianId: technician.id,
+      title: "First overlapping job",
+    },
+    {
+      customer: "Customer B",
+      date: todayDateKey(),
+      end: "12:00",
+      id: "wallboard-overlap-b",
+      readOnly: true,
+      source: "outlook",
+      start: "10:30",
+      status: "confirmed",
+      technicianId: technician.id,
+      title: "Second overlapping job",
+    },
+  ];
+  snapshotMock.mockResolvedValue({
+    dashboard,
+    peopleStatus: "not_configured",
+    presences: dashboard.technicians.map((candidate) => ({
+      conflicts: [],
+      context: candidate.storeLocation,
+      label: "In office",
+      source: "schedule",
+      status: "in_office",
+      technicianId: candidate.id,
+    })),
+    sourceWarnings: [],
+    updatedAt: new Date().toISOString(),
+  });
+
+  render(await WallboardPage());
+
+  const first = screen.getByTestId(
+    "timeline-appointment-wallboard-overlap-a",
+  );
+  const second = screen.getByTestId(
+    "timeline-appointment-wallboard-overlap-b",
+  );
+  expect(first).toBeInTheDocument();
+  expect(second).toBeInTheDocument();
+  expect(
+    screen.queryByTestId("timeline-overlap-wallboard-overlap-a"),
+  ).not.toBeInTheDocument();
+  expect(first.style.top).not.toBe(second.style.top);
 });
 
 test("renders the wallboard for a signed wallboard session", async () => {

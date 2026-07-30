@@ -42,6 +42,7 @@ import type {
 import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
+  buildStackedTimelineLayout,
   buildTimelineLayout,
   getTimelineAppointmentSegments,
   type TimelineLayoutItem,
@@ -2681,6 +2682,7 @@ export function ReadOnlyDispatchCalendar({
             globalSearch=""
             requests={data.requests}
             seenTicketUpdateIds={seenUpdates}
+            stackOverlaps
             technicians={data.technicians}
             onBeginAppointmentDrag={ignoreAppointment}
             onDragEnd={ignoreAppointment}
@@ -3078,6 +3080,7 @@ function TimelineBoard({
   requests,
   seenTicketUpdateIds,
   selectedAppointmentId,
+  stackOverlaps = false,
   technicians,
 }: {
   activeHealth?: string;
@@ -3102,6 +3105,7 @@ function TimelineBoard({
   requests: DispatchRequest[];
   seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
+  stackOverlaps?: boolean;
   technicians: Technician[];
 }) {
   const markers = timelineMarkers();
@@ -3222,7 +3226,9 @@ function TimelineBoard({
           const laneAppointments = appointments.filter(
             (appointment) => appointment.technicianId === technician.id,
           );
-          const layout = buildTimelineLayout(laneAppointments);
+          const layout = stackOverlaps
+            ? buildStackedTimelineLayout(laneAppointments)
+            : buildTimelineLayout(laneAppointments);
           const rowHeight = Math.max(layout.rowHeight, distributedRowHeight);
           const rowExtra = Math.max(0, rowHeight - layout.rowHeight);
           const rowOffset = rowExtra / 2;

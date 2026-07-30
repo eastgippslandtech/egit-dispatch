@@ -118,6 +118,17 @@ export function findStaffForZohoLogin(
   return profiles.find((profile) => normalizeEmail(profile.zohoEmail) === email);
 }
 
+export function isAdminStaffEmail(
+  email: string,
+  profiles: StaffProfile[] = getInitialStaffProfiles(),
+) {
+  return (
+    profiles.find(
+      (profile) => normalizeEmail(profile.zohoEmail) === normalizeEmail(email),
+    )?.role === "admin"
+  );
+}
+
 export function findStaffForMspCentralTechnician(
   technician: MspCentralTechnicianIdentity,
   profiles: StaffProfile[] = getInitialStaffProfiles(),

@@ -16,6 +16,7 @@ import {
   MailWarning,
   Meh,
   Monitor,
+  PhoneCall,
   RefreshCw,
   Search,
   Smile,
@@ -78,6 +79,7 @@ import {
   getWeekTodayDateKey,
   type CurrentTimeIndicator,
 } from "@/server/dispatch/current-time";
+import { formatTalkTime } from "@/server/yeastar/talk-time";
 import {
   applyTravelToAppointment,
   buildAppointmentTravel,
@@ -2827,6 +2829,13 @@ function CommandHeader({
           <PresenceControls technicians={technicians} />
           <Link
             className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/calls"
+          >
+            <PhoneCall className="h-4 w-4" />
+            Calls
+          </Link>
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
             href="/wallboard"
           >
             <Monitor className="h-4 w-4" />
@@ -3630,7 +3639,7 @@ function WeekAppointmentCard({
       aria-label={`${appointment.title} ${appointment.customer}`}
       aria-pressed={active}
       data-testid={dataTestId}
-      draggable
+      draggable={!appointment.readOnly}
       className={`w-full cursor-pointer rounded-md border px-2 py-1.5 text-left text-xs transition hover:-translate-y-0.5 ${
         active
           ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
@@ -3646,7 +3655,10 @@ function WeekAppointmentCard({
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="font-mono text-[11px] font-semibold">
+        <span className="flex items-center gap-1 font-mono text-[11px] font-semibold">
+          {appointment.activityType === "external_call" ? (
+            <PhoneCall className="h-3 w-3" />
+          ) : null}
           {appointment.start}
         </span>
         <span className="flex shrink-0 items-center gap-1">
@@ -3664,6 +3676,11 @@ function WeekAppointmentCard({
         {appointment.customer}
       </div>
       <div className="mt-1 truncate opacity-90">{appointment.title}</div>
+      {appointment.activityType === "external_call" ? (
+        <div className="mt-1 text-[10px] font-semibold text-cyan-100">
+          {formatTalkTime(appointment.externalTalkSeconds ?? 0)} external talk
+        </div>
+      ) : null}
       {request ? (
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-mono text-[10px]">
@@ -3795,7 +3812,7 @@ function TimelineOverlapGroup({
       <button
         aria-label={`${item.overlapCount} overlapping appointments. ${frontAppointment.title} ${frontAppointment.customer}`}
         aria-pressed={active}
-        draggable
+        draggable={!frontAppointment.readOnly}
         title={`${frontAppointment.title} | ${frontAppointment.start}-${frontAppointment.end} | ${frontAppointment.customer}${frontRequest ? ` | ${frontRequest.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
@@ -3879,7 +3896,7 @@ function TimelineOverlapGroup({
                       ? "border-cc-orange/70 bg-cc-orange/14"
                       : "border-white/10 bg-white/[0.035]"
                   }`}
-                  draggable
+                  draggable={!appointment.readOnly}
                   type="button"
                   onClick={() => onSelectAppointment(appointment)}
                   onDragEnd={onDragEnd}
@@ -3966,7 +3983,7 @@ function TimelineAppointment({
         aria-pressed={active}
         data-search-state={searchState}
         data-testid={`timeline-appointment-${appointment.id}`}
-        draggable
+        draggable={!appointment.readOnly}
         title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
@@ -3995,7 +4012,10 @@ function TimelineAppointment({
         onClick={onSelect}
       >
         <div className="flex items-start justify-between gap-2">
-          <span className="block truncate text-[12px] font-bold leading-4">
+          <span className="flex min-w-0 items-center gap-1 truncate text-[12px] font-bold leading-4">
+            {appointment.activityType === "external_call" ? (
+              <PhoneCall className="h-3 w-3 shrink-0" />
+            ) : null}
             {appointment.title}
           </span>
           <span className="flex shrink-0 items-center gap-1">
@@ -4016,7 +4036,11 @@ function TimelineAppointment({
         </div>
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {appointment.customer}
-          {request ? ` - ${request.requestNumber}` : ""}
+          {request
+            ? ` - ${request.requestNumber}`
+            : appointment.activityType === "external_call"
+              ? ` - ${formatTalkTime(appointment.externalTalkSeconds ?? 0)}`
+              : ""}
         </div>
       </button>
       <TravelSideExtension

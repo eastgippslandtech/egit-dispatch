@@ -73,6 +73,7 @@ describe("wallboard snapshot service", () => {
         },
       ],
       sourceWarnings: [],
+      weeklyExternalTalkSeconds: {},
       updatedAt: "2026-07-26T02:15:00.000Z",
     });
   });

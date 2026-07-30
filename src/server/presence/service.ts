@@ -13,6 +13,7 @@ import {
   readZohoPeopleConfig,
   type ZohoPeopleConfig,
 } from "./zoho-people";
+import { getConfiguredYeastarRepository } from "@/server/yeastar/repository";
 
 type PeopleClient = {
   listApprovedLeave(input: {
@@ -28,16 +29,24 @@ export async function getWallboardSnapshot({
   peopleClient,
   peopleConfig = readZohoPeopleConfig(),
   repository = getConfiguredPresenceOverrideRepository(),
+  talkTimeRepository = getConfiguredYeastarRepository(),
 }: {
   getDashboard?: () => Promise<DispatchDashboardData>;
   now?: Date;
   peopleClient?: PeopleClient;
   peopleConfig?: ZohoPeopleConfig | null;
   repository?: Pick<PresenceOverrideRepository, "listActive"> | null;
+  talkTimeRepository?: { getWeeklyTalkTotals(now?: Date): Promise<Record<string, number>> } | null;
 } = {}): Promise<WallboardSnapshot> {
-  const [rawDashboard, overrides] = await Promise.all([
+  const [rawDashboard, overrides, weeklyExternalTalkSeconds] = await Promise.all([
     getDashboard(),
     repository ? repository.listActive(now) : Promise.resolve([]),
+    talkTimeRepository
+      ? talkTimeRepository.getWeeklyTalkTotals(now).catch((error) => {
+          console.error("Yeastar talk-time read failed", safeError(error));
+          return {};
+        })
+      : Promise.resolve({}),
   ]);
   const dashboard = sanitizeDashboard(rawDashboard);
   const sourceWarnings: string[] = [];
@@ -74,6 +83,7 @@ export async function getWallboardSnapshot({
       technicians: dashboard.technicians,
     }),
     sourceWarnings,
+    weeklyExternalTalkSeconds,
     updatedAt: now.toISOString(),
   };
 }

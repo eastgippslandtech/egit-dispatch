@@ -13,6 +13,7 @@ import {
   Moon,
   Palmtree,
   TriangleAlert,
+  Phone,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import type {
 } from "@/server/presence/types";
 
 import { getWallboardDateAfterRefresh } from "./auto-advance";
+import { formatTalkTime } from "@/server/yeastar/talk-time";
 
 const STATUS_STYLE: Record<PresenceStatus, string> = {
   closed: "border-slate-400/80 bg-slate-700/75 text-slate-50",
@@ -312,6 +314,12 @@ export function WallboardScreen({
                 </div>
                 <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-current/15 pt-1.5">
                   <p className="truncate text-xs font-medium">{presence.context}</p>
+                  <span className="flex shrink-0 items-center gap-1 rounded bg-black/15 px-1.5 py-0.5 text-[10px] font-semibold text-white/90">
+                    <Phone className="h-3 w-3" />
+                    {formatTalkTime(
+                      snapshot.weeklyExternalTalkSeconds?.[technician.id] ?? 0,
+                    )} this week
+                  </span>
                   {presence.conflicts.length > 0 ? (
                     <span
                       className="flex shrink-0 items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-100"

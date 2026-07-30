@@ -56,6 +56,9 @@ beforeEach(() => {
       technicianId: technician.id,
     })),
     sourceWarnings: [],
+    weeklyExternalTalkSeconds: {
+      "tech-matt": 3 * 3600 + 42 * 60,
+    },
     updatedAt: "2026-07-08T00:00:00.000Z",
   });
 });
@@ -69,6 +72,7 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.getByRole("heading", { name: "Team status" })).toBeInTheDocument();
   expect(screen.getByText("Driving")).toBeInTheDocument();
   expect(screen.getByText("To OneHarvest")).toBeInTheDocument();
+  expect(screen.getByText("3h 42m this week")).toBeInTheDocument();
   expect(screen.getAllByText("In office")).toHaveLength(3);
   expect(screen.getByTestId("presence-tech-matt")).toHaveAttribute(
     "data-presence-status",

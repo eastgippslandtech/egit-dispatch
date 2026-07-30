@@ -279,6 +279,55 @@ pnpm vercel --prod --scope east-gippsland-it
 
 Production domain target: `command.egit.com.au`.
 
+## Yeastar Call Reporting
+
+Command Centre can ingest completed external calls from a Yeastar P-Series
+Software Edition PBX without changing the existing Yeastar recording
+integration.
+
+The implementation:
+
+- Verifies signed completed-call (`30012`) webhooks.
+- Reconciles recent CDRs every five minutes.
+- Uses CDR v2 per-leg connected talk time and excludes internal/unanswered
+  calls, ringing, and separately reported hold time.
+- Retrieves Yeastar AI transcripts and summaries only. It never downloads or
+  stores call audio.
+- Matches external numbers to Zoho CRM Contacts first, then Accounts, using a
+  separate service OAuth client.
+- Adds read-only call activities to Dispatch and weekly external talk time to
+  Wallboard staff cards.
+- Keeps transcripts behind approved staff authentication; the local wallboard
+  account receives totals only.
+
+Required server variables:
+
+```text
+YEASTAR_BASE_URL=https://eastgippslandit.ras.yeastar.com
+YEASTAR_CLIENT_ID=
+YEASTAR_CLIENT_SECRET=
+YEASTAR_WEBHOOK_SECRET=
+YEASTAR_API_USER_AGENT=EGIT-Command-Centre/1.0
+ZOHO_CRM_ACCOUNTS_URL=https://accounts.zoho.com.au
+ZOHO_CRM_CLIENT_ID=
+ZOHO_CRM_CLIENT_SECRET=
+ZOHO_CRM_REFRESH_TOKEN=
+ZOHO_CRM_API_DOMAIN=https://www.zohoapis.com.au
+INTEGRATION_CRON_SECRET=
+```
+
+`INTEGRATION_CRON_SECRET` may fall back to the existing `CRON_SECRET`.
+Configure the PBX webhook as:
+
+```text
+POST https://command.egit.com.au/api/integrations/yeastar/webhook
+```
+
+After deployment, authorize one request to
+`POST /api/internal/yeastar/scheduler` with the cron bearer secret. This stores
+the secret in Supabase Vault and installs the one-minute processor and
+five-minute reconciliation schedules.
+
 ## Current Scope
 
 Included:

@@ -93,6 +93,8 @@ export type DispatchRequest = {
 };
 
 export type Appointment = {
+  activityType?: "appointment" | "external_call";
+  callDirection?: "inbound" | "outbound" | "unknown";
   id: string;
   date?: string;
   requestId?: string;
@@ -116,7 +118,10 @@ export type Appointment = {
   end: string;
   bookingType?: BookingType;
   status: "confirmed" | "tentative" | "busy" | "sdp-only";
-  source: "outlook" | "linked" | "sdp";
+  source: "outlook" | "linked" | "sdp" | "yeastar";
+  externalTalkSeconds?: number;
+  transcriptStatus?: import("@/server/yeastar/types").YeastarTranscriptStatus;
+  yeastarCallId?: string;
   syncIssue?: "double-booked" | "missing-calendar" | "time-mismatch" | "past-open";
   outlookEventId?: string;
   outlookWebLink?: string;

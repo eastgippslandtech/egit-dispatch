@@ -57,5 +57,6 @@ export type WallboardSnapshot = {
   peopleStatus: "connected" | "not_configured" | "unavailable";
   presences: TechnicianPresence[];
   sourceWarnings: string[];
+  weeklyExternalTalkSeconds?: Record<string, number>;
   updatedAt: string;
 };

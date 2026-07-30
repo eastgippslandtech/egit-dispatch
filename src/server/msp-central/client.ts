@@ -317,45 +317,34 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     url: string,
     init: { body?: URLSearchParams; method: "GET" | "POST" | "PUT" },
   ): Promise<T> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const token = await getAccessToken();
-      const response = await fetch(url, {
-        body: init.body,
-        headers: {
-          Accept: "application/vnd.manageengine.sdp.v3+json",
-          Authorization: `Zoho-oauthtoken ${token}`,
-          ...(init.body
-            ? { "Content-Type": "application/x-www-form-urlencoded" }
-            : {}),
-        },
-        method: init.method,
-        signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
-      });
+    const token = await getAccessToken();
+    const response = await fetch(url, {
+      body: init.body,
+      headers: {
+        Accept: "application/vnd.manageengine.sdp.v3+json",
+        Authorization: `Zoho-oauthtoken ${token}`,
+        ...(init.body
+          ? { "Content-Type": "application/x-www-form-urlencoded" }
+          : {}),
+      },
+      method: init.method,
+      signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
+    });
 
-      if (response.status === 401 && attempt === 0) {
-        await invalidateCachedAccessToken(config, token);
-        continue;
-      }
-
-      if (!response.ok) {
-        throw new MspCentralConfigurationError(
-          `MSP Central API request failed with status ${response.status}.`,
-        );
-      }
-
-      const payload = (await response.json()) as T;
-      if (mspCentralAccessDenied(payload)) {
-        throw new MspCentralConfigurationError(
-          "MSP Central API request was denied.",
-        );
-      }
-
-      return payload;
+    if (!response.ok) {
+      throw new MspCentralConfigurationError(
+        `MSP Central API request failed with status ${response.status}.`,
+      );
     }
 
-    throw new MspCentralConfigurationError(
-      "MSP Central API request was denied.",
-    );
+    const payload = (await response.json()) as T;
+    if (mspCentralAccessDenied(payload)) {
+      throw new MspCentralConfigurationError(
+        "MSP Central API request was denied.",
+      );
+    }
+
+    return payload;
   }
 }
 
@@ -427,16 +416,6 @@ function accessTokenCacheKey(config: DispatchConfig) {
     clientId: config.mspCentral.clientId,
     refreshToken: config.mspCentral.refreshToken,
   });
-}
-
-async function invalidateCachedAccessToken(
-  config: DispatchConfig,
-  rejectedAccessToken: string,
-) {
-  await accessTokenCoordinator?.invalidate(
-    accessTokenCacheKey(config),
-    rejectedAccessToken,
-  );
 }
 
 function mspCentralAccessDenied(payload: unknown) {

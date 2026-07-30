@@ -177,6 +177,39 @@ describe("MSP Central live client", () => {
     );
   });
 
+  it("does not discard a valid access token when MSP Central returns forbidden", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "valid-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "forbidden-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "forbidden-client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "forbidden-refresh-token",
+      }),
+    );
+
+    await expect(client.listRequests()).rejects.toThrow(
+      "MSP Central API request failed with status 403.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses one Zoho access token across separate client instances", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

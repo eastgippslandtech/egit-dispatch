@@ -332,7 +332,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
       });
 
-      if ((response.status === 401 || response.status === 403) && attempt === 0) {
+      if (response.status === 401 && attempt === 0) {
         await invalidateCachedAccessToken(config, token);
         continue;
       }

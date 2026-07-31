@@ -9,7 +9,7 @@ import {
   type DispatchDashboardDatabase,
 } from "./database";
 import type { DispatchDashboardData } from "./types";
-import { buildGraphWorkWeekRange } from "@/server/graph/range";
+import { buildGraphPlanningRange } from "@/server/graph/range";
 import { buildOutlookCalendarDashboardData } from "@/server/graph/technician-calendars";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures";
@@ -92,7 +92,7 @@ export async function getDispatchDashboardData(
       const outlookData = await buildOutlookCalendarDashboardData({
         config,
         mockData: dashboard,
-        range: buildGraphWorkWeekRange(todayDateKey()),
+        range: buildGraphPlanningRange(todayDateKey()),
       });
 
       return addTrainingSamples({
@@ -118,7 +118,7 @@ export async function getDispatchDashboardData(
   const outlookData = await buildOutlookCalendarDashboardData({
     config,
     mockData,
-    range: buildGraphWorkWeekRange(todayDateKey()),
+    range: buildGraphPlanningRange(todayDateKey()),
   });
 
   return addTrainingSamples({

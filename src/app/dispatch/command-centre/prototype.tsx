@@ -2369,7 +2369,6 @@ function WorkLogModal({
     appointment,
     bookingType: resolvedBookingType,
   });
-  const [billable, setBillable] = useState(request?.billable ?? true);
   const [minutes, setMinutes] = useState(
     String(Math.max(1, chargeableTime.totalMinutes)),
   );
@@ -2377,7 +2376,9 @@ function WorkLogModal({
   const [visibility, setVisibility] = useState<"external" | "internal">(
     "external",
   );
-  const [workType, setWorkType] = useState("billable");
+  const [workType, setWorkType] = useState(
+    request?.billable === false ? "non_billable" : "billable",
+  );
 
   if (!request) {
     return null;
@@ -2389,6 +2390,7 @@ function WorkLogModal({
       ? `${formatTime(request.scheduledStart)}-${formatTime(request.scheduledEnd ?? request.scheduledStart)}`
       : "Not scheduled";
   const bookingType = resolvedBookingType ?? "Not set";
+  const billable = workType === "billable";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
@@ -2488,7 +2490,16 @@ function WorkLogModal({
                 aria-label="Work type"
                 className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
                 value={workType}
-                onChange={(event) => setWorkType(event.target.value)}
+                onChange={(event) => {
+                  const nextWorkType = event.target.value;
+                  setWorkType(nextWorkType);
+
+                  if (nextWorkType === "billable") {
+                    setVisibility("external");
+                  } else if (nextWorkType === "internal") {
+                    setVisibility("internal");
+                  }
+                }}
               >
                 <option value="billable">Billable</option>
                 <option value="non_billable">Non-billable</option>
@@ -2506,6 +2517,7 @@ function WorkLogModal({
                 <input
                   aria-label="Customer-facing"
                   checked={visibility === "external"}
+                  disabled={workType === "internal"}
                   name="worklog-visibility"
                   type="radio"
                   value="external"
@@ -2517,6 +2529,7 @@ function WorkLogModal({
                 <input
                   aria-label="Internal"
                   checked={visibility === "internal"}
+                  disabled={workType === "billable"}
                   name="worklog-visibility"
                   type="radio"
                   value="internal"
@@ -2527,15 +2540,6 @@ function WorkLogModal({
             </div>
           </fieldset>
 
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-            <input
-              aria-label="Billable"
-              checked={billable}
-              type="checkbox"
-              onChange={(event) => setBillable(event.target.checked)}
-            />
-            Billable
-          </label>
         </div>
 
         <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">

@@ -279,11 +279,38 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   expect(within(dialog).getByLabelText("Work Log notes")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Time spent")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
-  expect(within(dialog).getByLabelText("Billable")).toBeChecked();
+  expect(within(dialog).queryByRole("checkbox", { name: "Billable" })).not.toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Internal")).toBeDisabled();
   expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
   expect(
     within(dialog).getByRole("button", { name: "Save and complete ticket" }),
   ).toBeInTheDocument();
+});
+
+test("keeps Work Log billing and visibility combinations valid", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const workType = within(dialog).getByLabelText("Work type");
+  const customerFacing = within(dialog).getByLabelText("Customer-facing");
+  const internal = within(dialog).getByLabelText("Internal");
+
+  expect(customerFacing).toBeChecked();
+  expect(internal).toBeDisabled();
+
+  fireEvent.change(workType, { target: { value: "internal" } });
+  expect(internal).toBeChecked();
+  expect(customerFacing).toBeDisabled();
+
+  fireEvent.change(workType, { target: { value: "non_billable" } });
+  expect(customerFacing).not.toBeDisabled();
+  expect(internal).not.toBeDisabled();
 });
 
 test("saves Work Log locally and save-and-complete marks the request resolved", async () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { bookingTiming, bookingTypeForRequest } from "./booking";
+import {
+  applyBookingTypeToRequest,
+  bookingTiming,
+  bookingTypeForRequest,
+} from "./booking";
 
 describe("dispatch booking types", () => {
   it("keeps an explicitly selected booking type", () => {
@@ -22,5 +26,26 @@ describe("dispatch booking types", () => {
     });
     expect(bookingTiming(60, "Remote").totalDurationMinutes).toBe(60);
     expect(bookingTiming(60, "In house").totalDurationMinutes).toBe(60);
+  });
+
+  it("removes stale remote location metadata when switched to onsite", () => {
+    const request = applyBookingTypeToRequest(
+      {
+        bookingType: "Remote",
+        customer: "EGIT Training",
+        onsite: false,
+        mockTravelMinutes: 0,
+        site: "Remote / Virtual",
+        siteTown: "Remote",
+      },
+      "Onsite",
+    );
+
+    expect(request).toMatchObject({
+      bookingType: "Onsite",
+      onsite: true,
+    });
+    expect(request.siteTown).toBeUndefined();
+    expect(request.mockTravelMinutes).toBeUndefined();
   });
 });

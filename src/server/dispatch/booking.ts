@@ -2,6 +2,31 @@ import type { BookingType, DispatchRequest } from "./types";
 
 export const ONSITE_NOTE_TIME_MINUTES = 15;
 
+export function applyBookingTypeToRequest<
+  T extends Pick<
+    DispatchRequest,
+    "bookingType" | "mockTravelMinutes" | "onsite" | "siteTown"
+  >,
+>(request: T, bookingType: BookingType): T {
+  const previousTown = request.siteTown?.trim().toLowerCase();
+
+  return {
+    ...request,
+    bookingType,
+    mockTravelMinutes:
+      bookingType === "Onsite" && request.mockTravelMinutes === 0
+        ? undefined
+        : request.mockTravelMinutes,
+    onsite: bookingType === "Onsite",
+    siteTown:
+      bookingType === "Remote"
+        ? "Remote"
+        : previousTown === "remote"
+          ? undefined
+          : request.siteTown,
+  };
+}
+
 export function bookingTypeForRequest(
   request: Pick<
     DispatchRequest,

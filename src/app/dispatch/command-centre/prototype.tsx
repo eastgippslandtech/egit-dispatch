@@ -45,6 +45,7 @@ import type {
 } from "@/server/dispatch/types";
 import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
 import {
+  applyBookingTypeToRequest,
   bookingTiming,
   bookingTypeForRequest,
 } from "@/server/dispatch/booking";
@@ -676,15 +677,10 @@ export function CommandCentrePrototype({
   ) {
     return buildAppointmentTravel({
       request: request
-        ? {
-            ...request,
-            bookingType: bookingType ?? request.bookingType,
-            onsite: (bookingType ?? request.bookingType) === "Onsite",
-            siteTown:
-              (bookingType ?? request.bookingType) === "Remote"
-                ? "Remote"
-                : request.siteTown,
-          }
+        ? applyBookingTypeToRequest(
+            request,
+            bookingType ?? bookingTypeForRequest(request),
+          )
         : undefined,
       technician: dashboard.technicians.find(
         (technician) => technician.id === technicianId,

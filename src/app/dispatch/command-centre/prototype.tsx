@@ -29,6 +29,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 import { PresenceControls } from "@/app/components/presence-controls";
+import type {
+  MspCentralRequestContext,
+  MspCentralRequestUpdate,
+} from "@/server/msp-central/types";
 
 import type {
   Appointment,
@@ -1673,6 +1677,7 @@ export function CommandCentrePrototype({
             appointment={dashboard.appointments.find(
               (appointment) => appointment.requestId === workLogRequestId,
             )}
+            key={workLogRequestId}
             liveWriteback={
               dashboard.dispatchDataSource === "msp-central" &&
               dashboard.requests.find(
@@ -1810,6 +1815,22 @@ async function publishMspCentralWorklog(event: {
   if (!response.ok) {
     throw new Error(body?.error ?? "MSP Central Work Log save failed.");
   }
+}
+
+async function loadMspCentralRequestContext(requestId: string) {
+  const response = await fetch(
+    `/api/internal/msp-central/requests/${encodeURIComponent(requestId)}/context`,
+    { cache: "no-store" },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | (MspCentralRequestContext & { error?: string })
+    | null;
+
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Latest ticket information could not be loaded.");
+  }
+
+  return body;
 }
 
 function testSyncErrorMessage(error: unknown) {
@@ -2379,10 +2400,47 @@ function WorkLogModal({
   const [workType, setWorkType] = useState(
     request?.billable === false ? "non_billable" : "billable",
   );
+  const [requestContext, setRequestContext] =
+    useState<MspCentralRequestContext>();
+  const [contextStatus, setContextStatus] = useState<
+    "idle" | "loading" | "loaded" | "failed"
+  >(liveWriteback ? "loading" : "idle");
+  const [contextError, setContextError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    if (!liveWriteback || !request?.id) {
+      return () => {
+        active = false;
+      };
+    }
+
+    loadMspCentralRequestContext(request.id)
+      .then((context) => {
+        if (!active) return;
+        setRequestContext(context);
+        setContextStatus("loaded");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setContextStatus("failed");
+        setContextError(
+          error instanceof Error
+            ? error.message
+            : "Latest ticket information could not be loaded.",
+        );
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [liveWriteback, request?.id]);
 
   if (!request) {
     return null;
   }
+
+  const latestRequest = requestContext?.request ?? request;
 
   const scheduledTime = appointment
     ? `${appointment.start}-${appointment.end}`
@@ -2424,17 +2482,20 @@ function WorkLogModal({
             Latest job information
           </h3>
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            <DetailInline label="Request number" value={request.requestNumber} />
-            <DetailInline label="Subject" value={request.subject} />
+            <DetailInline label="Request number" value={latestRequest.requestNumber} />
+            <DetailInline label="Subject" value={latestRequest.subject} />
             <DetailInline
               label="Customer/site"
-              value={`${request.customer} / ${request.site}`}
+              value={`${latestRequest.customer} / ${latestRequest.site}`}
             />
-            <DetailInline label="Status" value={request.status} />
-            <DetailInline label="Priority" value={request.priority} />
+            <DetailInline label="Status" value={latestRequest.status} />
+            <DetailInline label="Priority" value={latestRequest.priority} />
             <DetailInline label="Technician" value={technician} />
             <DetailInline label="Scheduled time" value={scheduledTime} />
-            <DetailInline label="Due time" value={formatDateTime(request.dueAt)} />
+            <DetailInline
+              label="Due time"
+              value={formatDateTime(latestRequest.dueAt)}
+            />
             <DetailInline label="Booking type" value={bookingType} />
             {chargeableTime.travelMinutes > 0 ? (
               <DetailInline
@@ -2444,20 +2505,48 @@ function WorkLogModal({
             ) : null}
             <DetailInline
               label="Contact"
-              value={`${request.requester} / ${request.contact}`}
+              value={`${latestRequest.requester} / ${latestRequest.contact}`}
             />
             <DetailInline
               label="Site/address"
-              value={request.siteAddress || request.site}
-            />
-            <DetailInline
-              label="Current/latest notes"
-              value={
-                request.notes ??
-                "No current notes recorded in Command Centre yet."
-              }
+              value={latestRequest.siteAddress || latestRequest.site}
             />
           </div>
+
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <h4 className="text-xs font-semibold uppercase text-slate-300">
+              Job description
+            </h4>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-slate-100">
+              {latestRequest.notes ?? "No job description is recorded in MSP Central."}
+            </p>
+          </div>
+
+          {contextStatus === "loading" ? (
+            <p className="mt-4 text-xs text-slate-400">
+              Loading latest customer responses and notes...
+            </p>
+          ) : null}
+          {contextStatus === "failed" ? (
+            <p className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+              {contextError}
+            </p>
+          ) : null}
+          {requestContext ? (
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <TicketUpdateList
+                emptyLabel="No customer responses are recorded."
+                title="Customer responses"
+                updates={requestContext.customerResponses}
+              />
+              <TicketUpdateList
+                emptyLabel="No technician or internal notes are recorded."
+                title="Internal notes"
+                updates={requestContext.internalNotes}
+                warning={requestContext.notesWarning}
+              />
+            </div>
+          ) : null}
         </section>
 
         <div className="mt-5 grid gap-4">
@@ -3066,6 +3155,46 @@ function RequestQueueCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+function TicketUpdateList({
+  emptyLabel,
+  title,
+  updates,
+  warning,
+}: {
+  emptyLabel: string;
+  title: string;
+  updates: MspCentralRequestUpdate[];
+  warning?: string;
+}) {
+  return (
+    <section>
+      <h4 className="text-xs font-semibold uppercase text-slate-300">{title}</h4>
+      {warning ? (
+        <p className="mt-2 text-xs text-amber-200">{warning}</p>
+      ) : updates.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-400">{emptyLabel}</p>
+      ) : (
+        <div className="mt-2 grid max-h-40 gap-2 overflow-auto pr-1">
+          {updates.map((update) => (
+            <article
+              className="rounded-md border border-white/10 bg-[#111d30] p-2"
+              key={update.id}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                <span className="font-semibold text-slate-200">{update.author}</span>
+                {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-100">
+                {update.body}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

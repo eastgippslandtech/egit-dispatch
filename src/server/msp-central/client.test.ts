@@ -125,6 +125,84 @@ describe("MSP Central live client", () => {
     ).toHaveLength(1);
   });
 
+  it("loads fresh request detail and separates customer responses from internal notes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            customer: { name: "Client Company" },
+            description: "<p>Current detailed job description.</p>",
+            id: "123",
+            request_number: "REQ-123",
+            subject: "Printer offline",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request_notes: [
+            {
+              created_by: { is_technician: false, name: "Client User" },
+              created_time: { value: "1783501200000" },
+              description: "<p>The printer is still offline.</p>",
+              id: "note-customer",
+              show_to_requester: true,
+            },
+            {
+              created_by: { is_technician: true, name: "Simeon" },
+              created_time: { value: "1783504800000" },
+              description: "<p>Replacement part ordered.</p>",
+              id: "note-internal",
+              show_to_requester: false,
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const context = await client.getRequestContext("123");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("/requests/123/notes"),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(context.request).toMatchObject({
+      customer: "Client Company",
+      notes: "Current detailed job description.",
+    });
+    expect(context.customerResponses).toEqual([
+      expect.objectContaining({
+        author: "Client User",
+        body: "The printer is still offline.",
+      }),
+    ]);
+    expect(context.internalNotes).toEqual([
+      expect.objectContaining({
+        author: "Simeon",
+        body: "Replacement part ordered.",
+      }),
+    ]);
+  });
+
   it("does not discard an unexpired token when an endpoint returns unauthorized", async () => {
     const fetchMock = vi
       .fn()

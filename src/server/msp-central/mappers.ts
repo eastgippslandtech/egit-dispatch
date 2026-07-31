@@ -12,7 +12,12 @@ import {
   type StaffProfile,
 } from "@/server/staff/profiles";
 
-import type { MspCentralRawRequest, MspCentralRawTechnician } from "./types";
+import type {
+  MspCentralRawRequest,
+  MspCentralRawRequestNote,
+  MspCentralRawTechnician,
+  MspCentralRequestUpdate,
+} from "./types";
 import { buildMspCentralRequestUrl } from "./url";
 
 type MapRequestOptions = {
@@ -65,7 +70,7 @@ export function mapMspCentralRequest(
   const scheduledEnd = readDateTime(raw.scheduled_end_time);
   const customer =
     readString(raw.account?.name) ??
-    readString(raw.customer) ??
+    readPriorityStatusName(raw.customer) ??
     "Unknown customer";
   const site = readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site";
   const siteAddress =
@@ -74,7 +79,7 @@ export function mapMspCentralRequest(
   const siteName =
     readString(raw.site?.name) ?? readString(raw.site_name) ?? undefined;
   const siteTown = readString(raw.site?.city) ?? readString(raw.site_town) ?? undefined;
-  const notes = readString(raw.description);
+  const notes = htmlToPlainText(raw.description);
   const autoAssignment = match.profile
     ? undefined
     : autoAssignAdvancedWorksTechnician({
@@ -105,6 +110,7 @@ export function mapMspCentralRequest(
     category: readPriorityStatusName(raw.category),
     contact:
       readString(raw.requester?.email) ??
+      readString(raw.requester?.email_id) ??
       readString(raw.requester_email) ??
       "Unknown contact",
     customer,
@@ -306,6 +312,37 @@ function autoAssignAdvancedWorksTechnician({
   };
 }
 
+export function mapMspCentralRequestNotes(
+  notes: MspCentralRawRequestNote[] = [],
+) {
+  const customerResponses: MspCentralRequestUpdate[] = [];
+  const internalNotes: MspCentralRequestUpdate[] = [];
+
+  notes.forEach((note, index) => {
+    const body = htmlToPlainText(note.description);
+    if (!body) return;
+
+    const update = {
+      author:
+        readString(note.created_by?.name) ??
+        readString(note.created_by?.email_id) ??
+        readString(note.created_by?.email) ??
+        "Unknown author",
+      body,
+      createdAt: readDateTime(note.created_time),
+      id: readString(note.id) ?? `request-note-${index}`,
+    };
+
+    if (note.created_by?.is_technician === false) {
+      customerResponses.push(update);
+    } else {
+      internalNotes.push(update);
+    }
+  });
+
+  return { customerResponses, internalNotes };
+}
+
 export function mapMspCentralSentiment(
   value?: string,
 ): RequestSentiment | undefined {
@@ -461,6 +498,27 @@ function readString(value: unknown) {
 
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+export function htmlToPlainText(value?: string | null) {
+  const text = value?.trim();
+  if (!text) return undefined;
+
+  return text
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<\s*li(?:\s[^>]*)?>/gi, "- ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() || undefined;
 }
 
 function readDateTime(value: unknown) {

@@ -6,7 +6,11 @@ import {
   loadFixtureRequestDetail,
   loadMspCentralFixtureResponses,
 } from "./fixtures";
-import { mapMspCentralRequests, mapMspCentralTechnicians } from "./mappers";
+import {
+  mapMspCentralRequestNotes,
+  mapMspCentralRequests,
+  mapMspCentralTechnicians,
+} from "./mappers";
 import {
   buildMspOAuthCacheKey,
   MspOAuthAccessTokenCoordinator,
@@ -16,6 +20,7 @@ import type {
   MspCentralClient,
   MspCentralRequestDetailResponse,
   MspCentralRequestListResponse,
+  MspCentralRequestNoteListResponse,
   MspCentralTechnicianListResponse,
 } from "./types";
 
@@ -57,6 +62,18 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
       return (await this.listRequests()).find(
         (request) => request.id === requestId || request.requestNumber === requestId,
       ) ?? loadFixtureRequestDetail();
+    },
+    async getRequestContext(requestId) {
+      const request = await this.getRequest(requestId);
+      if (!request) {
+        throw new MspCentralConfigurationError("MSP Central request was not found.");
+      }
+
+      return {
+        customerResponses: [],
+        internalNotes: [],
+        request,
+      };
     },
     async getTechnician(technicianId) {
       return (await this.listTechnicians()).find(
@@ -185,6 +202,54 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
             sourceSystem: "msp-central",
           })[0]
         : undefined;
+    },
+    async getRequestContext(requestId) {
+      assertConfigured();
+      const requestPayload = await getJson<MspCentralRequestDetailResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(requestId)}`,
+      );
+      const rawRequest = requestPayload.request;
+      if (!rawRequest) {
+        throw new MspCentralConfigurationError("MSP Central request was not found.");
+      }
+      const request = mapMspCentralRequests([rawRequest], {
+        profiles: getInitialStaffProfiles(),
+        requestWebBaseUrl: config.mspCentral.requestWebBaseUrl,
+        sourceSystem: "msp-central",
+      })[0];
+
+      try {
+        const notesUrl = new URL(
+          `${apiRoot}/requests/${encodeURIComponent(requestId)}/notes`,
+        );
+        notesUrl.searchParams.set(
+          "input_data",
+          JSON.stringify({
+            list_info: {
+              row_count: 100,
+              sort_field: "created_time",
+              sort_order: "desc",
+              start_index: 1,
+            },
+          }),
+        );
+        const notesPayload = await getJson<MspCentralRequestNoteListResponse>(
+          notesUrl.toString(),
+        );
+
+        return {
+          ...mapMspCentralRequestNotes(notesPayload.request_notes),
+          request,
+        };
+      } catch (error) {
+        console.error("MSP Central request notes read failed", safeError(error));
+        return {
+          customerResponses: [],
+          internalNotes: [],
+          notesWarning: "Latest ticket notes could not be loaded.",
+          request,
+        };
+      }
     },
     async getTechnician(technicianId) {
       return (await this.listTechnicians()).find(
@@ -463,4 +528,10 @@ function buildMspCentralApiRoot(config: DispatchConfig) {
 
 function uniqueNamedRows(rows: Array<{ id: string; name: string }>) {
   return [...new Map(rows.map((row) => [row.id, row])).values()];
+}
+
+function safeError(error: unknown) {
+  return error instanceof Error
+    ? { message: error.message }
+    : { message: "Unknown MSP Central error." };
 }

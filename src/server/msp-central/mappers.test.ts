@@ -143,6 +143,28 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("maps nested MSP customer details and cleans HTML descriptions", () => {
+    const request = mapMspCentralRequest(
+      {
+        customer: { name: "Client Company" },
+        description:
+          "<p>Printer is offline.</p><p>Please call reception &amp; confirm access.</p>",
+        id: "msp-detail-1",
+        requester: {
+          email_id: "requester@example.com",
+          name: "Requesting User",
+        },
+      },
+      { now },
+    );
+
+    expect(request).toMatchObject({
+      contact: "requester@example.com",
+      customer: "Client Company",
+      notes: "Printer is offline.\nPlease call reception & confirm access.",
+    });
+  });
+
   it("does not auto-assign Advanced Works during office hours", () => {
     const request = mapMspCentralRequest(
       {

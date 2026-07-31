@@ -273,7 +273,7 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   expect(within(dialog).getByText("Due time")).toBeInTheDocument();
   expect(within(dialog).getByText("Contact")).toBeInTheDocument();
   expect(within(dialog).getByText("Site/address")).toBeInTheDocument();
-  expect(within(dialog).getByText("Current/latest notes")).toBeInTheDocument();
+  expect(within(dialog).getByText("Job description")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Customer-facing")).toBeChecked();
   expect(within(dialog).getByLabelText("Internal")).not.toBeChecked();
   expect(within(dialog).getByLabelText("Work Log notes")).toBeInTheDocument();
@@ -311,6 +311,73 @@ test("keeps Work Log billing and visibility combinations valid", async () => {
   fireEvent.change(workType, { target: { value: "non_billable" } });
   expect(customerFacing).not.toBeDisabled();
   expect(internal).not.toBeDisabled();
+});
+
+test("loads the latest job description and customer responses into a live Work Log", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central",
+    })),
+    selectedRequestId: selectedRequest.id,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      json: async () => ({
+        customerResponses: [
+          {
+            author: "Mel Harris",
+            body: "Labels are no longer printing at all.",
+            createdAt: "2026-07-08T01:30:00.000Z",
+            id: "response-1",
+          },
+        ],
+        internalNotes: [
+          {
+            author: "Simeon",
+            body: "Confirm access before dispatch.",
+            createdAt: "2026-07-08T01:45:00.000Z",
+            id: "note-1",
+          },
+        ],
+        request: {
+          ...selectedRequest,
+          notes: "The Zebra label printer is offline after a power outage.",
+          sourceSystem: "msp-central",
+        },
+      }),
+      ok: true,
+    })),
+  );
+
+  render(await CommandCentrePage());
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(await within(dialog).findByText("Job description")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText(
+      "The Zebra label printer is offline after a power outage.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByText("Customer responses")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("Labels are no longer printing at all."),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByText("Internal notes")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("Confirm access before dispatch."),
+  ).toBeInTheDocument();
 });
 
 test("saves Work Log locally and save-and-complete marks the request resolved", async () => {

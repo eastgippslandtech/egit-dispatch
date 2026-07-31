@@ -20,7 +20,7 @@ export type MspCentralRawRequest = {
   billable?: boolean | null;
   category?: string | { name?: string | null } | null;
   created_time?: MspCentralTimestamp | null;
-  customer?: string | null;
+  customer?: string | { name?: string | null } | null;
   description?: string | null;
   due_by_time?: MspCentralTimestamp | null;
   id?: string | number | null;
@@ -30,7 +30,11 @@ export type MspCentralRawRequest = {
   onsite?: boolean | null;
   priority?: string | { name?: string | null } | null;
   request_number?: string | null;
-  requester?: { email?: string | null; name?: string | null } | null;
+  requester?: {
+    email?: string | null;
+    email_id?: string | null;
+    name?: string | null;
+  } | null;
   requester_email?: string | null;
   requester_name?: string | null;
   scheduled_end_time?: MspCentralTimestamp | null;
@@ -69,6 +73,37 @@ export type MspCentralRawRequest = {
   last_updated_by?: { email?: string | null; name?: string | null } | null;
 };
 
+export type MspCentralRawRequestNote = {
+  created_by?: {
+    email?: string | null;
+    email_id?: string | null;
+    is_technician?: boolean | null;
+    name?: string | null;
+  } | null;
+  created_time?: MspCentralTimestamp | null;
+  description?: string | null;
+  id?: string | number | null;
+  show_to_requester?: boolean | null;
+};
+
+export type MspCentralRequestNoteListResponse = {
+  request_notes?: MspCentralRawRequestNote[];
+};
+
+export type MspCentralRequestUpdate = {
+  author: string;
+  body: string;
+  createdAt?: string;
+  id: string;
+};
+
+export type MspCentralRequestContext = {
+  customerResponses: MspCentralRequestUpdate[];
+  internalNotes: MspCentralRequestUpdate[];
+  notesWarning?: string;
+  request: DispatchRequest;
+};
+
 export type MspCentralRequestListResponse = {
   requests?: MspCentralRawRequest[];
 };
@@ -100,6 +135,7 @@ export type MspCentralClient = {
     technicianName: string;
   }): Promise<void>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
+  getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
   listCustomers(): Promise<Array<{ id: string; name: string }>>;
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;

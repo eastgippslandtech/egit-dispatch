@@ -74,6 +74,16 @@ describe("MSP Central live client", () => {
         method: "GET",
       }),
     );
+    const requestUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(JSON.parse(requestUrl.searchParams.get("input_data") ?? "{}")).toMatchObject({
+      list_info: {
+        search_criteria: {
+          condition: "is",
+          field: "status.in_progress",
+          values: [true],
+        },
+      },
+    });
     expect(requests[0]).toMatchObject({
       customer: "Example Co",
       priority: "High",

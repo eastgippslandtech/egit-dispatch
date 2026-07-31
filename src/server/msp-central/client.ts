@@ -397,9 +397,17 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
             sort_field: "created_time",
             sort_order: "desc",
             start_index: startIndex,
-            ...(params?.status
-              ? { search_fields: { status: { name: params.status } } }
-              : {}),
+            search_criteria: params?.status
+              ? {
+                  field: "status.internal_name",
+                  condition: "is",
+                  values: [params.status],
+                }
+              : {
+                  field: "status.in_progress",
+                  condition: "is",
+                  values: [true],
+                },
           },
         }),
       );
@@ -408,6 +416,15 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       );
       const pageRequests = payload.requests ?? [];
       rawRequests.push(...pageRequests);
+      console.info("MSP Central request page read", {
+        hasMoreRows: payload.list_info?.has_more_rows,
+        page: page + 1,
+        requestCount: pageRequests.length,
+        returnedRowCount: payload.list_info?.row_count,
+        returnedStartIndex: payload.list_info?.start_index,
+        startIndex,
+        totalCount: payload.list_info?.total_count,
+      });
 
       if (
         !mspHasMoreRows(payload.list_info?.has_more_rows) ||

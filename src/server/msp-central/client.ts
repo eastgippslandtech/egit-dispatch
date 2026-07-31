@@ -12,6 +12,10 @@ import {
   mapMspCentralTechnicians,
 } from "./mappers";
 import {
+  getConfiguredMspRequestSnapshotStore,
+  loadMspRequestsWithSnapshot,
+} from "./request-snapshot";
+import {
   buildMspOAuthCacheKey,
   MspOAuthAccessTokenCoordinator,
 } from "./token-cache";
@@ -144,6 +148,9 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   };
   const apiRoot = buildMspCentralApiRoot(config);
   const getAccessToken = () => getCachedAccessToken(config);
+  const requestSnapshotStore = getConfiguredMspRequestSnapshotStore({
+    portal: config.mspCentral.portal,
+  });
 
   return {
     async addRequestWorklog(input) {
@@ -269,49 +276,10 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     },
     async listRequests(params) {
       assertConfigured();
-      const rawRequests: NonNullable<MspCentralRequestListResponse["requests"]> = [];
-      let startIndex = 1;
-
-      for (let page = 0; page < MSP_REQUEST_MAX_PAGES; page += 1) {
-        const url = new URL(`${apiRoot}/requests`);
-        url.searchParams.set(
-          "input_data",
-          JSON.stringify({
-            list_info: {
-              get_total_count: true,
-              row_count: MSP_REQUEST_PAGE_SIZE,
-              sort_field: "created_time",
-              sort_order: "desc",
-              start_index: startIndex,
-              ...(params?.status
-                ? { search_fields: { status: { name: params.status } } }
-                : {}),
-            },
-          }),
-        );
-        const payload = await getJson<MspCentralRequestListResponse>(
-          url.toString(),
-        );
-        const pageRequests = payload.requests ?? [];
-        rawRequests.push(...pageRequests);
-
-        if (
-          !mspHasMoreRows(payload.list_info?.has_more_rows) ||
-          pageRequests.length === 0
-        ) {
-          break;
-        }
-
-        const returnedStartIndex = mspListNumber(
-          payload.list_info?.start_index,
-          startIndex,
-        );
-        const returnedRowCount = mspListNumber(
-          payload.list_info?.row_count,
-          pageRequests.length,
-        );
-        startIndex = returnedStartIndex + Math.max(returnedRowCount, 1);
-      }
+      const rawRequests = await loadMspRequestsWithSnapshot({
+        fetchRequests: () => fetchRawRequests(params),
+        store: params?.status ? null : requestSnapshotStore,
+      });
 
       const mappedRequests = mapMspCentralRequests(rawRequests, {
         profiles: getInitialStaffProfiles(),
@@ -410,6 +378,56 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
   async function getJson<T>(url: string): Promise<T> {
     return requestJson<T>(url, { method: "GET" });
+  }
+
+  async function fetchRawRequests(
+    params?: Parameters<MspCentralClient["listRequests"]>[0],
+  ) {
+    const rawRequests: NonNullable<MspCentralRequestListResponse["requests"]> = [];
+    let startIndex = 1;
+
+    for (let page = 0; page < MSP_REQUEST_MAX_PAGES; page += 1) {
+      const url = new URL(`${apiRoot}/requests`);
+      url.searchParams.set(
+        "input_data",
+        JSON.stringify({
+          list_info: {
+            get_total_count: true,
+            row_count: MSP_REQUEST_PAGE_SIZE,
+            sort_field: "created_time",
+            sort_order: "desc",
+            start_index: startIndex,
+            ...(params?.status
+              ? { search_fields: { status: { name: params.status } } }
+              : {}),
+          },
+        }),
+      );
+      const payload = await getJson<MspCentralRequestListResponse>(
+        url.toString(),
+      );
+      const pageRequests = payload.requests ?? [];
+      rawRequests.push(...pageRequests);
+
+      if (
+        !mspHasMoreRows(payload.list_info?.has_more_rows) ||
+        pageRequests.length === 0
+      ) {
+        break;
+      }
+
+      const returnedStartIndex = mspListNumber(
+        payload.list_info?.start_index,
+        startIndex,
+      );
+      const returnedRowCount = mspListNumber(
+        payload.list_info?.row_count,
+        pageRequests.length,
+      );
+      startIndex = returnedStartIndex + Math.max(returnedRowCount, 1);
+    }
+
+    return rawRequests;
   }
 
   async function requestJson<T>(

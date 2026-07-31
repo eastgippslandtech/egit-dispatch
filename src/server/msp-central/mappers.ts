@@ -12,6 +12,7 @@ import {
   type StaffProfile,
 } from "@/server/staff/profiles";
 
+import { bookingTypeForRequest } from "@/server/dispatch/booking";
 import type {
   MspCentralRawRequest,
   MspCentralRawRequestNote,
@@ -100,7 +101,7 @@ export function mapMspCentralRequest(
     scheduledStart && !scheduledEnd ? "Scheduled end time missing" : undefined,
   ].filter((warning): warning is string => Boolean(warning));
 
-  return {
+  const request: DispatchRequest = {
     id: readString(raw.id) ?? requestNumber,
     ageHours: estimateAgeHours(readDateTime(raw.created_time), now),
     assetNames: raw.assets
@@ -121,7 +122,7 @@ export function mapMspCentralRequest(
     ),
     item: readPriorityStatusName(raw.item),
     notes,
-    onsite: Boolean(raw.is_onsite ?? raw.onsite),
+    onsite: optionalBoolean(raw.is_onsite ?? raw.onsite),
     priority: mapMspCentralPriority(readPriorityStatusName(raw.priority)),
     readyToBook: isReadyToBook(raw, scheduledStart),
     requester:
@@ -159,6 +160,15 @@ export function mapMspCentralRequest(
       readString(raw.last_updated_by?.email),
     warnings,
   };
+
+  return {
+    ...request,
+    bookingType: bookingTypeForRequest(request),
+  };
+}
+
+function optionalBoolean(value: boolean | null | undefined) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function mapMspCentralRequests(

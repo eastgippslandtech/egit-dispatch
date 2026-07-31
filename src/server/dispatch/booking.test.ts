@@ -28,6 +28,39 @@ describe("dispatch booking types", () => {
     expect(bookingTiming(60, "In house").totalDurationMinutes).toBe(60);
   });
 
+  it("infers remote and onsite work from request context", () => {
+    expect(
+      bookingTypeForRequest({
+        customer: "Example Co",
+        notes: "Please assist the user remotely via Teams.",
+        onsite: undefined,
+        site: "Unknown site",
+        subject: "Microsoft 365 support",
+      }),
+    ).toBe("Remote");
+    expect(
+      bookingTypeForRequest({
+        customer: "Example Co",
+        notes: "Technician required for an onsite visit.",
+        onsite: undefined,
+        site: "Sale showroom",
+        siteAddress: "1 Raymond Street, Sale VIC 3850",
+        subject: "Printer offline",
+      }),
+    ).toBe("Onsite");
+  });
+
+  it("defaults unknown work to onsite so travel is not silently omitted", () => {
+    expect(
+      bookingTypeForRequest({
+        customer: "Example Co",
+        onsite: undefined,
+        site: "Unknown site",
+        subject: "Printer offline",
+      }),
+    ).toBe("Onsite");
+  });
+
   it("removes stale remote location metadata when switched to onsite", () => {
     const request = applyBookingTypeToRequest(
       {

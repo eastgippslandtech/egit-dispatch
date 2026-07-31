@@ -28,22 +28,58 @@ export function applyBookingTypeToRequest<
 }
 
 export function bookingTypeForRequest(
-  request: Pick<
+  request: Pick<DispatchRequest, "bookingType" | "onsite"> &
+    Partial<
+      Pick<
     DispatchRequest,
-    "bookingType" | "customer" | "onsite" | "site"
-  >,
+        | "category"
+        | "customer"
+        | "item"
+        | "notes"
+        | "site"
+        | "siteAddress"
+        | "siteArea"
+        | "siteName"
+        | "siteTown"
+        | "subcategory"
+        | "subject"
+      >
+    >,
 ): BookingType {
   if (request.bookingType) {
     return request.bookingType;
   }
 
-  const location = `${request.site} ${request.customer}`.toLowerCase();
-
-  if (request.onsite === false || location.includes("remote")) {
+  if (request.onsite === false) {
     return "Remote";
   }
 
-  if (/internal egit|workshop|in[- ]house/.test(location)) {
+  if (request.onsite === true) {
+    return "Onsite";
+  }
+
+  const context = [
+    request.subject,
+    request.notes,
+    request.category,
+    request.subcategory,
+    request.item,
+    request.customer,
+    request.site,
+    request.siteName,
+    request.siteAddress,
+    request.siteTown,
+    request.siteArea,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\b(remote|remotely|teams|screenconnect|phone support|telephone support)\b/.test(context)) {
+    return "Remote";
+  }
+
+  if (/internal egit|egit workshop|\bin[- ]house\b/.test(context)) {
     return "In house";
   }
 

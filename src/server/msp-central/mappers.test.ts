@@ -267,6 +267,23 @@ describe("MSP Central request mappers", () => {
     ]);
   });
 
+  it("does not treat a missing onsite flag as remote", () => {
+    const unknown = mapMspCentralRequest({
+      description: "Technician required at the customer office.",
+      request_number: "REQ-ONSITE-UNKNOWN",
+      subject: "Printer offline",
+    });
+    const remote = mapMspCentralRequest({
+      description: "Please resolve remotely using Microsoft Teams.",
+      request_number: "REQ-REMOTE-INFERRED",
+      subject: "Mailbox support",
+    });
+
+    expect(unknown.onsite).toBeUndefined();
+    expect(unknown.bookingType).toBe("Onsite");
+    expect(remote.bookingType).toBe("Remote");
+  });
+
   it("auto-assigns Advanced Works and Viridian IT requests by site proximity", () => {
     const bairnsdaleRequest = mapMspCentralRequest(
       {

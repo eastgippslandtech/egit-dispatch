@@ -346,8 +346,8 @@ export function CommandCentrePrototype({
 
   const fallbackRequest = selectedRequest ?? dashboard.requests[0];
 
-  const readyRequests = dashboard.requests.filter(
-    (request) => request.readyToBook && !request.scheduledStart,
+  const unscheduledRequests = dashboard.requests.filter(
+    (request) => !request.scheduledStart && request.status !== "Resolved",
   );
   const queueRequests = activeHealth
     ? dashboard.requests.filter((request) =>
@@ -357,7 +357,7 @@ export function CommandCentrePrototype({
           scopedData.appointments,
         ),
       )
-    : readyRequests;
+    : unscheduledRequests;
   const filteredQueueRequests = queueRequests.filter(
     (request) =>
       requestMatchesSearch(request, queueSearch, dashboard.technicians) &&
@@ -1430,7 +1430,7 @@ export function CommandCentrePrototype({
                 <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
                   {filtersActive
                     ? `${filteredQueueRequests.length} of ${queueRequests.length}`
-                    : readyRequests.length}
+                    : unscheduledRequests.length}
                 </span>
               </div>
               <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cc-orange/40">

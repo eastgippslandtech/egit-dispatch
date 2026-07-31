@@ -111,6 +111,33 @@ test("does not crash when a live request contains an invalid due date", async ()
   ).toBeInTheDocument();
 });
 
+test("shows open unscheduled MSP Central requests without a ready-to-book flag", async () => {
+  const data = getDispatchDesignMockData();
+  const openRequest = {
+    ...data.requests[0],
+    id: "live-open-request",
+    readyToBook: false,
+    scheduledEnd: undefined,
+    scheduledStart: undefined,
+    sourceSystem: "msp-central" as const,
+    status: "Open" as const,
+    subject: "New live Helpdesk request",
+  };
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    requests: [openRequest],
+    selectedRequestId: openRequest.id,
+  });
+
+  render(await CommandCentrePage());
+
+  expect(
+    within(screen.getByTestId("request-queue")).getByText(
+      "New live Helpdesk request",
+    ),
+  ).toBeInTheDocument();
+});
+
 test("maps booking urgency to full-card priority colours", () => {
   expect(bookingCardPriorityClass("Critical")).toContain("bg-rose");
   expect(bookingCardPriorityClass("High")).toContain("bg-amber");
@@ -698,7 +725,7 @@ test("filters the request queue with request search", async () => {
   fireEvent.change(search, { target: { value: "REQ-100284" } });
   expect(within(queue).getByText("Packhouse label printer offline")).toBeInTheDocument();
   expect(within(queue).queryByText("Finance workstation replacement")).not.toBeInTheDocument();
-  expect(screen.getByText("1 of 14")).toBeInTheDocument();
+  expect(screen.getByText("1 of 15")).toBeInTheDocument();
 
   fireEvent.change(search, { target: { value: "Decor Floors" } });
   expect(within(queue).getByText("POS terminal intermittent dropouts")).toBeInTheDocument();

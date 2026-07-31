@@ -181,6 +181,32 @@ test("shows open unscheduled MSP Central requests without a ready-to-book flag",
   ).toBeInTheDocument();
 });
 
+test("keeps billing state and unknown site placeholders out of queue cards", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    billable: false,
+    id: "live-request-without-site",
+    scheduledEnd: undefined,
+    scheduledStart: undefined,
+    site: "Unknown site",
+    sourceSystem: "msp-central" as const,
+    status: "Open" as const,
+  };
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    requests: [request],
+    selectedRequestId: request.id,
+  });
+
+  render(await CommandCentrePage());
+
+  const queue = screen.getByTestId("request-queue");
+  expect(within(queue).queryByText("Billable")).not.toBeInTheDocument();
+  expect(within(queue).queryByText("Non-billable")).not.toBeInTheDocument();
+  expect(within(queue).queryByText("Unknown site")).not.toBeInTheDocument();
+});
+
 test("maps booking urgency to full-card priority colours", () => {
   expect(bookingCardPriorityClass("Critical")).toContain("bg-rose");
   expect(bookingCardPriorityClass("High")).toContain("bg-amber");

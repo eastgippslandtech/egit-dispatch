@@ -73,14 +73,20 @@ export function mapMspCentralRequest(
     readString(raw.account?.name) ??
     readPriorityStatusName(raw.customer) ??
     "Unknown customer";
-  const site = readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site";
+  const notes = htmlToPlainText(raw.description);
+  const inferredSiteTown = findKnownSiteTown([
+    readString(raw.subject),
+    notes,
+    ...readUdfTextValues(raw.udf_fields),
+  ]);
   const siteAddress =
     readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined;
   const siteArea = readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined;
   const siteName =
-    readString(raw.site?.name) ?? readString(raw.site_name) ?? undefined;
-  const siteTown = readString(raw.site?.city) ?? readString(raw.site_town) ?? undefined;
-  const notes = htmlToPlainText(raw.description);
+    readString(raw.site?.name) ?? readString(raw.site_name) ?? inferredSiteTown;
+  const siteTown =
+    readString(raw.site?.city) ?? readString(raw.site_town) ?? inferredSiteTown;
+  const site = siteName ?? siteAddress ?? siteTown ?? "Unknown site";
   const autoAssignment = match.profile
     ? undefined
     : autoAssignAdvancedWorksTechnician({
@@ -414,12 +420,31 @@ function isAdvancedWorksCustomer(customer: string) {
 }
 
 function findSiteCoordinates(values: Array<string | undefined>) {
-  const haystack = normalizeText(values.filter(Boolean).join(" "));
-  const match = SITE_COORDINATES.find(([town]) => haystack.includes(town));
+  const town = findKnownSiteTown(values)?.toLowerCase();
+  const match = SITE_COORDINATES.find(([candidate]) => candidate === town);
 
   return match
     ? { latitude: match[1], longitude: match[2] }
     : undefined;
+}
+
+function findKnownSiteTown(values: Array<string | undefined>) {
+  const haystack = ` ${normalizeText(values.filter(Boolean).join(" "))} `;
+  const match = [...SITE_COORDINATES]
+    .sort(([left], [right]) => right.length - left.length)
+    .find(([town]) => haystack.includes(` ${town} `));
+
+  return match?.[0].replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readUdfTextValues(fields?: Record<string, unknown> | null) {
+  if (!fields) {
+    return [];
+  }
+
+  return Object.entries(fields)
+    .filter(([key]) => /address|location|site|suburb|town/i.test(key))
+    .map(([, value]) => readString(value));
 }
 
 function distanceKm(
@@ -503,6 +528,10 @@ function hasTechnicianIdentity(technician?: MspCentralRawTechnician | null) {
 
 function readString(value: unknown) {
   if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" && typeof value !== "number") {
     return undefined;
   }
 

@@ -3284,8 +3284,12 @@ function RequestQueueCard({
         </div>
         <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
           <span>{request.customer}</span>
-          <span>/</span>
-          <span>{request.site}</span>
+          {hasDisplayableSite(request.site) ? (
+            <>
+              <span>/</span>
+              <span>{request.site}</span>
+            </>
+          ) : null}
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
           <Badge tone="info">{request.status}</Badge>
@@ -3298,11 +3302,10 @@ function RequestQueueCard({
             </Badge>
           ))}
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400">
+        <div className="mt-2 grid grid-cols-3 gap-x-2 text-[11px] text-slate-400">
           <span>Age {request.ageHours}h</span>
-          <span>{request.billable ? "Billable" : "Non-billable"}</span>
-          <span>{technician}</span>
-          <span>Due {formatTime(request.dueAt)}</span>
+          <span className="truncate text-center">{technician}</span>
+          <span className="text-right">Due {formatTime(request.dueAt)}</span>
         </div>
       </button>
       {mergeEnabled ? (
@@ -5160,11 +5163,19 @@ function requestSearchFields(
     request.updateInfo?.summary,
     request.updateInfo?.detail,
     request.updateInfo?.source,
-    request.billable ? "Billable" : "Non-billable",
     request.readyToBook ? "Ready to book" : undefined,
     technicianLabel(technicians, request.technicianId),
     ...request.warnings,
   ];
+}
+
+function hasDisplayableSite(site?: string) {
+  const normalized = site?.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      normalized !== "unknown site" &&
+      normalized !== "site not provided",
+  );
 }
 
 function includesQuery(values: unknown, search: string) {

@@ -371,4 +371,29 @@ describe("MSP Central request mappers", () => {
     expect(subjectLocation.technicianId).toBe("tech-jervy");
     expect(descriptionLocation.technicianId).toBe("tech-matt");
   });
+
+  it("maps a known site town from request subject or description", () => {
+    const fromSubject = mapMspCentralRequest({
+      account: { name: "Coastal Retail" },
+      request_number: "REQ-SITE-SUBJECT",
+      subject: "Printer offline at Lakes Entrance office",
+    });
+    const fromDescription = mapMspCentralRequest({
+      account: { name: "Regional Client" },
+      description: "Please attend the Sale showroom to replace the router.",
+      request_number: "REQ-SITE-DESCRIPTION",
+      subject: "Router replacement",
+    });
+
+    expect(fromSubject).toMatchObject({
+      site: "Lakes Entrance",
+      siteName: "Lakes Entrance",
+      siteTown: "Lakes Entrance",
+    });
+    expect(fromDescription).toMatchObject({
+      site: "Sale",
+      siteName: "Sale",
+      siteTown: "Sale",
+    });
+  });
 });

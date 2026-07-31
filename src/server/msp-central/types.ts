@@ -105,6 +105,12 @@ export type MspCentralRequestContext = {
 };
 
 export type MspCentralRequestListResponse = {
+  list_info?: {
+    has_more_rows?: boolean | null;
+    row_count?: number | null;
+    start_index?: number | null;
+    total_count?: number | null;
+  } | null;
   requests?: MspCentralRawRequest[];
 };
 

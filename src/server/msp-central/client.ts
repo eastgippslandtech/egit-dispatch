@@ -25,6 +25,8 @@ import type {
 } from "./types";
 
 const MSP_REQUEST_TIMEOUT_MS = 10_000;
+const MSP_REQUEST_PAGE_SIZE = 100;
+const MSP_REQUEST_MAX_PAGES = 100;
 
 type MspCentralActionResponse = {
   response_status?:
@@ -267,28 +269,51 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     },
     async listRequests(params) {
       assertConfigured();
-      const url = new URL(`${apiRoot}/requests`);
-      url.searchParams.set(
-        "input_data",
-        JSON.stringify({
-          list_info: {
-            row_count: 100,
-            sort_field: "created_time",
-            sort_order: "desc",
-            start_index: 1,
-            ...(params?.status
-              ? { search_fields: { status: { name: params.status } } }
-              : {}),
-          },
-        }),
-      );
-      const payload = await getJson<MspCentralRequestListResponse>(url.toString());
+      const rawRequests: NonNullable<MspCentralRequestListResponse["requests"]> = [];
+      let startIndex = 1;
 
-      return mapMspCentralRequests(payload.requests ?? [], {
+      for (let page = 0; page < MSP_REQUEST_MAX_PAGES; page += 1) {
+        const url = new URL(`${apiRoot}/requests`);
+        url.searchParams.set(
+          "input_data",
+          JSON.stringify({
+            list_info: {
+              get_total_count: true,
+              row_count: MSP_REQUEST_PAGE_SIZE,
+              sort_field: "created_time",
+              sort_order: "desc",
+              start_index: startIndex,
+              ...(params?.status
+                ? { search_fields: { status: { name: params.status } } }
+                : {}),
+            },
+          }),
+        );
+        const payload = await getJson<MspCentralRequestListResponse>(
+          url.toString(),
+        );
+        const pageRequests = payload.requests ?? [];
+        rawRequests.push(...pageRequests);
+
+        if (!payload.list_info?.has_more_rows || pageRequests.length === 0) {
+          break;
+        }
+
+        const returnedStartIndex = payload.list_info.start_index ?? startIndex;
+        const returnedRowCount = payload.list_info.row_count ?? pageRequests.length;
+        startIndex = returnedStartIndex + Math.max(returnedRowCount, 1);
+      }
+
+      const mappedRequests = mapMspCentralRequests(rawRequests, {
         profiles: getInitialStaffProfiles(),
         requestWebBaseUrl: config.mspCentral.requestWebBaseUrl,
         sourceSystem: "msp-central",
       });
+      return [
+        ...new Map(
+          mappedRequests.map((request) => [request.id, request]),
+        ).values(),
+      ];
     },
     async listSites() {
       const requests = await this.listRequests();

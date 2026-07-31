@@ -455,6 +455,72 @@ describe("MSP Central live client", () => {
     });
   });
 
+  it("loads every request page reported by MSP Central", async () => {
+    const firstPage = Array.from({ length: 43 }, (_, index) => ({
+      id: String(index + 1),
+      request_number: `REQ-${index + 1}`,
+      status: { name: "Open" },
+      subject: `Request ${index + 1}`,
+    }));
+    const secondPage = Array.from({ length: 11 }, (_, index) => ({
+      id: String(index + 44),
+      request_number: `REQ-${index + 44}`,
+      status: { name: "Open" },
+      subject: `Request ${index + 44}`,
+    }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: {
+            has_more_rows: true,
+            row_count: 43,
+            start_index: 1,
+            total_count: 54,
+          },
+          requests: firstPage,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: {
+            has_more_rows: false,
+            row_count: 11,
+            start_index: 44,
+            total_count: 54,
+          },
+          requests: secondPage,
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const requests = await client.listRequests();
+
+    expect(requests).toHaveLength(54);
+    const secondRequestUrl = new URL(String(fetchMock.mock.calls[2]?.[0]));
+    expect(JSON.parse(secondRequestUrl.searchParams.get("input_data") ?? "{}")).toMatchObject({
+      list_info: { start_index: 44 },
+    });
+  });
+
   it("adds charged time to a request Work Log", async () => {
     const fetchMock = vi
       .fn()

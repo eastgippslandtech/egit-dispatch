@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 const BLOCK_THRESHOLD = 5;
 const BLOCK_WINDOW_MS = 15 * 60 * 1000;
@@ -23,8 +23,6 @@ export type WallboardLoginAttemptRepository = {
   recordFailure(attemptKey: string, failedAt?: Date): Promise<void>;
   clear(attemptKey: string): Promise<void>;
 };
-
-let sqlSingleton: postgres.Sql | undefined;
 
 export function createWallboardLoginAttemptRepository(
   store: WallboardLoginAttemptStore,
@@ -92,6 +90,5 @@ function getPostgresSql(databaseUrl: string) {
     throw new Error("DATABASE_URL is required for wallboard login attempts.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-  return sqlSingleton;
+  return getSharedPostgresClient(databaseUrl);
 }

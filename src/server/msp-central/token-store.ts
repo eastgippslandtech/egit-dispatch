@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import type {
   MspOAuthTokenStore,
@@ -12,7 +12,6 @@ type TokenRow = {
   expiresAt: Date | null;
 };
 
-let sqlSingleton: postgres.Sql | undefined;
 let storeSingleton: MspOAuthTokenStore | undefined;
 let tableReady: Promise<void> | undefined;
 
@@ -23,8 +22,9 @@ export function getConfiguredMspOAuthTokenStore(
     return null;
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-  storeSingleton ??= createPostgresMspOAuthTokenStore(sqlSingleton);
+  storeSingleton ??= createPostgresMspOAuthTokenStore(
+    getSharedPostgresClient(databaseUrl),
+  );
   return storeSingleton;
 }
 

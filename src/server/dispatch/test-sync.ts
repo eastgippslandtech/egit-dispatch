@@ -1,6 +1,4 @@
-import postgres from "postgres";
-
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import { mockIsoTime } from "./date-scope";
 import { buildDispatchHealthItems } from "./health";
@@ -78,8 +76,6 @@ type DispatchTestSyncRow = {
   created_by: string | null;
   created_at: Date | string;
 };
-
-let sqlSingleton: postgres.Sql | undefined;
 
 export function normaliseDispatchTestSyncEvent(
   input: DispatchTestSyncEventInput,
@@ -356,14 +352,10 @@ async function getDispatchTestSyncClient() {
     throw new Error("DATABASE_URL is required for dispatcher-to-mobile test sync.");
   }
 
-  sqlSingleton ??= postgres(
+  return getSharedPostgresClient(
     databaseUrl,
-    getServerlessPostgresOptions(
-      shouldUseSsl(databaseUrl) ? "require" : false,
-    ),
+    shouldUseSsl(databaseUrl) ? "require" : false,
   );
-
-  return sqlSingleton;
 }
 
 function rowToDispatchTestSyncEvent(

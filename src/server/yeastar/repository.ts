@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 import type { Appointment } from "@/server/dispatch/types";
 
 import type { YeastarToken } from "./client";
@@ -23,7 +23,6 @@ type CallUpsert = {
   transcriptStatus: YeastarTranscriptStatus;
 };
 
-let sqlSingleton: postgres.Sql | undefined;
 let repositorySingleton: PostgresYeastarRepository | undefined;
 
 export class PostgresYeastarRepository {
@@ -435,8 +434,9 @@ export function getConfiguredYeastarRepository(
   databaseUrl = process.env.DATABASE_URL,
 ) {
   if (!databaseUrl?.trim()) return null;
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-  repositorySingleton ??= new PostgresYeastarRepository(sqlSingleton);
+  repositorySingleton ??= new PostgresYeastarRepository(
+    getSharedPostgresClient(databaseUrl),
+  );
   return repositorySingleton;
 }
 

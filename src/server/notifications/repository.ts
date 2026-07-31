@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 import { getInitialStaffProfiles } from "@/server/staff/profiles";
 
 export type PushDeviceRegistration = {
@@ -39,7 +39,6 @@ export type PushRegistrationRepository = {
   registerDevice(input: PushDeviceRegistration): Promise<void>;
 };
 
-let sqlSingleton: postgres.Sql | undefined;
 let repositorySingleton: PostgresNotificationRepository | undefined;
 
 export class PostgresNotificationRepository
@@ -272,7 +271,8 @@ export function getConfiguredNotificationRepository(
     return null;
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-  repositorySingleton ??= new PostgresNotificationRepository(sqlSingleton);
+  repositorySingleton ??= new PostgresNotificationRepository(
+    getSharedPostgresClient(databaseUrl),
+  );
   return repositorySingleton;
 }

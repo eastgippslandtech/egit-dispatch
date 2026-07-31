@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import type { NoteVisibility } from "../../../apps/technician-mobile/src/contracts/mobile";
 
@@ -89,7 +89,6 @@ export interface MobileDatabase {
   saveWorklog(input: SaveDatabaseWorklogInput): Promise<SaveDatabaseWorklogResult>;
 }
 
-let sqlSingleton: postgres.Sql | undefined;
 let databaseSingleton: MobileDatabase | undefined;
 
 export function hasMobileDatabase(env: Record<string, string | undefined> = process.env) {
@@ -218,9 +217,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for Command Centre database access.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-
-  return sqlSingleton;
+  return getSharedPostgresClient(databaseUrl);
 }
 
 function selectJobRows(

@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import type {
   PresenceOverride,
@@ -38,7 +38,6 @@ export type PresenceOverrideRepository = ReturnType<
   typeof createPresenceOverrideRepository
 >;
 
-let sqlSingleton: postgres.Sql | undefined;
 let repositorySingleton: PresenceOverrideRepository | undefined;
 
 export function createPresenceOverrideRepository(
@@ -248,8 +247,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for presence overrides.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-  return sqlSingleton;
+  return getSharedPostgresClient(databaseUrl);
 }
 
 function mapRow(row: PresenceOverrideRow): PresenceOverride {

@@ -1,6 +1,6 @@
-import postgres from "postgres";
+import type postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
@@ -67,7 +67,6 @@ type DispatchLinkRow = {
   updatedAt: string | Date;
 };
 
-let sqlSingleton: postgres.Sql | undefined;
 let databaseSingleton: DispatchDashboardDatabase | undefined;
 
 export function getConfiguredDispatchDashboardDatabase(
@@ -125,9 +124,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for Command Centre dispatch data.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, getServerlessPostgresOptions());
-
-  return sqlSingleton;
+  return getSharedPostgresClient(databaseUrl);
 }
 
 function selectStaffRows(sql: postgres.Sql) {

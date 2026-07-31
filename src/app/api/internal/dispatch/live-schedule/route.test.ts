@@ -77,6 +77,7 @@ describe("live dispatch schedule route", () => {
       new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule", {
         body: JSON.stringify({
           customer: "Example Co",
+          bookingType: "Onsite",
           date: "2026-07-24",
           end: "11:00",
           location: "Bairnsdale office",
@@ -85,6 +86,7 @@ describe("live dispatch schedule route", () => {
           start: "10:00",
           subject: "Printer offline",
           technicianName: "Matt",
+          technicianEmail: "mattd@egit.com.au",
           userPrincipalName: "mattd@egit.com.au",
         }),
         method: "POST",
@@ -96,7 +98,8 @@ describe("live dispatch schedule route", () => {
       ok: true,
     });
     expect(createEvent).toHaveBeenCalledWith({
-      bodyPreview: "REQ-123\nExample Co\nBairnsdale office",
+      bodyPreview:
+        "Request: REQ-123\nCompany: Example Co\nSite: Bairnsdale office\nBooking Type: Onsite",
       end: "2026-07-24T11:00:00",
       location: "Bairnsdale office",
       start: "2026-07-24T10:00:00",
@@ -107,9 +110,13 @@ describe("live dispatch schedule route", () => {
       requestId: "123",
       scheduledEnd: "2026-07-24T11:00:00+10:00",
       scheduledStart: "2026-07-24T10:00:00+10:00",
+      technicianEmail: "mattd@egit.com.au",
       technicianName: "Matt",
     });
     expect(getRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      createEvent.mock.invocationCallOrder[0],
+    );
+    expect(updateRequestSchedule.mock.invocationCallOrder[0]).toBeLessThan(
       createEvent.mock.invocationCallOrder[0],
     );
   });

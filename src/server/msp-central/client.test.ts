@@ -441,6 +441,7 @@ describe("MSP Central live client", () => {
       requestId: "123",
       scheduledEnd: "2026-07-24T11:00:00+10:00",
       scheduledStart: "2026-07-24T10:00:00+10:00",
+      technicianEmail: "mattd@egit.com.au",
       technicianName: "Matt",
     });
 
@@ -458,9 +459,13 @@ describe("MSP Central live client", () => {
     const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
     expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
       request: {
-        scheduled_end_time: { value: "2026-07-24T11:00:00+10:00" },
-        scheduled_start_time: { value: "2026-07-24T10:00:00+10:00" },
-        technician: { name: "Matt" },
+        scheduled_end_time: {
+          value: String(new Date("2026-07-24T11:00:00+10:00").getTime()),
+        },
+        scheduled_start_time: {
+          value: String(new Date("2026-07-24T10:00:00+10:00").getTime()),
+        },
+        technician: { email_id: "mattd@egit.com.au" },
       },
     });
   });

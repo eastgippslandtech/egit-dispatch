@@ -156,6 +156,7 @@ export type MspCentralClient = {
     requestId: string;
     scheduledEnd: string;
     scheduledStart: string;
+    technicianEmail?: string;
     technicianName?: string;
   }): Promise<void>;
   updateRequestStatus?(input: {

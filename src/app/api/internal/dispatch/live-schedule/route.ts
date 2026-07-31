@@ -5,10 +5,12 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
+import type { BookingType } from "@/server/dispatch/types";
 import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
 
 type LiveScheduleCommand = {
+  bookingType?: BookingType;
   customer?: string;
   date?: string;
   end?: string;
@@ -19,6 +21,7 @@ type LiveScheduleCommand = {
   start?: string;
   subject?: string;
   technicianName?: string;
+  technicianEmail?: string;
   userPrincipalName?: string;
 };
 
@@ -53,9 +56,10 @@ export async function POST(request: Request) {
 
     const graphInput = {
       bodyPreview: [
-        command.requestNumber,
-        command.customer,
-        command.location,
+        `Request: ${command.requestNumber}`,
+        command.customer ? `Company: ${command.customer}` : undefined,
+        command.location ? `Site: ${command.location}` : undefined,
+        command.bookingType ? `Booking Type: ${command.bookingType}` : undefined,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -65,19 +69,20 @@ export async function POST(request: Request) {
       subject: `${command.requestNumber} ${command.subject}`.trim(),
       userPrincipalName: command.userPrincipalName,
     };
+    await mspClient.updateRequestSchedule({
+      requestId: command.requestId,
+      scheduledEnd: `${command.date}T${command.end}:00${melbourneOffset(command.date)}`,
+      scheduledStart: `${command.date}T${command.start}:00${melbourneOffset(command.date)}`,
+      technicianEmail: command.technicianEmail,
+      technicianName: command.technicianName,
+    });
+
     const event = command.eventId
       ? await graphClient.updateEvent({
           ...graphInput,
           eventId: command.eventId,
         })
       : await graphClient.createEvent(graphInput);
-
-    await mspClient.updateRequestSchedule({
-      requestId: command.requestId,
-      scheduledEnd: `${command.date}T${command.end}:00${melbourneOffset(command.date)}`,
-      scheduledStart: `${command.date}T${command.start}:00${melbourneOffset(command.date)}`,
-      technicianName: command.technicianName,
-    });
 
     return noStoreJson({ event, ok: true });
   } catch (error) {
@@ -106,6 +111,7 @@ function validateCommand(command: LiveScheduleCommand) {
   }
 
   return {
+    bookingType: validBookingType(command.bookingType),
     customer: clean(command.customer),
     date: command.date as string,
     end: command.end as string,
@@ -116,8 +122,15 @@ function validateCommand(command: LiveScheduleCommand) {
     start: command.start as string,
     subject: command.subject as string,
     technicianName: clean(command.technicianName),
+    technicianEmail: clean(command.technicianEmail),
     userPrincipalName: command.userPrincipalName as string,
   };
+}
+
+function validBookingType(value?: BookingType) {
+  return value === "Remote" || value === "Onsite" || value === "In house"
+    ? value
+    : undefined;
 }
 
 function melbourneOffset(date: string) {

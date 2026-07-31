@@ -13,7 +13,11 @@ import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-
 import type { DispatchRequest } from "@/server/dispatch/types";
 
 import CommandCentrePage from "./page";
-import { bookingCardPriorityClass, requestNotesSummary } from "./prototype";
+import {
+  bookingCardPriorityClass,
+  requestNotesSummary,
+  ScheduleConfirmModal,
+} from "./prototype";
 
 const routerRefreshMock = vi.fn();
 
@@ -80,6 +84,45 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
   expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
+});
+
+test("live scheduling lets the dispatcher choose the booking type", () => {
+  const data = getDispatchDesignMockData();
+  const onBookingTypeChange = vi.fn();
+
+  render(
+    <ScheduleConfirmModal
+      liveSchedule
+      pending={{
+        bookingType: "Onsite",
+        date: "2026-08-04",
+        durationMinutes: 60,
+        end: "11:15",
+        kind: "request",
+        requestId: data.requests[0].id,
+        start: "10:00",
+        technicianId: data.technicians[0].id,
+        warnings: [],
+      }}
+      request={data.requests[0]}
+      technicians={data.technicians}
+      onBookingTypeChange={onBookingTypeChange}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn()}
+      onDurationChange={vi.fn()}
+      onStartChange={vi.fn()}
+      onTechnicianChange={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText("Confirm live schedule")).toBeInTheDocument();
+  expect(screen.getByText("MSP Central + Outlook")).toBeInTheDocument();
+  expect(screen.getByText("Includes 15 minutes for onsite notes.")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("Booking type"), {
+    target: { value: "Remote" },
+  });
+  expect(onBookingTypeChange).toHaveBeenCalledWith("Remote");
 });
 
 test("redirects a wallboard-only session to the wallboard", async () => {

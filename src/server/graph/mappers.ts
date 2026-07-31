@@ -36,10 +36,12 @@ export function mapGraphEventToAppointment(
   const locationBookingType = isPrivate
     ? undefined
     : bookingTypeFromLocation(location);
-  const bookingType = isPrivate ? undefined : locationBookingType;
   const serviceDetails = parseServiceDetails(
     isPrivate ? undefined : event.bodyPreview,
   );
+  const bookingType = isPrivate
+    ? undefined
+    : serviceDetails.bookingType ?? locationBookingType;
   const isAllDay = Boolean(event.isAllDay);
   const serviceLooking =
     Boolean(bookingType) ||
@@ -126,6 +128,9 @@ function bookingTypeFromLocation(location?: string): BookingType | undefined {
 function parseServiceDetails(bodyPreview?: string) {
   return {
     address: structuredField(bodyPreview, "Address"),
+    bookingType: bookingTypeFromLocation(
+      structuredField(bodyPreview, "Booking Type"),
+    ),
     company: structuredField(bodyPreview, "Company"),
     site: structuredField(bodyPreview, "Site"),
   };

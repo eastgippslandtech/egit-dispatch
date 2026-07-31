@@ -117,6 +117,8 @@ export type Appointment = {
   start: string;
   end: string;
   bookingType?: BookingType;
+  noteTimeMinutes?: number;
+  workDurationMinutes?: number;
   status: "confirmed" | "tentative" | "busy" | "sdp-only";
   source: "outlook" | "linked" | "sdp" | "yeastar";
   externalTalkSeconds?: number;

@@ -96,6 +96,24 @@ describe("Graph event mapper", () => {
     });
   });
 
+  it("restores the selected booking type from the structured event body", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: [
+          "Request: REQ-237815",
+          "Company: ASI Solutions",
+          "Site: Gippsland office",
+          "Booking Type: Remote",
+        ].join("\n"),
+        location: { displayName: "42 Main Street, Bairnsdale" },
+        subject: "REQ-237815 Remote support",
+      }),
+      technician,
+    );
+
+    expect(appointment.bookingType).toBe("Remote");
+  });
+
   it.each([
     ["Remote", "Remote"],
     ["In-house", "In house"],

@@ -44,6 +44,10 @@ import type {
   Technician,
 } from "@/server/dispatch/types";
 import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
+import {
+  bookingTiming,
+  bookingTypeForRequest,
+} from "@/server/dispatch/booking";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
   buildStackedTimelineLayout,
@@ -174,6 +178,7 @@ type DropPreview = {
 
 type PendingSchedule =
   | {
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "request";
       date: string;
@@ -186,6 +191,7 @@ type PendingSchedule =
     }
   | {
       appointmentId: string;
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "appointment";
       date: string;
@@ -663,9 +669,23 @@ export function CommandCentrePrototype({
     });
   }
 
-  function buildTravel(request: DispatchRequest | undefined, technicianId: string) {
+  function buildTravel(
+    request: DispatchRequest | undefined,
+    technicianId: string,
+    bookingType?: BookingType,
+  ) {
     return buildAppointmentTravel({
-      request,
+      request: request
+        ? {
+            ...request,
+            bookingType: bookingType ?? request.bookingType,
+            onsite: (bookingType ?? request.bookingType) === "Onsite",
+            siteTown:
+              (bookingType ?? request.bookingType) === "Remote"
+                ? "Remote"
+                : request.siteTown,
+          }
+        : undefined,
       technician: dashboard.technicians.find(
         (technician) => technician.id === technicianId,
       ),
@@ -674,6 +694,7 @@ export function CommandCentrePrototype({
 
   function buildTravelCandidate({
     appointmentId,
+    bookingType,
     date,
     end,
     request,
@@ -682,6 +703,7 @@ export function CommandCentrePrototype({
     travel,
   }: {
     appointmentId?: string;
+    bookingType?: BookingType;
     date: string;
     end: string;
     request?: DispatchRequest;
@@ -692,6 +714,7 @@ export function CommandCentrePrototype({
     return applyTravelToAppointment(
       {
         id: appointmentId ?? "pending",
+        bookingType,
         customer: request?.customer ?? "Pending",
         date,
         end,
@@ -724,8 +747,13 @@ export function CommandCentrePrototype({
         return undefined;
       }
 
-      const slot = buildScheduleSlot(start, 60);
-      const travel = buildTravel(request, technicianId);
+      const bookingType = bookingTypeForRequest(request);
+      const durationMinutes = 60;
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, technicianId, bookingType);
       const travelAppointment = buildTravelCandidate({
         date,
         end: slot.end,
@@ -736,7 +764,8 @@ export function CommandCentrePrototype({
       });
 
       return {
-        durationMinutes: 60,
+        bookingType,
+        durationMinutes,
         kind: "request",
         date,
         requestId: request.id,
@@ -762,15 +791,30 @@ export function CommandCentrePrototype({
       return undefined;
     }
 
-    const durationMinutes =
-      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
-    const slot = buildScheduleSlot(start, durationMinutes);
     const request = dashboard.requests.find(
       (candidate) => candidate.id === appointment.requestId,
     );
-    const travel = request ? buildTravel(request, technicianId) : undefined;
+    const bookingType =
+      appointment.bookingType ??
+      (request ? bookingTypeForRequest(request) : "Remote");
+    const totalDurationMinutes =
+      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
+    const durationMinutes =
+      appointment.workDurationMinutes ??
+      Math.max(
+        15,
+        totalDurationMinutes - (bookingType === "Onsite" ? 15 : 0),
+      );
+    const slot = buildScheduleSlot(
+      start,
+      bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+    );
+    const travel = request
+      ? buildTravel(request, technicianId, bookingType)
+      : undefined;
     const travelAppointment = buildTravelCandidate({
       appointmentId: appointment.id,
+      bookingType,
       date,
       end: slot.end,
       request,
@@ -781,6 +825,7 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      bookingType,
       durationMinutes,
       kind: "appointment",
       date,
@@ -855,7 +900,10 @@ export function CommandCentrePrototype({
         return current;
       }
 
-      const slot = buildScheduleSlot(current.start, durationMinutes);
+      const slot = buildScheduleSlot(
+        current.start,
+        bookingTiming(durationMinutes, current.bookingType).totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -869,6 +917,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -901,7 +950,11 @@ export function CommandCentrePrototype({
         return current;
       }
 
-      const slot = buildScheduleSlot(start, current.durationMinutes);
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(current.durationMinutes, current.bookingType)
+          .totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -915,6 +968,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -957,10 +1011,11 @@ export function CommandCentrePrototype({
                   (appointment) => appointment.id === current.appointmentId,
                 )?.requestId,
             );
-      const travel = buildTravel(request, technicianId);
+      const travel = buildTravel(request, technicianId, current.bookingType);
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: current.end,
         request,
@@ -983,6 +1038,57 @@ export function CommandCentrePrototype({
         technicianId,
         travel,
         warnings,
+      };
+    });
+  }
+
+  function updatePendingBookingType(bookingType: BookingType) {
+    setPendingSchedule((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const slot = buildScheduleSlot(
+        current.start,
+        bookingTiming(current.durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, current.technicianId, bookingType);
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType,
+        date: current.date,
+        end: slot.end,
+        request,
+        start: current.start,
+        technicianId: current.technicianId,
+        travel,
+      });
+
+      return {
+        ...current,
+        bookingType,
+        end: slot.end,
+        travel,
+        warnings: buildWarnings({
+          appointmentId:
+            current.kind === "appointment" ? current.appointmentId : undefined,
+          date: current.date,
+          end: slot.end,
+          start: current.start,
+          technicianId: current.technicianId,
+          travelAppointment,
+        }),
       };
     });
   }
@@ -1031,11 +1137,12 @@ export function CommandCentrePrototype({
       const appointmentId = liveSchedule
         ? `pending-live-${request.id}-${Date.now()}`
         : `mock-${request.id}-${Date.now()}`;
-      const bookingType = bookingTypeForRequest(request);
+      const bookingType = pendingSchedule.bookingType;
 
       try {
         if (liveSchedule) {
           liveEvent = await publishLiveSchedule({
+            bookingType,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
@@ -1045,6 +1152,10 @@ export function CommandCentrePrototype({
             start: pendingSchedule.start,
             subject: request.subject,
             technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
@@ -1082,6 +1193,7 @@ export function CommandCentrePrototype({
       const appointments = scheduleRequest({
         appointmentId: finalAppointmentId,
         appointments: dashboard.appointments,
+        bookingType,
         date: pendingSchedule.date,
         durationMinutes: pendingSchedule.durationMinutes,
         request,
@@ -1108,6 +1220,7 @@ export function CommandCentrePrototype({
             ? {
                 ...candidate,
                 bookingType,
+                onsite: bookingType === "Onsite",
                 status: "Scheduled",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
@@ -1148,8 +1261,7 @@ export function CommandCentrePrototype({
             (candidate) => candidate.id === currentAppointment.requestId,
           )
         : undefined;
-      const bookingType =
-        currentAppointment?.bookingType ?? (request ? bookingTypeForRequest(request) : undefined);
+      const bookingType = pendingSchedule.bookingType;
 
       const liveSchedule =
         Boolean(request) && canUseLiveSchedule(dashboard, request);
@@ -1158,6 +1270,7 @@ export function CommandCentrePrototype({
       try {
         if (liveSchedule && request) {
           liveEvent = await publishLiveSchedule({
+            bookingType,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
@@ -1168,6 +1281,10 @@ export function CommandCentrePrototype({
             start: pendingSchedule.start,
             subject: request.subject,
             technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
@@ -1202,11 +1319,19 @@ export function CommandCentrePrototype({
       const movedAppointments = moveAppointment({
         appointmentId: pendingSchedule.appointmentId,
         appointments: dashboard.appointments,
+        bookingType,
         date: pendingSchedule.date,
-        durationMinutes: pendingSchedule.durationMinutes,
+        durationMinutes:
+          minutesFromTime(pendingSchedule.end) -
+          minutesFromTime(pendingSchedule.start),
+        noteTimeMinutes: bookingTiming(
+          pendingSchedule.durationMinutes,
+          bookingType,
+        ).noteTimeMinutes,
         start: pendingSchedule.start,
         technicianId: pendingSchedule.technicianId,
         travel: pendingSchedule.travel,
+        workDurationMinutes: pendingSchedule.durationMinutes,
       });
 
       setDashboard((current) => ({
@@ -1228,6 +1353,8 @@ export function CommandCentrePrototype({
           )?.requestId
             ? {
                 ...request,
+                bookingType,
+                onsite: bookingType === "Onsite",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
                   pendingSchedule.date,
@@ -1266,6 +1393,8 @@ export function CommandCentrePrototype({
 
     try {
       const liveEvent = await publishLiveSchedule({
+        bookingType:
+          selectedAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
         customer: selectedRequest.customer,
         date: selectedAppointment.date ?? selectedDateKey,
         end: selectedAppointment.end,
@@ -1276,6 +1405,10 @@ export function CommandCentrePrototype({
         start: selectedAppointment.start,
         subject: selectedRequest.subject,
         technicianName: technicianLabel(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+        technicianEmail: technicianMspCentralIdentity(
           dashboard.technicians,
           selectedAppointment.technicianId,
         ),
@@ -1662,11 +1795,15 @@ export function CommandCentrePrototype({
         </section>
         {pendingSchedule ? (
           <ScheduleConfirmModal
+            liveSchedule={Boolean(
+              pendingRequest && canUseLiveSchedule(dashboard, pendingRequest),
+            )}
             pending={pendingSchedule}
             request={pendingRequest}
             technicians={dashboard.technicians}
             onCancel={() => setPendingSchedule(undefined)}
             onConfirm={confirmPendingSchedule}
+            onBookingTypeChange={updatePendingBookingType}
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
             onTechnicianChange={updatePendingTechnician}
@@ -1743,6 +1880,7 @@ async function publishDispatchTestSyncEvent(
 }
 
 async function publishLiveSchedule(event: {
+  bookingType?: BookingType;
   customer: string;
   date: string;
   end: string;
@@ -1753,6 +1891,7 @@ async function publishLiveSchedule(event: {
   start: string;
   subject: string;
   technicianName: string;
+  technicianEmail?: string;
   userPrincipalName: string;
 }): Promise<LiveScheduleResult> {
   const response = await fetch("/api/internal/dispatch/live-schedule", {
@@ -1871,8 +2010,13 @@ function technicianOutlookIdentity(technicians: Technician[], technicianId: stri
   return identity;
 }
 
-function bookingTypeForRequest(request: DispatchRequest): BookingType {
-  return request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite");
+function technicianMspCentralIdentity(
+  technicians: Technician[],
+  technicianId: string,
+) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+
+  return technician?.mspCentralEmail ?? technician?.zohoEmail;
 }
 
 function MergeRequestModal({
@@ -2136,8 +2280,10 @@ function MergeRequestSummary({
   );
 }
 
-function ScheduleConfirmModal({
+export function ScheduleConfirmModal({
+  liveSchedule,
   onCancel,
+  onBookingTypeChange,
   onConfirm,
   onDurationChange,
   onStartChange,
@@ -2146,7 +2292,9 @@ function ScheduleConfirmModal({
   request,
   technicians,
 }: {
+  liveSchedule: boolean;
   onCancel: () => void;
+  onBookingTypeChange: (bookingType: BookingType) => void;
   onConfirm: () => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
@@ -2183,14 +2331,14 @@ function ScheduleConfirmModal({
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
-              Confirm mock schedule
+              {liveSchedule ? "Confirm live schedule" : "Confirm mock schedule"}
             </p>
             <h2 className="mt-2 text-xl font-semibold">
               {pending.kind === "request" ? "Schedule request" : "Move appointment"}
             </h2>
           </div>
           <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-xs font-semibold text-amber-100">
-            Mock only
+            {liveSchedule ? "MSP Central + Outlook" : "Mock only"}
           </span>
         </div>
 
@@ -2264,7 +2412,7 @@ function ScheduleConfirmModal({
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-200">
-            Duration
+            Job duration
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
               value={pending.durationMinutes}
@@ -2277,7 +2425,28 @@ function ScheduleConfirmModal({
               ))}
             </select>
           </label>
+          <label className="block text-sm font-semibold text-slate-200">
+            Booking type
+            <select
+              aria-label="Booking type"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              value={pending.bookingType}
+              onChange={(event) =>
+                onBookingTypeChange(event.target.value as BookingType)
+              }
+            >
+              <option value="Remote">Remote</option>
+              <option value="Onsite">Onsite</option>
+              <option value="In house">In house</option>
+            </select>
+          </label>
         </div>
+
+        {pending.bookingType === "Onsite" ? (
+          <p className="mt-2 text-xs text-slate-400">
+            Includes 15 minutes for onsite notes.
+          </p>
+        ) : null}
 
         {pending.travel ? (
           <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3 text-sm">
@@ -2348,7 +2517,7 @@ function ScheduleConfirmModal({
             type="button"
             onClick={onConfirm}
           >
-            Confirm mock schedule
+            {liveSchedule ? "Confirm schedule" : "Confirm mock schedule"}
           </button>
         </div>
       </section>

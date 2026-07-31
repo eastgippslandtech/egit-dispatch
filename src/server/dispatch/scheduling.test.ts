@@ -329,6 +329,7 @@ describe("mock dispatch scheduling helpers", () => {
     const appointments = scheduleRequest({
       appointmentId: "mock-1",
       appointments: [],
+      bookingType: "Remote",
       durationMinutes: 60,
       request,
       start: "14:00",
@@ -345,6 +346,42 @@ describe("mock dispatch scheduling helpers", () => {
       end: "15:00",
       date: "2026-07-08",
       title: "Printer offline",
+    });
+  });
+
+  it("reserves fifteen minutes for onsite notes without adding it again on move", () => {
+    const scheduled = scheduleRequest({
+      appointmentId: "onsite-1",
+      appointments: [],
+      bookingType: "Onsite",
+      durationMinutes: 60,
+      request,
+      start: "10:00",
+      technicianId: "tech-a",
+    });
+
+    expect(scheduled[0]).toMatchObject({
+      bookingType: "Onsite",
+      end: "11:15",
+      noteTimeMinutes: 15,
+      workDurationMinutes: 60,
+    });
+
+    const moved = moveAppointment({
+      appointmentId: "onsite-1",
+      appointments: scheduled,
+      bookingType: "Onsite",
+      durationMinutes: 75,
+      noteTimeMinutes: 15,
+      start: "12:00",
+      technicianId: "tech-b",
+      workDurationMinutes: 60,
+    });
+
+    expect(moved[0]).toMatchObject({
+      end: "13:15",
+      noteTimeMinutes: 15,
+      workDurationMinutes: 60,
     });
   });
 

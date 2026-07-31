@@ -343,11 +343,13 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     async updateRequestSchedule(input) {
       assertConfigured();
       const request = {
-        scheduled_end_time: { value: input.scheduledEnd },
-        scheduled_start_time: { value: input.scheduledStart },
-        ...(input.technicianName
-          ? { technician: { name: input.technicianName } }
-          : {}),
+        scheduled_end_time: { value: toEpochMilliseconds(input.scheduledEnd) },
+        scheduled_start_time: { value: toEpochMilliseconds(input.scheduledStart) },
+        ...(input.technicianEmail
+          ? { technician: { email_id: input.technicianEmail } }
+          : input.technicianName
+            ? { technician: { name: input.technicianName } }
+            : {}),
       };
 
       await requestJson(
@@ -480,6 +482,18 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return payload;
   }
+}
+
+function toEpochMilliseconds(value: string) {
+  const milliseconds = new Date(value).getTime();
+
+  if (!Number.isFinite(milliseconds)) {
+    throw new MspCentralConfigurationError(
+      `Invalid MSP Central schedule timestamp: ${value}`,
+    );
+  }
+
+  return String(milliseconds);
 }
 
 function mspHasMoreRows(value: boolean | string | null | undefined) {

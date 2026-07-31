@@ -106,10 +106,10 @@ export type MspCentralRequestContext = {
 
 export type MspCentralRequestListResponse = {
   list_info?: {
-    has_more_rows?: boolean | null;
-    row_count?: number | null;
-    start_index?: number | null;
-    total_count?: number | null;
+    has_more_rows?: boolean | string | null;
+    row_count?: number | string | null;
+    start_index?: number | string | null;
+    total_count?: number | string | null;
   } | null;
   requests?: MspCentralRawRequest[];
 };

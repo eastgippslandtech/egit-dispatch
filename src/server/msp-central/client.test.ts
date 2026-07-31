@@ -521,6 +521,49 @@ describe("MSP Central live client", () => {
     });
   });
 
+  it("stops paging when MSP Central returns a textual false flag", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: {
+            has_more_rows: "false",
+            row_count: "1",
+            start_index: "1",
+          },
+          requests: [
+            {
+              id: "123",
+              request_number: "REQ-123",
+              status: { name: "Open" },
+              subject: "Only request",
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(client.listRequests()).resolves.toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("adds charged time to a request Work Log", async () => {
     const fetchMock = vi
       .fn()

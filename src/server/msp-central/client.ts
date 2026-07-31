@@ -295,12 +295,21 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         const pageRequests = payload.requests ?? [];
         rawRequests.push(...pageRequests);
 
-        if (!payload.list_info?.has_more_rows || pageRequests.length === 0) {
+        if (
+          !mspHasMoreRows(payload.list_info?.has_more_rows) ||
+          pageRequests.length === 0
+        ) {
           break;
         }
 
-        const returnedStartIndex = payload.list_info.start_index ?? startIndex;
-        const returnedRowCount = payload.list_info.row_count ?? pageRequests.length;
+        const returnedStartIndex = mspListNumber(
+          payload.list_info?.start_index,
+          startIndex,
+        );
+        const returnedRowCount = mspListNumber(
+          payload.list_info?.row_count,
+          pageRequests.length,
+        );
         startIndex = returnedStartIndex + Math.max(returnedRowCount, 1);
       }
 
@@ -436,6 +445,21 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return payload;
   }
+}
+
+function mspHasMoreRows(value: boolean | string | null | undefined) {
+  return (
+    value === true ||
+    (typeof value === "string" && value.trim().toLowerCase() === "true")
+  );
+}
+
+function mspListNumber(
+  value: number | string | null | undefined,
+  fallback: number,
+) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function mspCentralActionSucceeded(payload: MspCentralActionResponse) {

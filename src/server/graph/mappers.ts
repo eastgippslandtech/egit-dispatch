@@ -6,7 +6,7 @@ import type {
 import type { MicrosoftGraphEvent } from "./types";
 
 const REQUEST_NUMBER_PATTERN =
-  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6})\b/i;
+  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6,})\b/i;
 
 export function extractLinkedRequestNumber(
   subject?: string,

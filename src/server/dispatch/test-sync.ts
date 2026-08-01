@@ -234,6 +234,8 @@ export function applyDispatchTestSyncEvents(
         ...applyTravelToAppointment(
           {
             ...appointments[appointmentIndex],
+            requestId:
+              event.requestId ?? appointments[appointmentIndex].requestId,
             technicianId: event.technicianId,
             date: event.date,
             start: event.start,
@@ -252,6 +254,12 @@ export function applyDispatchTestSyncEvents(
             outlookWebLink:
               event.payload?.liveSync?.outlookWebLink ??
               appointments[appointmentIndex].outlookWebLink,
+            readOnly: event.payload?.liveSync?.outlookEventId
+              ? false
+              : appointments[appointmentIndex].readOnly,
+            source: event.payload?.liveSync?.outlookEventId
+              ? "linked"
+              : appointments[appointmentIndex].source,
             syncIssue:
               event.payload?.liveSync?.status === "failed"
                 ? "time-mismatch"
@@ -421,9 +429,13 @@ function appointmentMatchesEvent(
   appointment: Appointment,
   event: DispatchTestSyncEvent,
 ) {
+  const syncedOutlookEventId = event.payload?.liveSync?.outlookEventId;
+
   return Boolean(
     (event.appointmentId && appointment.id === event.appointmentId) ||
-      (event.requestId && appointment.requestId === event.requestId),
+      (event.requestId && appointment.requestId === event.requestId) ||
+      (syncedOutlookEventId &&
+        appointment.outlookEventId === syncedOutlookEventId),
   );
 }
 

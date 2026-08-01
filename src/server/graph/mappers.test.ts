@@ -47,6 +47,9 @@ describe("Graph event mapper", () => {
     expect(extractLinkedRequestNumber("REQ-100211 Server work")).toBe("100211");
     expect(extractLinkedRequestNumber("SDP 100246 upgrade")).toBe("100246");
     expect(extractLinkedRequestNumber("No request", "Ticket #100368")).toBe("100368");
+    expect(
+      extractLinkedRequestNumber("6768000001419914 Retailer Archive Webapp"),
+    ).toBe("6768000001419914");
   });
 
   it("maps linked Outlook events into DispatchAppointment shape", () => {

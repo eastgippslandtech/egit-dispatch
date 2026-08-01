@@ -1,17 +1,25 @@
 import type { MicrosoftGraphEvent } from "@/server/graph/types";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 
 import type { WorklogDispositionCommand } from "./disposition";
+
+type WorklogOwner = {
+  id: string;
+};
 
 type RuntimeMspClient = {
   addRequestWorklog?: (input: {
     description: string;
     durationMinutes: number;
     endedAt: string;
+    ownerId: string;
     requestId: string;
     startedAt: string;
+    worklogType: WorklogDispositionCommand["workType"];
   }) => Promise<void>;
   assignRequest: (input: {
     requestId: string;
+    technicianEmail?: string;
     technicianName: string;
   }) => Promise<void>;
   clearRequestSchedule: (input: { requestId: string }) => Promise<void>;
@@ -64,6 +72,12 @@ export interface WorklogOutcomeStore {
     requestId: string;
     status: "sdp_only" | "linked";
   }): Promise<void>;
+  listCalendarAssignments(input: { requestId: string }): Promise<
+    Array<{
+      eventId: string;
+      userPrincipalName: string;
+    }>
+  >;
   transfer(input: {
     reason: string;
     requestId: string;
@@ -76,10 +90,12 @@ export function createWorklogDispositionRuntime({
   graphClient,
   mspClient,
   outcomeStore,
+  worklogOwner,
 }: {
   graphClient: RuntimeGraphClient;
   mspClient: RuntimeMspClient;
   outcomeStore: WorklogOutcomeStore;
+  worklogOwner: WorklogOwner;
 }) {
   return {
     async saveWorklog(command: WorklogDispositionCommand) {
@@ -90,8 +106,10 @@ export function createWorklogDispositionRuntime({
         description: command.description,
         durationMinutes: command.durationMinutes,
         endedAt: command.endedAt,
+        ownerId: worklogOwner.id,
         requestId: command.requestId,
         startedAt: command.startedAt,
+        worklogType: command.workType,
       });
     },
 
@@ -104,8 +122,7 @@ export function createWorklogDispositionRuntime({
           requestId: command.requestId,
           status: "Resolved",
         });
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
-        await removeCurrentCalendarEvent(command, graphClient);
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
           status: "sdp_only",
@@ -114,8 +131,14 @@ export function createWorklogDispositionRuntime({
       }
 
       if (command.disposition === "return_to_queue") {
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
-        await removeCurrentCalendarEvent(command, graphClient);
+        if (!mspClient.updateRequestStatus) {
+          throw new Error("MSP Central status writeback is unavailable.");
+        }
+        await mspClient.updateRequestStatus({
+          requestId: command.requestId,
+          status: "Open",
+        });
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
           status: "sdp_only",
@@ -126,13 +149,20 @@ export function createWorklogDispositionRuntime({
       if (command.disposition === "transfer_escalate" && command.transfer) {
         await mspClient.assignRequest({
           requestId: command.requestId,
+          technicianEmail: command.transfer.targetEmail,
           technicianName:
             command.transfer.targetTechnicianName ??
             command.transfer.targetEmail ??
             command.transfer.targetTechnicianId,
         });
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
-        await removeCurrentCalendarEvent(command, graphClient);
+        if (!mspClient.updateRequestStatus) {
+          throw new Error("MSP Central status writeback is unavailable.");
+        }
+        await mspClient.updateRequestStatus({
+          requestId: command.requestId,
+          status: "Open",
+        });
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.transfer({
           reason: command.transfer.reason,
           requestId: command.requestId,
@@ -164,7 +194,9 @@ export function createWorklogDispositionRuntime({
           end: `${booking.date}T${booking.end}:00`,
           location: booking.location,
           start: `${booking.date}T${booking.start}:00`,
-          subject: `${booking.requestNumber} ${booking.subject}`.trim(),
+          subject:
+            cleanRequestTitle(booking.subject, booking.requestNumber) ||
+            booking.subject,
           transactionId: command.idempotencyKey,
           userPrincipalName: booking.userPrincipalName,
         };
@@ -180,8 +212,12 @@ export function createWorklogDispositionRuntime({
             eventId: current.eventId,
             transactionId: undefined,
           });
+          await removeCalendarAssignments(command, graphClient, outcomeStore, {
+            eventId: current.eventId,
+            userPrincipalName: current.userPrincipalName,
+          });
         } else {
-          await removeCurrentCalendarEvent(command, graphClient);
+          await removeCalendarAssignments(command, graphClient, outcomeStore);
           event = await graphClient.createEvent(graphInput);
         }
 
@@ -200,16 +236,44 @@ export function createWorklogDispositionRuntime({
   };
 }
 
-async function removeCurrentCalendarEvent(
+async function removeCalendarAssignments(
   command: WorklogDispositionCommand,
   graphClient: RuntimeGraphClient,
+  outcomeStore: WorklogOutcomeStore,
+  preserve?: { eventId: string; userPrincipalName: string },
 ) {
-  const current = command.currentBooking;
-  if (!current?.eventId || !current.userPrincipalName) return;
-  await graphClient.deleteEvent({
-    eventId: current.eventId,
-    userPrincipalName: current.userPrincipalName,
+  const storedAssignments = await outcomeStore.listCalendarAssignments({
+    requestId: command.requestId,
   });
+  const current = command.currentBooking;
+  const assignments = [
+    ...storedAssignments,
+    ...(current?.eventId && current.userPrincipalName
+      ? [
+          {
+            eventId: current.eventId,
+            userPrincipalName: current.userPrincipalName,
+          },
+        ]
+      : []),
+  ].filter(
+    (assignment, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.eventId === assignment.eventId &&
+          candidate.userPrincipalName === assignment.userPrincipalName,
+      ) === index,
+  );
+
+  await Promise.all(
+    assignments
+      .filter(
+        (assignment) =>
+          assignment.eventId !== preserve?.eventId ||
+          assignment.userPrincipalName !== preserve.userPrincipalName,
+      )
+      .map((assignment) => graphClient.deleteEvent(assignment)),
+  );
 }
 
 function withMelbourneOffset(date: string, time: string) {

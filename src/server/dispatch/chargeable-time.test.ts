@@ -21,7 +21,7 @@ describe("chargeable ticket time", () => {
       getChargeableTicketTime({ appointment, bookingType: "Onsite" }),
     ).toEqual({
       jobMinutes: 60,
-      totalMinutes: 95,
+      totalMinutes: 105,
       travelMinutes: 35,
     });
   });

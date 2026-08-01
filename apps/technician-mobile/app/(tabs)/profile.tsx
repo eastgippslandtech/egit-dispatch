@@ -1,21 +1,19 @@
 import Constants from "expo-constants";
-import * as Device from "expo-device";
 import * as Location from "expo-location";
-import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppButton } from "../../src/components/app-button";
 import { enableWhileUsingLocation } from "../../src/features/location/foreground-location";
-import { createPushRegistration } from "../../src/features/notifications/register-device";
 import { createApiClient } from "../../src/api/client";
 import { getMobileRuntimeConfig } from "../../src/config/runtime";
 import {
   hasUsedLunchToday,
   markLunchUsedToday,
 } from "../../src/features/lunch/lunch-usage";
+import { registerCurrentDeviceNotifications } from "../../src/features/notifications/register-current-device";
 import { useSession } from "../../src/providers/app-providers";
 import { colours } from "../../src/theme/tokens";
 
@@ -60,32 +58,21 @@ export default function ProfileRoute() {
   }, [mobileSession, staff.email]);
 
   const enableNotifications = async () => {
-    const config = getMobileRuntimeConfig();
-    const registration = createPushRegistration({
-      notifications: Notifications,
-      registerToken:
-        mobileSession
-          ? (payload) =>
-              createApiClient({
-                accessToken: mobileSession.accessToken,
-                baseUrl: config.mobileApiBaseUrl,
-              }).request("/devices/push-token", {
-                body: payload,
-                method: "PUT",
-              })
-          : undefined,
-    });
-    const result = await registration.enableJobNotifications({
-      appVersion: Constants.expoConfig?.version ?? "0.1.0",
-      installationId: `${Device.osInternalBuildId ?? "simulator"}-${
-        Platform.OS
-      }`,
-      platform: Platform.OS === "android" ? "android" : Platform.OS === "web" ? "web" : "ios",
+    if (!mobileSession) {
+      setNotificationStatus("Sign in with Zoho to enable notifications");
+      return;
+    }
+
+    const result = await registerCurrentDeviceNotifications({
+      mode: "manual",
+      mobileSession,
     });
     setNotificationStatus(
       result.status === "registered"
         ? `Enabled (${result.tokenPreview})`
-        : "Permission not granted",
+        : result.status === "not-device"
+          ? "Use a physical phone to enable notifications"
+          : "Permission not granted. Enable it in phone settings.",
     );
   };
   const enableLocation = async () => {

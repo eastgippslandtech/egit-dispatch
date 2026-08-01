@@ -82,6 +82,9 @@ export type DispatchRequest = {
   status: RequestStatus;
   bookingType?: BookingType;
   technicianId?: string;
+  mspCentralTechnicianEmail?: string;
+  mspCentralTechnicianId?: string;
+  mspCentralTechnicianName?: string;
   scheduledStart?: string;
   scheduledEnd?: string;
   dueAt: string;
@@ -107,6 +110,7 @@ export type Appointment = {
   id: string;
   date?: string;
   requestId?: string;
+  helpdeskUrl?: string;
   technicianId: string;
   title: string;
   customer: string;

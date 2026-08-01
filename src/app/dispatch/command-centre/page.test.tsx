@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -18,6 +19,7 @@ import {
   bookingCardPriorityClass,
   requestNotesSummary,
   ScheduleConfirmModal,
+  toastAutoDismissMs,
 } from "./prototype";
 
 const routerRefreshMock = vi.fn();
@@ -149,6 +151,7 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
 
   expect(screen.getByText("Confirm live schedule")).toBeInTheDocument();
   expect(screen.getByText("MSP Central + Outlook")).toBeInTheDocument();
+  expect(screen.getByRole("dialog")).toHaveClass("max-w-3xl");
   expect(screen.getByText("Includes 15 minutes for onsite notes.")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "15 minutes" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "45 minutes" })).toBeInTheDocument();
@@ -162,6 +165,101 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
     target: { value: "Remote" },
   });
   expect(onBookingTypeChange).toHaveBeenCalledWith("Remote");
+});
+
+test("live scheduling supports a lead technician and additional crew", () => {
+  const data = getDispatchDesignMockData();
+  const onCrewChange = vi.fn();
+
+  render(
+    <ScheduleConfirmModal
+      liveSchedule
+      pending={{
+        bookingType: "Remote",
+        crewTechnicianIds: [data.technicians[1].id],
+        date: "2026-08-04",
+        durationMinutes: 60,
+        end: "11:00",
+        kind: "request",
+        requestId: data.requests[0].id,
+        start: "10:00",
+        technicianId: data.technicians[0].id,
+        warnings: [],
+      }}
+      request={data.requests[0]}
+      technicians={data.technicians}
+      onBookingTypeChange={vi.fn()}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn()}
+      onCrewChange={onCrewChange}
+      onDurationChange={vi.fn()}
+      onStartChange={vi.fn()}
+      onTechnicianChange={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByLabelText("Lead technician")).toHaveValue(
+    data.technicians[0].id,
+  );
+  expect(
+    screen.getByRole("checkbox", { name: data.technicians[1].displayName }),
+  ).toBeChecked();
+
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: data.technicians[2].displayName }),
+  );
+  expect(onCrewChange).toHaveBeenCalledWith(data.technicians[2].id, true);
+});
+
+test("shows immediate proof that schedule confirmation was accepted", () => {
+  const data = getDispatchDesignMockData();
+  const onConfirm = vi.fn(() => new Promise<void>(() => undefined));
+
+  render(
+    <ScheduleConfirmModal
+      liveSchedule
+      pending={{
+        bookingType: "Remote",
+        date: "2026-08-04",
+        durationMinutes: 15,
+        end: "10:15",
+        kind: "request",
+        requestId: data.requests[0].id,
+        start: "10:00",
+        technicianId: data.technicians[0].id,
+        warnings: [],
+      }}
+      request={data.requests[0]}
+      technicians={data.technicians}
+      onBookingTypeChange={vi.fn()}
+      onCancel={vi.fn()}
+      onConfirm={onConfirm}
+      onDurationChange={vi.fn()}
+      onStartChange={vi.fn()}
+      onTechnicianChange={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+
+  expect(onConfirm).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Scheduling..." })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Saving booking and starting background sync",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
+  expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("keeps error notices visible longer than success notices", () => {
+  expect(
+    toastAutoDismissMs(
+      "REQ-100284 scheduled. Syncing with MSP Central and Outlook.",
+    ),
+  ).toBe(3_500);
+  expect(
+    toastAutoDismissMs("Live schedule did not save: MSP Central unavailable."),
+  ).toBe(8_000);
 });
 
 test("redirects a wallboard-only session to the wallboard", async () => {
@@ -388,6 +486,43 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
   );
 });
 
+test("keeps the Helpdesk link available for a completed request calendar booking", async () => {
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValue({
+    ...data,
+    appointments: [
+      {
+        customer: "East Gippsland IT",
+        date: "2026-07-08",
+        end: "12:45",
+        helpdeskUrl: "https://mspcentral.example/requests/6768000001414219",
+        id: "completed-request-booking",
+        outlookLinkedRequestNumber: "6768000001414219",
+        requestId: "6768000001414219",
+        source: "outlook",
+        start: "11:30",
+        status: "busy",
+        technicianId: "tech-simeon",
+        title: "test",
+      },
+    ],
+    requests: [],
+    selectedRequestId: "",
+  });
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: /test East Gippsland IT/ }));
+
+  expect(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("link", {
+      name: "Open in Helpdesk",
+    }),
+  ).toHaveAttribute(
+    "href",
+    "https://mspcentral.example/requests/6768000001414219",
+  );
+});
+
 test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {
   render(await CommandCentrePage());
 
@@ -559,6 +694,12 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_500);
+  });
+  expect(
+    screen.queryByText("Work Log saved and ticket resolved locally for test sync."),
+  ).not.toBeInTheDocument();
 });
 
 test("shows the required conditional fields for book forward and transfer", async () => {

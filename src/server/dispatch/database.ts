@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 
 import { getSharedPostgresClient } from "@/server/database/client";
+import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
 
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
@@ -45,6 +46,7 @@ type DispatchStaffRow = {
 };
 
 type DispatchLinkRow = {
+  assignmentRole: "crew" | "lead";
   id: string;
   lastSyncError: string | null;
   lastSyncStatus: string;
@@ -106,7 +108,7 @@ export function createPostgresDispatchDashboardDatabase({
             technicianIdForStaff(staff),
           ]),
       );
-      const requests = linkRows.map((row) =>
+      const requests = linkRows.filter((row) => row.assignmentRole === "lead").map((row) =>
         mapRequest(row, { technicianIdsByStaffId, technicianIdsByTechnicianId }),
       );
       const appointments = linkRows
@@ -164,24 +166,52 @@ function selectStaffRows(sql: postgres.Sql) {
 
 function selectDispatchRows(sql: postgres.Sql) {
   return sql<DispatchLinkRow[]>`
+    with assignments as (
+      select
+        dl.id as assignment_id,
+        dl.id as dispatch_link_id,
+        dl.technician_id as assignment_technician_id,
+        dl.outlook_event_id,
+        dl.outlook_calendar_email,
+        dl.last_sync_status,
+        dl.last_sync_error,
+        'lead'::text as assignment_role
+      from public.dispatch_links dl
+
+      union all
+
+      select
+        crew.id as assignment_id,
+        crew.dispatch_link_id,
+        crew.technician_id as assignment_technician_id,
+        crew.outlook_event_id,
+        crew.outlook_calendar_email,
+        crew.last_sync_status,
+        crew.last_sync_error,
+        'crew'::text as assignment_role
+      from public.dispatch_link_crew crew
+    )
     select
-      dl.id::text as "id",
+      assignments.assignment_id::text as "id",
+      assignments.assignment_role as "assignmentRole",
       dl.sdp_request_id as "sdpRequestId",
       dl.sdp_request_number as "sdpRequestNumber",
-      dl.outlook_event_id as "outlookEventId",
-      dl.outlook_calendar_email as "outlookCalendarEmail",
-      dl.technician_id::text as "technicianId",
+      assignments.outlook_event_id as "outlookEventId",
+      assignments.outlook_calendar_email as "outlookCalendarEmail",
+      assignments.assignment_technician_id::text as "technicianId",
       dl.scheduled_start as "scheduledStart",
       dl.scheduled_end as "scheduledEnd",
-      dl.last_sync_status::text as "lastSyncStatus",
-      dl.last_sync_error as "lastSyncError",
+      assignments.last_sync_status::text as "lastSyncStatus",
+      assignments.last_sync_error as "lastSyncError",
       dl.updated_at as "updatedAt",
       sp.id::text as "staffId",
       t.display_name as "technicianDisplayName",
       t.outlook_email as "technicianOutlookEmail",
       coalesce(logs.notes, '[]'::jsonb) as "notes"
-    from public.dispatch_links dl
-    left join public.technicians t on t.id = dl.technician_id
+    from assignments
+    join public.dispatch_links dl on dl.id = assignments.dispatch_link_id
+    left join public.technicians t
+      on t.id = assignments.assignment_technician_id
     left join public.staff_profiles sp on lower(sp.outlook_email) = lower(t.outlook_email)
       or (
         sp.msp_central_technician_id is not null
@@ -399,6 +429,9 @@ function mapAppointment(
       "Unknown customer",
     date: formatMelbourneDate(start),
     end: formatMelbourneTime(end),
+    helpdeskUrl:
+      pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ??
+      buildMspCentralRequestUrl(row.sdpRequestNumber),
     outlookEventId: row.outlookEventId ?? undefined,
     readOnly: true,
     requestId: row.sdpRequestId,

@@ -66,6 +66,15 @@ const secureStoreMock = vi.hoisted(() => ({
 
 vi.mock("expo-secure-store", () => secureStoreMock);
 
+const notificationRegistrationMock = vi.hoisted(() => ({
+  registerCurrentDeviceNotifications: vi.fn(),
+}));
+
+vi.mock(
+  "../features/notifications/register-current-device",
+  () => notificationRegistrationMock,
+);
+
 vi.mock("react-native", () => ({
   Image: "Image",
   Pressable: "Pressable",
@@ -107,6 +116,7 @@ vi.mock("expo-notifications", () => ({
   getExpoPushTokenAsync: vi.fn(),
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
+  setNotificationHandler: vi.fn(),
 }));
 
 vi.mock("expo-router", () => {
@@ -463,6 +473,10 @@ describe("technician navigation", () => {
     secureStoreMock.values.clear();
     secureStoreMock.getItemAsync.mockClear();
     secureStoreMock.setItemAsync.mockClear();
+    notificationRegistrationMock.registerCurrentDeviceNotifications.mockReset();
+    notificationRegistrationMock.registerCurrentDeviceNotifications.mockResolvedValue({
+      status: "registered",
+    });
   });
 
   it("shows the native Zoho sign-in command when signed out", () => {
@@ -518,6 +532,39 @@ describe("technician navigation", () => {
     expect(labels).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("starts notification registration on first load after live sign-in", async () => {
+    const liveSession = {
+      accessToken: "access-riley",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      refreshToken: "refresh-riley",
+      staffEmail: riley.email,
+    };
+
+    await renderTechnicianRouterAsync({
+      status: "approved",
+      mobileSession: liveSession,
+      staff: riley,
+    });
+
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).toHaveBeenCalledWith({
+      mode: "automatic",
+      mobileSession: liveSession,
+    });
+  });
+
+  it("does not prompt for notifications in reviewer demo mode", () => {
+    renderTechnicianRouter(approvedRileySession);
+
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).not.toHaveBeenCalled();
   });
 
   it("moves from the Zoho action into the protected technician tabs", async () => {

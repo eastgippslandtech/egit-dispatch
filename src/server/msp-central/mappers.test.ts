@@ -5,6 +5,7 @@ import { getInitialStaffProfiles } from "@/server/staff/profiles";
 import {
   mapMspCentralPriority,
   mapMspCentralRequest,
+  mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
   mapMspCentralSentiment,
   mapMspCentralSlaState,
@@ -54,6 +55,9 @@ describe("MSP Central request mappers", () => {
     expect(request).toMatchObject({
       customer: "Fixture Customer",
       helpdeskUrl: "https://helpdesk.example/requests/REQ-MSP-1",
+      mspCentralTechnicianEmail: "mattd@egit.com.au",
+      mspCentralTechnicianId: "msp-tech-matt",
+      mspCentralTechnicianName: "Matt",
       notes: "Printer queue is stuck after driver update.",
       priority: "High",
       readyToBook: true,
@@ -143,6 +147,20 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("keeps the MSP Central identifier out of the request title", () => {
+    const request = mapMspCentralRequest(
+      {
+        id: "6768000001414219",
+        request_number: "6768000001414219",
+        subject: "6768000001414219 Printer offline",
+      },
+      { now },
+    );
+
+    expect(request.requestNumber).toBe("6768000001414219");
+    expect(request.subject).toBe("Printer offline");
+  });
+
   it("maps nested MSP customer details and cleans HTML descriptions", () => {
     const request = mapMspCentralRequest(
       {
@@ -219,6 +237,28 @@ describe("MSP Central request mappers", () => {
     ).toBe("negative");
   });
 
+  it("preserves the MSP billable flag on Work Log readback", () => {
+    expect(
+      mapMspCentralRequestWorklogs([
+        {
+          description: "Billable test",
+          id: "worklog-1",
+          is_billable: true,
+          time_spent: { hours: "0", minutes: "15" },
+        },
+        {
+          description: "Non-billable test",
+          id: "worklog-2",
+          is_billable: false,
+          time_spent: { hours: "0", minutes: "15" },
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: "worklog-1", isBillable: true }),
+      expect.objectContaining({ id: "worklog-2", isBillable: false }),
+    ]);
+  });
+
   it("prefers MSP technician ID and warns on display-name-only matches", () => {
     const [profile] = getInitialStaffProfiles();
     const request = mapMspCentralRequest(
@@ -264,6 +304,27 @@ describe("MSP Central request mappers", () => {
     expect(requests).toHaveLength(1);
     expect(technicians).toEqual([
       expect.objectContaining({ displayName: "Jervy", id: "tech-jervy" }),
+    ]);
+  });
+
+  it("preserves the canonical MSP Central technician identity", () => {
+    const technicians = mapMspCentralTechnicians([
+      {
+        email_id: "riley@egit.com.au",
+        id: "msp-technician-riley",
+        name: "Riley Pearson",
+      },
+    ]);
+
+    expect(technicians).toEqual([
+      expect.objectContaining({
+        displayName: "Riley",
+        id: "tech-riley",
+        mspCentralEmail: "riley@egit.com.au",
+        mspCentralTechnicianId: "msp-technician-riley",
+        mspCentralTechnicianName: "Riley Pearson",
+        sdpTechnicianName: "Riley Pearson",
+      }),
     ]);
   });
 

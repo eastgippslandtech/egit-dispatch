@@ -47,16 +47,24 @@ describe("Graph event mapper", () => {
     expect(extractLinkedRequestNumber("REQ-100211 Server work")).toBe("100211");
     expect(extractLinkedRequestNumber("SDP 100246 upgrade")).toBe("100246");
     expect(extractLinkedRequestNumber("No request", "Ticket #100368")).toBe("100368");
+    expect(
+      extractLinkedRequestNumber("6768000001419914 Retailer Archive Webapp"),
+    ).toBe("6768000001419914");
   });
 
   it("maps linked Outlook events into DispatchAppointment shape", () => {
-    const appointment = mapGraphEventToAppointment(event(), technician);
+    const appointment = mapGraphEventToAppointment(
+      event(),
+      technician,
+      "https://mspcentral.example/requests/{request}",
+    );
 
     expect(appointment).toMatchObject({
       calendarOwnerEmail: "simeon@egit.com.au",
       customer: "OneHarvest server room",
       date: "2026-07-08",
       end: "10:30",
+      helpdeskUrl: "https://mspcentral.example/requests/100211",
       id: "outlook-tech-simeon-event-1",
       outlookEventId: "event-1",
       outlookLinkedRequestNumber: "100211",
@@ -66,7 +74,7 @@ describe("Graph event mapper", () => {
       start: "09:30",
       status: "busy",
       technicianId: "tech-simeon",
-      title: "REQ-100211 File server disk expansion",
+      title: "File server disk expansion",
     });
   });
 

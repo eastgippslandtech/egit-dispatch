@@ -1,4 +1,5 @@
 import type { BookingType } from "@/server/dispatch/types";
+import { roundWorklogMinutes } from "./time";
 
 export const worklogDispositions = [
   "complete",
@@ -8,6 +9,9 @@ export const worklogDispositions = [
 ] as const;
 
 export type WorklogDisposition = (typeof worklogDispositions)[number];
+
+export type WorklogType = "billable" | "non_billable" | "internal";
+export type WorklogVisibility = "external" | "internal";
 
 export type WorklogForwardBooking = {
   bookingType: BookingType;
@@ -50,6 +54,8 @@ export type WorklogDispositionCommand = {
   scheduled: boolean;
   startedAt: string;
   transfer?: WorklogTransfer;
+  visibility: WorklogVisibility;
+  workType: WorklogType;
 };
 
 export function validateWorklogDispositionCommand(
@@ -60,13 +66,15 @@ export function validateWorklogDispositionCommand(
     currentBooking: input.currentBooking,
     description: clean(input.description),
     disposition: validDisposition(input.disposition),
-    durationMinutes: Math.round(Number(input.durationMinutes)),
+    durationMinutes: roundWorklogMinutes(Number(input.durationMinutes)),
     endedAt: clean(input.endedAt),
     idempotencyKey: clean(input.idempotencyKey),
     requestId: clean(input.requestId),
     scheduled: input.scheduled === true,
     startedAt: clean(input.startedAt),
     transfer: input.transfer,
+    visibility: validVisibility(input.visibility),
+    workType: validWorklogType(input.workType),
   };
 
   if (
@@ -90,6 +98,12 @@ export function validateWorklogDispositionCommand(
   }
   if (command.scheduled && !command.disposition) {
     throw new Error("Choose what happens to this scheduled job after saving.");
+  }
+  if (command.workType === "billable" && command.visibility !== "external") {
+    throw new Error("Billable Work Logs must be customer-facing.");
+  }
+  if (command.workType === "internal" && command.visibility !== "internal") {
+    throw new Error("Internal Work Logs must use internal visibility.");
   }
   if (command.disposition === "book_forward") {
     command.booking = validateForwardBooking(command.booking);
@@ -159,6 +173,17 @@ function validDisposition(value?: WorklogDisposition) {
   return worklogDispositions.includes(value as WorklogDisposition)
     ? value
     : undefined;
+}
+
+function validVisibility(value?: WorklogVisibility): WorklogVisibility {
+  return value === "internal" ? "internal" : "external";
+}
+
+function validWorklogType(value?: WorklogType): WorklogType {
+  if (value === "internal" || value === "non_billable") {
+    return value;
+  }
+  return "billable";
 }
 
 function isBookingType(value?: BookingType): value is BookingType {

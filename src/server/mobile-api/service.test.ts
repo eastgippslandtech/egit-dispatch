@@ -16,6 +16,7 @@ import {
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
 import type { Appointment } from "@/server/dispatch/types";
+import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 
 vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
   const actual =
@@ -302,6 +303,63 @@ describe("mobile API service", () => {
       id: dbJobId,
       outlookEventId: "event-outlook-1",
       source: "msp_central",
+    });
+  });
+
+  it("reconciles an Outlook copy of an MSP request into a writable mobile job", async () => {
+    const linkedRequest = getDispatchDesignMockData().requests[0];
+    const linkedAppointment: Appointment = {
+      ...outlookAppointment,
+      id: "outlook-tech-riley-event-linked-1",
+      outlookEventId: "event-linked-1",
+      outlookLinkedRequestNumber: linkedRequest.requestNumber,
+      title: `${linkedRequest.requestNumber} ${linkedRequest.subject}`,
+    };
+    const linkedDatabaseJob: DatabaseJobRow = {
+      ...dbJob,
+      id: "link-reconciled-1",
+      outlookEventId: "event-linked-1",
+      sdpRequestId: linkedRequest.id,
+      sdpRequestNumber: linkedRequest.requestNumber,
+    };
+    const listJobsForStaff = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([linkedDatabaseJob]);
+    const save = vi.fn().mockResolvedValue(undefined);
+
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({ listJobsForStaff }),
+      from: "2026-07-14",
+      linkStore: { save },
+      mspClient: {
+        listRequests: vi.fn().mockResolvedValue([linkedRequest]),
+      } as never,
+      outlookCalendar: createOutlookCalendar([linkedAppointment]),
+      to: "2026-07-14",
+    });
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outlookEventId: "event-linked-1",
+        requestId: linkedRequest.id,
+        requestNumber: linkedRequest.requestNumber,
+        syncStatus: "linked",
+        technicianEmail: "riley@egit.com.au",
+      }),
+    );
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "link-reconciled-1",
+      outlookEventId: "event-linked-1",
+      source: "msp_central",
+      permissions: expect.objectContaining({
+        canComplete: true,
+        canStartTimer: true,
+        canWriteWorklog: true,
+        readOnlyReason: null,
+      }),
     });
   });
 

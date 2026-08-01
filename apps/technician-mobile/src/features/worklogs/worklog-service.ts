@@ -9,6 +9,7 @@ import type {
   WorklogDisposition,
   WorkLogType,
 } from "../../contracts/mobile";
+import { roundWorklogMinutes } from "../timer/timer-service";
 
 export interface WorklogDraft {
   jobId: string;
@@ -89,9 +90,10 @@ export async function saveWorklogWithDraft({
     throw new Error("Transfer / escalate requires a target and reason.");
   }
 
+  const roundedDurationMinutes = roundWorklogMinutes(durationMinutes);
   const draft: WorklogDraft = {
     billable,
-    durationMinutes,
+    durationMinutes: roundedDurationMinutes,
     disposition,
     forwardBooking,
     idempotencyKey,
@@ -114,7 +116,7 @@ export async function saveWorklogWithDraft({
       billable,
       clientMutationId: idempotencyKey,
       disposition,
-      durationMinutes: Math.max(1, durationMinutes),
+      durationMinutes: Math.max(15, roundedDurationMinutes),
       endedAt: new Date().toISOString(),
       installationId: "local-simulator",
       jobId: job.id,

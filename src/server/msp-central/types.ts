@@ -1,7 +1,9 @@
 import type { DispatchRequest, Technician } from "@/server/dispatch/types";
+import type { WorklogType } from "@/server/worklogs/disposition";
 
 export type MspCentralRawTechnician = {
   email?: string | null;
+  email_id?: string | null;
   id?: string | number | null;
   name?: string | null;
 };
@@ -95,6 +97,7 @@ export type MspCentralRawWorklog = {
   description?: string | null;
   end_time?: MspCentralTimestamp | null;
   id?: string | number | null;
+  is_billable?: boolean | null;
   owner?: { email_id?: string | null; name?: string | null } | null;
   recorded_time?: MspCentralTimestamp | null;
   start_time?: MspCentralTimestamp | null;
@@ -115,6 +118,7 @@ export type MspCentralRequestUpdate = {
   createdAt?: string;
   durationMinutes?: number;
   id: string;
+  isBillable?: boolean;
 };
 
 export type MspCentralRequestContext = {
@@ -155,11 +159,14 @@ export type MspCentralClient = {
     description: string;
     durationMinutes: number;
     endedAt: string;
+    ownerId: string;
     requestId: string;
     startedAt: string;
+    worklogType: WorklogType;
   }): Promise<void>;
   assignRequest(input: {
     requestId: string;
+    technicianEmail?: string;
     technicianName: string;
   }): Promise<void>;
   clearRequestSchedule(input: { requestId: string }): Promise<void>;
@@ -180,6 +187,7 @@ export type MspCentralClient = {
     scheduledEnd: string;
     scheduledStart: string;
     technicianEmail?: string;
+    technicianId?: string;
     technicianName?: string;
   }): Promise<void>;
   updateRequestStatus?(input: {

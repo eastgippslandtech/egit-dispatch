@@ -17,6 +17,8 @@ const base: WorklogDispositionCommand = {
   requestId: "request-1",
   scheduled: true,
   startedAt: "2026-08-03T00:30:00.000Z",
+  visibility: "external",
+  workType: "billable",
 };
 
 describe("Work Log disposition runtime", () => {
@@ -26,13 +28,82 @@ describe("Work Log disposition runtime", () => {
 
     await runtime.applyDisposition(base);
 
-    expect(dependencies.mspClient.clearRequestSchedule).toHaveBeenCalledWith({
+    expect(dependencies.mspClient.updateRequestStatus).toHaveBeenCalledWith({
       requestId: "request-1",
+      status: "Open",
     });
     expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledWith({
       eventId: "event-1",
       userPrincipalName: "jervy@egit.com.au",
     });
+    expect(dependencies.outcomeStore.clearSchedule).toHaveBeenCalledWith({
+      requestId: "request-1",
+      status: "sdp_only",
+    });
+  });
+
+  it("removes every lead and crew calendar booking when a request leaves the schedule", async () => {
+    const dependencies = createDependencies();
+    dependencies.outcomeStore.listCalendarAssignments.mockResolvedValue([
+      {
+        eventId: "event-lead",
+        userPrincipalName: "mattd@egit.com.au",
+      },
+      {
+        eventId: "event-crew",
+        userPrincipalName: "jervy@egit.com.au",
+      },
+    ]);
+    const runtime = createWorklogDispositionRuntime(dependencies);
+
+    await runtime.applyDisposition({
+      ...base,
+      currentBooking: {
+        ...base.currentBooking!,
+        eventId: "event-crew",
+      },
+      disposition: "complete",
+    });
+
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledTimes(2);
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledWith({
+      eventId: "event-lead",
+      userPrincipalName: "mattd@egit.com.au",
+    });
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledWith({
+      eventId: "event-crew",
+      userPrincipalName: "jervy@egit.com.au",
+    });
+  });
+
+  it("saves a typed Work Log with its mandatory MSP owner", async () => {
+    const dependencies = createDependencies();
+    const runtime = createWorklogDispositionRuntime(dependencies);
+
+    await runtime.saveWorklog(base);
+
+    expect(dependencies.mspClient.addRequestWorklog).toHaveBeenCalledWith({
+      description: "Work completed.",
+      durationMinutes: 30,
+      endedAt: "2026-08-03T01:00:00.000Z",
+      ownerId: "msp-tech-jervy",
+      requestId: "request-1",
+      startedAt: "2026-08-03T00:30:00.000Z",
+      worklogType: "billable",
+    });
+  });
+
+  it("completes a request by resolving it without writing unavailable schedule fields", async () => {
+    const dependencies = createDependencies();
+    const runtime = createWorklogDispositionRuntime(dependencies);
+
+    await runtime.applyDisposition({ ...base, disposition: "complete" });
+
+    expect(dependencies.mspClient.updateRequestStatus).toHaveBeenCalledWith({
+      requestId: "request-1",
+      status: "Resolved",
+    });
+    expect(dependencies.mspClient.clearRequestSchedule).not.toHaveBeenCalled();
     expect(dependencies.outcomeStore.clearSchedule).toHaveBeenCalledWith({
       requestId: "request-1",
       status: "sdp_only",
@@ -66,7 +137,9 @@ describe("Work Log disposition runtime", () => {
 
     expect(dependencies.mspClient.updateRequestSchedule).toHaveBeenCalledOnce();
     expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledOnce();
-    expect(dependencies.graphClient.createEvent).toHaveBeenCalledOnce();
+    expect(dependencies.graphClient.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "Printer offline" }),
+    );
     expect(dependencies.outcomeStore.bookForward).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: "event-2", requestId: "request-1" }),
     );
@@ -89,7 +162,12 @@ describe("Work Log disposition runtime", () => {
 
     expect(dependencies.mspClient.assignRequest).toHaveBeenCalledWith({
       requestId: "request-1",
+      technicianEmail: "simeon@egit.com.au",
       technicianName: "Simeon",
+    });
+    expect(dependencies.mspClient.updateRequestStatus).toHaveBeenCalledWith({
+      requestId: "request-1",
+      status: "Open",
     });
     expect(dependencies.outcomeStore.transfer).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "Requires senior network review" }),
@@ -114,7 +192,11 @@ function createDependencies() {
     outcomeStore: {
       bookForward: vi.fn(),
       clearSchedule: vi.fn(),
+      listCalendarAssignments: vi.fn().mockResolvedValue([]),
       transfer: vi.fn(),
+    },
+    worklogOwner: {
+      id: "msp-tech-jervy",
     },
   };
 }

@@ -23,7 +23,12 @@ import type {
 import type { MobileAuthContext, MobileWorklogCommand } from "./contracts";
 import { mockIsoTime } from "@/server/dispatch/date-scope";
 import { readDispatchConfig } from "@/server/dispatch/env";
+import {
+  getConfiguredDispatchLinkStore,
+  type DispatchLinkStore,
+} from "@/server/dispatch/link-store";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import {
   applyDispatchTestSyncEvents,
   listDispatchTestSyncEvents,
@@ -55,10 +60,12 @@ import { createMspCentralClient } from "@/server/msp-central/client";
 import type { MspCentralClient } from "@/server/msp-central/types";
 import { createGraphClient } from "@/server/graph/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 type ResolvedTimerJob = {
   databaseJob?: DatabaseJobRow;
@@ -92,18 +99,22 @@ export async function listMobileJobs({
   auth,
   database = getConfiguredMobileDatabase(),
   from,
+  linkStore = getConfiguredDispatchLinkStore(),
+  mspClient = getConfiguredMobileMspClient(),
   outlookCalendar = getConfiguredMobileOutlookCalendar(),
   to,
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   from: string;
+  linkStore?: DispatchLinkStore | null;
+  mspClient?: MspCentralClient | null;
   outlookCalendar?: MobileOutlookCalendar | null;
   to: string;
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
-    const jobs = await database.listJobsForStaff({
+    let jobs = await database.listJobsForStaff({
       from,
       staffId: staff.id,
       to,
@@ -115,10 +126,25 @@ export async function listMobileJobs({
       staff,
       to,
     });
+    const reconciled = await reconcileLinkedOutlookJobs({
+      jobs: jobs.map(mapDatabaseJob),
+      linkStore,
+      mspClient,
+      outlookJobs,
+      staff,
+    });
+    if (reconciled) {
+      jobs = await database.listJobsForStaff({ from, staffId: staff.id, to });
+    }
     const linkedOutlookEventIds = new Set(
       [...jobs.map(mapDatabaseJob), ...testJobs]
         .map((job) => job.outlookEventId)
         .filter((eventId): eventId is string => Boolean(eventId)),
+    );
+    const linkedRequestNumbers = new Set(
+      [...jobs.map(mapDatabaseJob), ...testJobs]
+        .map((job) => normalizeRequestNumber(job.requestNumber))
+        .filter((requestNumber): requestNumber is string => Boolean(requestNumber)),
     );
 
     return {
@@ -128,7 +154,8 @@ export async function listMobileJobs({
         ...outlookJobs.filter(
           (job) =>
             !job.outlookEventId ||
-            !linkedOutlookEventIds.has(job.outlookEventId),
+            (!linkedOutlookEventIds.has(job.outlookEventId) &&
+              !linkedRequestNumbers.has(normalizeRequestNumber(job.requestNumber) ?? "")),
         ),
       ].sort((left, right) => left.startAt.localeCompare(right.startAt)),
     };
@@ -257,6 +284,8 @@ export async function saveMobileWorklog({
     const dispositionResult = await processMobileDisposition({
       command: dispositionCommand,
       mspClient,
+      ownerEmail: staff.mspCentralEmail || auth.email,
+      ownerTechnicianId: staff.mspCentralTechnicianId,
     });
 
     const saved = await database.saveWorklog({
@@ -509,6 +538,8 @@ export async function completeMobileJob({
       body,
       command,
       mspClient,
+      ownerEmail: staff.mspCentralEmail || auth.email,
+      ownerTechnicianId: staff.mspCentralTechnicianId,
       requestId: job.sdpRequestId,
     });
     if (mspClient?.updateRequestStatus) {
@@ -620,6 +651,112 @@ function findOwnedJob(auth: MobileAuthContext, jobId: string): MobileJob {
   return job;
 }
 
+async function reconcileLinkedOutlookJobs({
+  jobs,
+  linkStore,
+  mspClient,
+  outlookJobs,
+  staff,
+}: {
+  jobs: MobileJob[];
+  linkStore: DispatchLinkStore | null;
+  mspClient: MspCentralClient | null;
+  outlookJobs: MobileJob[];
+  staff: DatabaseStaffRow;
+}) {
+  if (!linkStore || !mspClient) return false;
+
+  const linkedEventIds = new Set(
+    jobs
+      .map((job) => job.outlookEventId)
+      .filter((eventId): eventId is string => Boolean(eventId)),
+  );
+  const linkedRequestNumbers = new Set(
+    jobs
+      .map((job) => normalizeRequestNumber(job.requestNumber))
+      .filter((requestNumber): requestNumber is string => Boolean(requestNumber)),
+  );
+  const candidates = outlookJobs.filter((job) => {
+    const requestNumber = normalizeRequestNumber(job.requestNumber);
+    return Boolean(
+      job.outlookEventId &&
+        requestNumber &&
+        !linkedEventIds.has(job.outlookEventId) &&
+        !linkedRequestNumbers.has(requestNumber),
+    );
+  });
+  if (!candidates.length) return false;
+
+  try {
+    const requests = await mspClient.listRequests();
+    const requestsByNumber = new Map(
+      requests.flatMap((request) => {
+        const keys = [request.requestNumber, request.id]
+          .map(normalizeRequestNumber)
+          .filter((key): key is string => Boolean(key));
+        return keys.map((key) => [key, request] as const);
+      }),
+    );
+    let reconciled = false;
+
+    for (const job of candidates) {
+      const requestNumber = normalizeRequestNumber(job.requestNumber);
+      const request = requestNumber
+        ? requestsByNumber.get(requestNumber)
+        : undefined;
+      if (!request || !job.outlookEventId) continue;
+
+      await linkStore.save({
+        action: "outlook_reconciled",
+        bookingType: request.bookingType ?? job.bookingType,
+        contactEmail: extractEmail(request.contact),
+        contactName: request.requester,
+        contactPhone: extractPhone(request.contact),
+        customer: request.customer,
+        description: request.notes,
+        outlookCalendarEmail:
+          staff.outlookUserPrincipalName || staff.outlookEmail,
+        outlookEventId: job.outlookEventId,
+        priority: request.priority,
+        requestId: request.id,
+        requestNumber: request.requestNumber,
+        scheduledEnd: job.endAt,
+        scheduledStart: job.startAt,
+        siteAddress: request.siteAddress,
+        siteName: request.siteName ?? request.site,
+        siteTown: request.siteTown,
+        subject: request.subject,
+        syncStatus: "linked",
+        technicianEmail: staff.outlookUserPrincipalName || staff.outlookEmail,
+        technicianId: staff.id,
+        technicianMspCentralId: staff.mspCentralTechnicianId ?? undefined,
+      });
+      reconciled = true;
+    }
+
+    return reconciled;
+  } catch (error) {
+    console.error("Mobile linked Outlook reconciliation failed", safeError(error));
+    return false;
+  }
+}
+
+function normalizeRequestNumber(value?: string | null) {
+  const clean = value?.trim();
+  if (!clean) return undefined;
+  return clean.match(/\d{6,}/)?.[0] ?? clean.toUpperCase();
+}
+
+function extractEmail(value?: string) {
+  return value?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+}
+
+function extractPhone(value?: string) {
+  return value
+    ?.match(/(?:\+?61|0)[\d\s()-]{7,}/)?.[0]
+    ?.trim();
+}
+
 function buildMobileDispositionCommand({
   body,
   command,
@@ -629,7 +766,7 @@ function buildMobileDispositionCommand({
   command: MobileWorklogCommand;
   job: DatabaseJobRow;
 }) {
-  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const durationMinutes = roundWorklogMinutes(command.durationMinutes ?? 1);
   const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
   const startedAt =
     command.startedAt ??
@@ -663,6 +800,14 @@ function buildMobileDispositionCommand({
     scheduled: Boolean(job.scheduledStart && job.scheduledEnd),
     startedAt,
     transfer: command.transfer,
+    visibility: command.visibility,
+    workType:
+      command.workType ??
+      (command.visibility === "internal"
+        ? "internal"
+        : command.billable === false
+          ? "non_billable"
+          : "billable"),
   });
 }
 
@@ -682,9 +827,13 @@ function validateMobileDisposition(
 async function processMobileDisposition({
   command,
   mspClient,
+  ownerEmail,
+  ownerTechnicianId,
 }: {
   command: ReturnType<typeof buildMobileDispositionCommand>;
   mspClient: MspCentralClient | null;
+  ownerEmail?: string | null;
+  ownerTechnicianId?: string | null;
 }) {
   const config = readDispatchConfig();
   if (!mspClient || !config.databaseUrl) {
@@ -697,20 +846,29 @@ async function processMobileDisposition({
         endedAt: command.endedAt,
         installationId: "mobile",
         startedAt: command.startedAt,
-        visibility: "external",
+        visibility: command.visibility,
+        workType: command.workType,
       },
       mspClient,
+      ownerEmail,
+      ownerTechnicianId,
       requestId: command.requestId,
     });
     return null;
   }
 
+  const worklogOwner = await resolveMspCentralWorklogOwner({
+    email: ownerEmail ?? undefined,
+    mspClient,
+    technicianId: ownerTechnicianId,
+  });
   const runtime = createWorklogDispositionRuntime({
     graphClient: createGraphClient(config.microsoft),
     mspClient,
     outcomeStore: createPostgresWorklogOutcomeStore({
       databaseUrl: config.databaseUrl,
     }),
+    worklogOwner,
   });
   return createWorklogDispositionProcessor({
     applyDisposition: runtime.applyDisposition,
@@ -732,29 +890,47 @@ async function writeMobileWorklogToMsp({
   body,
   command,
   mspClient,
+  ownerEmail,
+  ownerTechnicianId,
   requestId,
 }: {
   body: string;
   command: MobileWorklogCommand;
   mspClient: MspCentralClient | null;
+  ownerEmail?: string | null;
+  ownerTechnicianId?: string | null;
   requestId: string;
 }) {
   if (!mspClient?.addRequestWorklog) {
     return;
   }
 
-  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const durationMinutes = roundWorklogMinutes(command.durationMinutes ?? 1);
   const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
   const startedAt =
     command.startedAt ??
     new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+  const owner = await resolveMspCentralWorklogOwner({
+    email: ownerEmail ?? undefined,
+    mspClient,
+    technicianId: ownerTechnicianId,
+  });
+  const worklogType =
+    command.workType ??
+    (command.visibility === "internal"
+      ? "internal"
+      : command.billable === false
+        ? "non_billable"
+        : "billable");
 
   await mspClient.addRequestWorklog({
     description: body,
     durationMinutes,
     endedAt,
+    ownerId: owner.id,
     requestId,
     startedAt,
+    worklogType,
   });
 }
 
@@ -1261,12 +1437,15 @@ function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
     outlookWebLink: null,
     version: `db-${row.id}-${toIsoString(row.updatedAt)}`,
     title:
-      pickString(summaries, [
-        "subject",
-        "title",
-        "requestSubject",
-        "ticketSubject",
-      ]) ?? `Request ${row.sdpRequestNumber}`,
+      cleanRequestTitle(
+        pickString(summaries, [
+          "subject",
+          "title",
+          "requestSubject",
+          "ticketSubject",
+        ]),
+        row.sdpRequestNumber,
+      ) || `Request ${row.sdpRequestNumber}`,
     description:
       pickString(summaries, [
         "description",

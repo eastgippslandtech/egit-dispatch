@@ -3,10 +3,12 @@ import type {
   BookingType,
   Technician,
 } from "@/server/dispatch/types";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type { MicrosoftGraphEvent } from "./types";
+import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
 
 const REQUEST_NUMBER_PATTERN =
-  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6})\b/i;
+  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6,})\b/i;
 
 export function extractLinkedRequestNumber(
   subject?: string,
@@ -21,6 +23,7 @@ export function extractLinkedRequestNumber(
 export function mapGraphEventToAppointment(
   event: MicrosoftGraphEvent,
   technician: Technician,
+  requestWebBaseUrl?: string,
 ): Appointment {
   const sensitivity = event.sensitivity?.toLowerCase();
   const isPersonal =
@@ -58,7 +61,7 @@ export function mapGraphEventToAppointment(
       )
       ? "Personal"
       : "Private appointment"
-    : event.subject?.trim();
+    : cleanRequestTitle(event.subject, requestNumber);
 
   return {
     bookingType,
@@ -71,6 +74,7 @@ export function mapGraphEventToAppointment(
         "Outlook calendar",
     date,
     end,
+    helpdeskUrl: buildMspCentralRequestUrl(requestNumber, requestWebBaseUrl),
     id: `outlook-${technician.id}-${event.id}`,
     isAllDay,
     outlookAttendees: isPrivate

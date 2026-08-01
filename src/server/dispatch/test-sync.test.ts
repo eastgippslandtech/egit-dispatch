@@ -137,6 +137,95 @@ describe("dispatch test sync overlays", () => {
     );
   });
 
+  it("keeps a live scheduled booking visible and flags background sync failures", () => {
+    const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
+      normaliseDispatchTestSyncEvent({
+        appointmentId: "appt-live",
+        createdAt: "2026-07-08T00:00:00.000Z",
+        date: "2026-07-08",
+        end: "10:30",
+        eventType: "scheduled",
+        payload: {
+          liveSync: {
+            error: "MSP Central status update failed",
+            status: "failed",
+          },
+        },
+        requestId: "req-1",
+        start: "09:30",
+        technicianId: "matt",
+      }),
+    ]);
+
+    expect(dashboard.requests[0]).toMatchObject({
+      scheduledStart: "2026-07-08T09:30:00+10:00",
+      status: "Scheduled",
+    });
+    expect(dashboard.requests[0].warnings).toContain(
+      "Live sync failed: MSP Central status update failed",
+    );
+    expect(
+      dashboard.appointments.find((appointment) => appointment.requestId === "req-1"),
+    ).toMatchObject({
+      syncIssue: "time-mismatch",
+    });
+  });
+
+  it("reconciles a Command Centre booking with its returning Outlook event", () => {
+    const dashboard = applyDispatchTestSyncEvents(
+      {
+        ...baseDashboard,
+        appointments: [
+          ...baseDashboard.appointments,
+          {
+            id: "outlook-matt-event-1",
+            requestId: "676800",
+            technicianId: "matt",
+            title: "6768000001419914 Printer offline",
+            customer: "OneHarvest",
+            date: "2026-07-08",
+            start: "09:30",
+            end: "10:30",
+            status: "busy",
+            source: "outlook",
+            outlookEventId: "event-1",
+            readOnly: true,
+          },
+        ],
+      },
+      [
+        normaliseDispatchTestSyncEvent({
+          appointmentId: "pending-live-req-1",
+          createdAt: "2026-07-08T00:00:00.000Z",
+          date: "2026-07-08",
+          end: "10:30",
+          eventType: "scheduled",
+          payload: {
+            liveSync: {
+              outlookEventId: "event-1",
+              status: "synced",
+            },
+          },
+          requestId: "req-1",
+          start: "09:30",
+          technicianId: "matt",
+        }),
+      ],
+    );
+
+    expect(dashboard.appointments).toHaveLength(2);
+    expect(
+      dashboard.appointments.find(
+        (appointment) => appointment.outlookEventId === "event-1",
+      ),
+    ).toMatchObject({
+      id: "outlook-matt-event-1",
+      requestId: "req-1",
+      readOnly: false,
+      source: "linked",
+    });
+  });
+
   it("moves an existing appointment between technicians", () => {
     const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
       normaliseDispatchTestSyncEvent({

@@ -1,5 +1,6 @@
+import * as Notifications from "expo-notifications";
 import { Stack } from "expo-router";
-import { type PropsWithChildren } from "react";
+import { type PropsWithChildren, useEffect, useRef } from "react";
 import { StatusBar, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -12,16 +13,43 @@ import {
   ActiveTimerProvider,
   GlobalTimerBanner,
 } from "../src/features/timer/active-timer-provider";
-import { createApiClient } from "../src/api/client";
-import { getMobileRuntimeConfig } from "../src/config/runtime";
 import { enableWhileUsingLocation as requestWhileUsingLocation } from "../src/features/location/foreground-location";
 import { FirstLoginPermissionGate } from "../src/features/onboarding/first-login-permission-prompt";
-import { createPushRegistration } from "../src/features/notifications/register-device";
+import { registerCurrentDeviceNotifications } from "../src/features/notifications/register-current-device";
 import { colours } from "../src/theme/tokens";
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 export function RootNavigator() {
   const { session } = useSession();
   const isApproved = session.status === "approved";
+  const registeredSession = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (session.status !== "approved" || !session.mobileSession) {
+      registeredSession.current = null;
+      return;
+    }
+
+    const sessionKey = `${session.staff.email}:${session.mobileSession.accessToken}`;
+    if (registeredSession.current === sessionKey) {
+      return;
+    }
+    registeredSession.current = sessionKey;
+    void registerCurrentDeviceNotifications({
+      mode: "automatic",
+      mobileSession: session.mobileSession,
+    }).catch(() => {
+      // Registration can be retried from Profile without blocking app startup.
+    });
+  }, [session]);
 
   return (
     <View style={styles.shell}>
@@ -62,51 +90,22 @@ export function RootNavigator() {
 async function enableJobNotifications(
   session: ReturnType<typeof useSession>["session"],
 ): Promise<string> {
-  const [
-    constantsModule,
-    deviceModule,
-    notificationsModule,
-    reactNativeModule,
-  ] = await Promise.all([
-    import("expo-constants"),
-    import("expo-device"),
-    import("expo-notifications"),
-    import("react-native"),
-  ]);
   const mobileSession =
     session.status === "approved" ? session.mobileSession : undefined;
-  const config = getMobileRuntimeConfig();
-  const registration = createPushRegistration({
-    notifications: notificationsModule,
-    registerToken:
-      mobileSession
-        ? (payload) =>
-            createApiClient({
-              accessToken: mobileSession.accessToken,
-              baseUrl: config.mobileApiBaseUrl,
-            }).request("/devices/push-token", {
-              body: payload,
-              method: "PUT",
-            })
-        : undefined,
-  });
-  const platform =
-    reactNativeModule.Platform.OS === "android"
-      ? "android"
-      : reactNativeModule.Platform.OS === "web"
-        ? "web"
-        : "ios";
-  const result = await registration.enableJobNotifications({
-    appVersion: constantsModule.default.expoConfig?.version ?? "0.1.0",
-    installationId: `${
-      deviceModule.osInternalBuildId ?? "simulator"
-    }-${reactNativeModule.Platform.OS}`,
-    platform,
+  if (!mobileSession) {
+    return "Sign in with Zoho to enable notifications";
+  }
+
+  const result = await registerCurrentDeviceNotifications({
+    mode: "manual",
+    mobileSession,
   });
 
   return result.status === "registered"
     ? `Notifications enabled (${result.tokenPreview})`
-    : "Notification permission not granted";
+    : result.status === "not-device"
+      ? "Use a physical phone to enable notifications"
+      : "Notification permission not granted";
 }
 
 async function enableWhileUsingLocation(): Promise<string> {

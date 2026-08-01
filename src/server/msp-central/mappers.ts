@@ -13,6 +13,7 @@ import {
 } from "@/server/staff/profiles";
 
 import { bookingTypeForRequest } from "@/server/dispatch/booking";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type {
   MspCentralRawRequest,
   MspCentralRawRequestNote,
@@ -62,8 +63,9 @@ export function mapMspCentralRequest(
 ): DispatchRequest {
   const now = options.now ?? new Date();
   const profiles = options.profiles ?? getInitialStaffProfiles();
+  const technicianIdentity = normalizeTechnician(raw.technician);
   const match = findStaffForMspCentralTechnician(
-    normalizeTechnician(raw.technician),
+    technicianIdentity,
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
@@ -157,7 +159,12 @@ export function mapMspCentralRequest(
     sourceSystem: options.sourceSystem ?? "msp-central-fixture",
     status: mapMspCentralStatus(readPriorityStatusName(raw.status), scheduledStart),
     subcategory: readPriorityStatusName(raw.subcategory),
-    subject: readString(raw.subject) ?? "Untitled MSP Central request",
+    subject:
+      cleanRequestTitle(readString(raw.subject), requestNumber) ||
+      "Untitled MSP Central request",
+    mspCentralTechnicianEmail: technicianIdentity.email ?? undefined,
+    mspCentralTechnicianId: technicianIdentity.id ?? undefined,
+    mspCentralTechnicianName: technicianIdentity.name ?? undefined,
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,
@@ -190,11 +197,28 @@ export function mapMspCentralTechnicians(
   profiles: StaffProfile[] = getInitialStaffProfiles(),
 ) {
   return rawTechnicians
-    .map((technician) =>
-      findStaffForMspCentralTechnician(normalizeTechnician(technician), profiles),
-    )
-    .filter((match) => match.profile)
-    .map((match) => staffProfileToTechnician(match.profile as StaffProfile));
+    .map((technician) => {
+      const identity = normalizeTechnician(technician);
+      const match = findStaffForMspCentralTechnician(identity, profiles);
+
+      if (!match.profile) {
+        return undefined;
+      }
+
+      return {
+        ...staffProfileToTechnician(match.profile),
+        mspCentralEmail: identity.email ?? match.profile.mspCentralEmail,
+        mspCentralTechnicianId:
+          identity.id ?? match.profile.mspCentralTechnicianId,
+        mspCentralTechnicianName:
+          identity.name ?? match.profile.mspCentralTechnicianName,
+        sdpTechnicianName:
+          identity.name ?? match.profile.mspCentralTechnicianName ?? undefined,
+      };
+    })
+    .filter((technician): technician is NonNullable<typeof technician> =>
+      Boolean(technician),
+    );
 }
 
 export function mapMspCentralPriority(value?: string): Priority {
@@ -377,6 +401,10 @@ export function mapMspCentralRequestWorklogs(
       undefined,
     durationMinutes: readWorklogDurationMinutes(worklog),
     id: readString(worklog.id) ?? `request-worklog-${index}`,
+    isBillable:
+      typeof worklog.is_billable === "boolean"
+        ? worklog.is_billable
+        : undefined,
   }));
 }
 
@@ -552,7 +580,8 @@ function readSentiment(
 
 function normalizeTechnician(technician?: MspCentralRawTechnician | null) {
   return {
-    email: readString(technician?.email),
+    email:
+      readString(technician?.email_id) ?? readString(technician?.email),
     id: readString(technician?.id),
     name: readString(technician?.name),
   };
@@ -560,7 +589,8 @@ function normalizeTechnician(technician?: MspCentralRawTechnician | null) {
 
 function hasTechnicianIdentity(technician?: MspCentralRawTechnician | null) {
   return Boolean(
-    readString(technician?.email) ||
+    readString(technician?.email_id) ||
+      readString(technician?.email) ||
       readString(technician?.id) ||
       readString(technician?.name),
   );

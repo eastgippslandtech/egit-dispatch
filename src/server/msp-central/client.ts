@@ -29,6 +29,7 @@ import type {
   MspCentralRequestWorklogListResponse,
   MspCentralTechnicianListResponse,
 } from "./types";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 const MSP_REQUEST_TIMEOUT_MS = 10_000;
 const MSP_REQUEST_PAGE_SIZE = 100;
@@ -161,7 +162,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   return {
     async addRequestWorklog(input) {
       assertConfigured();
-      const durationMinutes = Math.max(1, Math.round(input.durationMinutes));
+      const durationMinutes = roundWorklogMinutes(input.durationMinutes);
       const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/worklogs`,
         {
@@ -171,6 +172,9 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
                 description: input.description,
                 end_time: { value: new Date(input.endedAt).getTime() },
                 include_nonoperational_hours: true,
+                is_billable: input.worklogType === "billable",
+                mark_first_response: false,
+                owner: { id: input.ownerId },
                 start_time: { value: new Date(input.startedAt).getTime() },
                 time_spent: {
                   hours: String(Math.floor(durationMinutes / 60)),
@@ -196,7 +200,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         {
           body: new URLSearchParams({
             input_data: JSON.stringify({
-              request: { technician: { name: input.technicianName } },
+              request: {
+                technician: input.technicianEmail
+                  ? { email_id: input.technicianEmail }
+                  : { name: input.technicianName },
+              },
             }),
           }),
           method: "PUT",
@@ -387,10 +395,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     async updateRequestSchedule(input) {
       assertConfigured();
       const request = {
-        scheduled_end_time: { value: toEpochMilliseconds(input.scheduledEnd) },
-        scheduled_start_time: { value: toEpochMilliseconds(input.scheduledStart) },
-        ...(input.technicianEmail
-          ? { technician: { email_id: input.technicianEmail } }
+        status: { name: "Scheduled" },
+        ...(input.technicianId
+          ? { technician: { id: input.technicianId } }
+          : input.technicianEmail
+            ? { technician: { email_id: input.technicianEmail } }
           : input.technicianName
             ? { technician: { name: input.technicianName } }
             : {}),
@@ -512,8 +521,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     });
 
     if (!response.ok) {
+      const detail = await readMspCentralErrorDetail(response);
       throw new MspCentralConfigurationError(
-        `MSP Central API request failed with status ${response.status}.`,
+        detail
+          ? `MSP Central API request failed with status ${response.status}: ${detail}.`
+          : `MSP Central API request failed with status ${response.status}.`,
       );
     }
 
@@ -528,16 +540,89 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   }
 }
 
-function toEpochMilliseconds(value: string) {
-  const milliseconds = new Date(value).getTime();
+async function readMspCentralErrorDetail(response: Response) {
+  let payload: Record<string, unknown> | undefined;
+  if (typeof response.text === "function") {
+    const body = await response.text().catch(() => "");
+    payload = safeJsonRecord(body);
+  } else if (typeof response.json === "function") {
+    payload = (await response.json().catch(() => undefined)) as
+      | Record<string, unknown>
+      | undefined;
+  }
+  const responseStatus = payload?.response_status;
+  const statuses = Array.isArray(responseStatus)
+    ? responseStatus
+    : responseStatus && typeof responseStatus === "object"
+      ? [responseStatus]
+      : [];
 
-  if (!Number.isFinite(milliseconds)) {
-    throw new MspCentralConfigurationError(
-      `Invalid MSP Central schedule timestamp: ${value}`,
-    );
+  for (const status of statuses) {
+    if (!status || typeof status !== "object") continue;
+    const record = status as Record<string, unknown>;
+    const messages = Array.isArray(record.messages) ? record.messages : [];
+
+    for (const message of messages) {
+      if (!message || typeof message !== "object") continue;
+      const text = (message as Record<string, unknown>).message;
+      if (typeof text === "string" && text.trim()) {
+        return text.trim().replace(/[.]+$/, "").slice(0, 300);
+      }
+    }
+
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
   }
 
-  return String(milliseconds);
+  const error = payload?.error;
+  if (typeof error === "string" && error.trim()) {
+    return error.trim().replace(/[.]+$/, "").slice(0, 300);
+  }
+
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
+  }
+
+  return findMspCentralErrorMessage(payload);
+}
+
+function safeJsonRecord(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findMspCentralErrorMessage(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = findMspCentralErrorMessage(item);
+      if (message) return message;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "error_message", "display_message"]) {
+    const message = record[key];
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
+  }
+  for (const child of Object.values(record)) {
+    const message = findMspCentralErrorMessage(child);
+    if (message) return message;
+  }
+  return undefined;
 }
 
 function mspHasMoreRows(value: boolean | string | null | undefined) {

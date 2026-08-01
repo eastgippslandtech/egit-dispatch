@@ -10,9 +10,26 @@ const baseCommand = {
   requestId: "request-1",
   scheduled: true,
   startedAt: "2026-08-03T00:15:00.000Z",
+  visibility: "external" as const,
+  workType: "billable" as const,
 };
 
 describe("worklog disposition validation", () => {
+  it.each([
+    [1, 15],
+    [15, 15],
+    [16, 30],
+    [95, 105],
+  ])("rounds %i minutes up to %i minutes", (input, expected) => {
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        durationMinutes: input,
+      }).durationMinutes,
+    ).toBe(expected);
+  });
+
   it("rejects a scheduled Work Log without an outcome", () => {
     expect(() => validateWorklogDispositionCommand(baseCommand)).toThrow(
       "Choose what happens to this scheduled job",
@@ -63,5 +80,40 @@ describe("worklog disposition validation", () => {
         transfer: { reason: "", targetTechnicianId: "tech-matt" },
       }),
     ).toThrow("Transfer / escalate requires");
+  });
+
+  it("enforces the billing and visibility rules", () => {
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "billable",
+      }),
+    ).toMatchObject({ visibility: "external", workType: "billable" });
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "non_billable",
+      }),
+    ).toMatchObject({ visibility: "external", workType: "non_billable" });
+    expect(() =>
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "internal",
+        workType: "billable",
+      }),
+    ).toThrow("Billable Work Logs must be customer-facing");
+    expect(() =>
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "internal",
+      }),
+    ).toThrow("Internal Work Logs must use internal visibility");
   });
 });

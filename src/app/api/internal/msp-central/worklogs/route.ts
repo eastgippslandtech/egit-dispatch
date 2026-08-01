@@ -5,16 +5,13 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
+import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
-
-type WorklogCommand = {
-  complete?: boolean;
-  description?: string;
-  durationMinutes?: number;
-  endedAt?: string;
-  requestId?: string;
-  startedAt?: string;
-};
+import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
+import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
+import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
+import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
@@ -27,25 +24,28 @@ export async function POST(request: Request) {
   }
 
   try {
-    const command = validateCommand((await request.json()) as WorklogCommand);
-    const client = createMspCentralClient(readDispatchConfig());
+    const command = validateWorklogDispositionCommand(await request.json());
+    const config = readDispatchConfig();
+    const runtime = createWorklogDispositionRuntime({
+      graphClient: createGraphClient(config.microsoft),
+      mspClient: createMspCentralClient(config),
+      outcomeStore: createPostgresWorklogOutcomeStore({
+        databaseUrl: config.databaseUrl,
+      }),
+    });
+    const processor = createWorklogDispositionProcessor({
+      applyDisposition: runtime.applyDisposition,
+      repository: createPostgresWorklogDispositionRepository({
+        databaseUrl: config.databaseUrl,
+      }),
+      saveWorklog: runtime.saveWorklog,
+    });
+    const result = await processor.process(command);
 
-    if (!client.addRequestWorklog) {
-      throw new Error("MSP Central Work Log writeback is unavailable.");
-    }
-
-    await client.addRequestWorklog(command);
-    if (command.complete) {
-      if (!client.updateRequestStatus) {
-        throw new Error("MSP Central status writeback is unavailable.");
-      }
-      await client.updateRequestStatus({
-        requestId: command.requestId,
-        status: "Resolved",
-      });
-    }
-
-    return json({ ok: true }, 200);
+    return json(
+      { ok: result.status === "completed", ...result },
+      result.status === "completed" ? 200 : 202,
+    );
   } catch (error) {
     console.error("MSP Central Work Log route failed", error);
     return json(
@@ -59,40 +59,6 @@ export async function POST(request: Request) {
       400,
     );
   }
-}
-
-function validateCommand(command: WorklogCommand) {
-  const durationMinutes = Math.round(Number(command.durationMinutes));
-  const description = command.description?.trim();
-  const requestId = command.requestId?.trim();
-  const endedAt = command.endedAt?.trim();
-  const startedAt = command.startedAt?.trim();
-
-  if (
-    !description ||
-    !requestId ||
-    !startedAt ||
-    !endedAt ||
-    !Number.isFinite(durationMinutes) ||
-    durationMinutes <= 0
-  ) {
-    throw new Error("A request, note, and positive Work Log duration are required.");
-  }
-  if (
-    !Number.isFinite(new Date(startedAt).getTime()) ||
-    !Number.isFinite(new Date(endedAt).getTime())
-  ) {
-    throw new Error("Work Log start and end times are invalid.");
-  }
-
-  return {
-    complete: Boolean(command.complete),
-    description,
-    durationMinutes,
-    endedAt,
-    requestId,
-    startedAt,
-  };
 }
 
 function json(body: unknown, status: number) {

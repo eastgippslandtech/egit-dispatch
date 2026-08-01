@@ -48,6 +48,12 @@ import {
 } from "./outlook";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import type { MspCentralClient } from "@/server/msp-central/types";
+import { createGraphClient } from "@/server/graph/client";
+import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
+import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
+import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
+import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -237,11 +243,10 @@ export async function saveMobileWorklog({
       });
     }
 
-    await writeMobileWorklogToMsp({
-      body,
-      command,
+    const dispositionCommand = buildMobileDispositionCommand({ body, command, job });
+    const dispositionResult = await processMobileDisposition({
+      command: dispositionCommand,
       mspClient,
-      requestId: job.sdpRequestId,
     });
 
     const saved = await database.saveWorklog({
@@ -249,9 +254,11 @@ export async function saveMobileWorklog({
       body,
       clientMutationId: command.clientMutationId,
       durationMinutes: command.durationMinutes,
+      disposition: command.disposition,
       endedAt: command.endedAt,
       installationId: command.installationId,
       job,
+      outcomeDetails: command.forwardBooking ?? command.transfer,
       occurredAt: command.occurredAt,
       startedAt: command.startedAt,
       timerSessionId: command.timerSessionId,
@@ -265,7 +272,10 @@ export async function saveMobileWorklog({
         mode: "database",
         resourceId: saved.resourceId,
         resourceVersion: saved.resourceVersion,
-        status: "pending",
+        status:
+          dispositionResult?.status === "recovery_required"
+            ? "recovery_required"
+            : "pending",
         recordedAt: saved.recordedAt,
       } satisfies MutationReceipt,
     };
@@ -286,6 +296,27 @@ export async function saveMobileWorklog({
       status: 400,
     });
   }
+  validateMobileDisposition({
+    booking: command.forwardBooking
+      ? {
+          ...command.forwardBooking,
+          customer: job.customerName ?? undefined,
+          location: job.siteAddress ?? job.siteName ?? undefined,
+          requestNumber: job.requestNumber ?? job.id,
+          subject: job.title,
+          userPrincipalName: command.forwardBooking.technicianEmail,
+        }
+      : undefined,
+    description: body,
+    disposition: command.disposition,
+    durationMinutes: command.durationMinutes,
+    endedAt: command.endedAt ?? command.occurredAt,
+    idempotencyKey: command.clientMutationId,
+    requestId: job.requestNumber ?? job.id,
+    scheduled: true,
+    startedAt: command.startedAt ?? command.occurredAt,
+    transfer: command.transfer,
+  });
 
   return {
     receipt: {
@@ -430,7 +461,6 @@ export async function registerMobilePushToken({
       staffEmail: auth.email,
     });
   }
-
   return {
     device: {
       appVersion,
@@ -450,6 +480,107 @@ function findOwnedJob(auth: MobileAuthContext, jobId: string): MobileJob {
     });
   }
   return job;
+}
+
+function buildMobileDispositionCommand({
+  body,
+  command,
+  job,
+}: {
+  body: string;
+  command: MobileWorklogCommand;
+  job: DatabaseJobRow;
+}) {
+  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
+  const startedAt =
+    command.startedAt ??
+    new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+  const summaries = payloadSummaries(job);
+  return validateMobileDisposition({
+    booking: command.forwardBooking
+      ? {
+          ...command.forwardBooking,
+          customer: pickString(summaries, ["customerName", "customer"]) ?? undefined,
+          location:
+            pickString(summaries, ["siteAddress", "address", "siteName", "site"]) ??
+            undefined,
+          requestNumber: job.sdpRequestNumber,
+          subject:
+            pickString(summaries, ["subject", "title"]) ??
+            `Request ${job.sdpRequestNumber}`,
+          userPrincipalName: command.forwardBooking.technicianEmail,
+        }
+      : undefined,
+    currentBooking: {
+      eventId: job.outlookEventId ?? undefined,
+      userPrincipalName: job.outlookCalendarEmail ?? undefined,
+    },
+    description: body,
+    disposition: command.disposition,
+    durationMinutes,
+    endedAt,
+    idempotencyKey: command.clientMutationId,
+    requestId: job.sdpRequestId,
+    scheduled: Boolean(job.scheduledStart && job.scheduledEnd),
+    startedAt,
+    transfer: command.transfer,
+  });
+}
+
+function validateMobileDisposition(
+  input: Parameters<typeof validateWorklogDispositionCommand>[0],
+) {
+  try {
+    return validateWorklogDispositionCommand(input);
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error("Invalid Work Log outcome."),
+      { code: "BAD_REQUEST", status: 400 },
+    );
+  }
+}
+
+async function processMobileDisposition({
+  command,
+  mspClient,
+}: {
+  command: ReturnType<typeof buildMobileDispositionCommand>;
+  mspClient: MspCentralClient | null;
+}) {
+  const config = readDispatchConfig();
+  if (!mspClient || !config.databaseUrl) {
+    await writeMobileWorklogToMsp({
+      body: command.description,
+      command: {
+        baseVersion: "mobile",
+        clientMutationId: command.idempotencyKey,
+        durationMinutes: command.durationMinutes,
+        endedAt: command.endedAt,
+        installationId: "mobile",
+        startedAt: command.startedAt,
+        visibility: "external",
+      },
+      mspClient,
+      requestId: command.requestId,
+    });
+    return null;
+  }
+
+  const runtime = createWorklogDispositionRuntime({
+    graphClient: createGraphClient(config.microsoft),
+    mspClient,
+    outcomeStore: createPostgresWorklogOutcomeStore({
+      databaseUrl: config.databaseUrl,
+    }),
+  });
+  return createWorklogDispositionProcessor({
+    applyDisposition: runtime.applyDisposition,
+    repository: createPostgresWorklogDispositionRepository({
+      databaseUrl: config.databaseUrl,
+    }),
+    saveWorklog: runtime.saveWorklog,
+  }).process(command);
 }
 
 function getConfiguredMobileMspClient() {

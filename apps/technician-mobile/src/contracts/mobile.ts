@@ -13,6 +13,28 @@ export type SyncState = "synced" | "pending" | "failed" | "conflict";
 export type NoteVisibility = "internal" | "external";
 export type EvidenceKind = "photo" | "document";
 export type WorkLogType = "billable" | "non_billable" | "internal";
+export type WorklogDisposition =
+  | "complete"
+  | "return_to_queue"
+  | "book_forward"
+  | "transfer_escalate";
+
+export interface MobileForwardBooking {
+  bookingType: BookingType;
+  date: string;
+  end: string;
+  start: string;
+  technicianEmail: string;
+  technicianId: string;
+  technicianName: string;
+}
+
+export interface MobileWorklogTransfer {
+  reason: string;
+  targetEmail: string;
+  targetTechnicianId: string;
+  targetTechnicianName: string;
+}
 
 export interface DateRange {
   from: string;
@@ -171,7 +193,7 @@ export interface MutationReceipt {
   mode: "database" | "mock";
   resourceId: string;
   resourceVersion: string;
-  status: "applied" | "pending";
+  status: "applied" | "pending" | "recovery_required";
   recordedAt: string;
 }
 
@@ -187,8 +209,11 @@ export interface SaveWorklogCommand extends MutationEnvelope {
   startedAt: string;
   endedAt: string;
   durationMinutes: number;
+  disposition?: WorklogDisposition;
+  forwardBooking?: MobileForwardBooking;
   summary: string;
   timerSessionId: string | null;
+  transfer?: MobileWorklogTransfer;
   visibility: NoteVisibility;
   workType?: WorkLogType;
 }

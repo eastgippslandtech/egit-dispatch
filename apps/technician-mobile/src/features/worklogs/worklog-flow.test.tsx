@@ -25,6 +25,8 @@ describe("worklog service", () => {
       draftStore: drafts,
       job: firewallJob,
       note: "Replaced failed switch",
+      disposition: "return_to_queue",
+      idempotencyKey: "worklog-firewall-riley-1",
       simulateFailure: true,
       technicianId: "staff-riley",
       visibility: "external",
@@ -54,6 +56,8 @@ describe("worklog service", () => {
       durationMinutes: 35,
       job: firewallJob,
       note: "Added notes and confirmed service.",
+      disposition: "complete",
+      idempotencyKey: "worklog-firewall-riley-2",
       submit: submitted,
       technicianId: "staff-riley",
       visibility: "external",
@@ -64,6 +68,8 @@ describe("worklog service", () => {
       expect.objectContaining({
         billable: false,
         durationMinutes: 35,
+        disposition: "complete",
+        clientMutationId: "worklog-firewall-riley-2",
         jobId: "firewall-riley",
         summary: "Added notes and confirmed service.",
         visibility: "external",
@@ -71,6 +77,19 @@ describe("worklog service", () => {
       }),
     );
     expect(await drafts.get("staff-riley", "firewall-riley")).toBeNull();
+  });
+
+  it("rejects a scheduled mobile Work Log without an outcome", async () => {
+    await expect(
+      saveWorklogWithDraft({
+        draftStore: createWorklogDraftStore(),
+        idempotencyKey: "worklog-firewall-riley-3",
+        job: firewallJob,
+        note: "Checked the firewall.",
+        technicianId: "staff-riley",
+        visibility: "external",
+      }),
+    ).rejects.toThrow("Choose what happens to this scheduled job");
   });
 
   it("requires a meaningful note before completion", () => {

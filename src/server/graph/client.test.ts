@@ -118,7 +118,7 @@ describe("Graph client", () => {
     await expect(client.acquireToken()).rejects.not.toThrow("token-value");
   });
 
-  it("creates and updates Outlook events with application calendar write access", async () => {
+  it("creates, updates, and deletes Outlook events with application calendar write access", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -134,6 +134,10 @@ describe("Graph client", () => {
         ok: true,
         status: 200,
         json: async () => ({ id: "event-1", webLink: "https://outlook/event-1" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 204,
       });
 
     const client = createGraphClient({
@@ -150,6 +154,7 @@ describe("Graph client", () => {
       location: "Bairnsdale office",
       start: "2026-07-24T10:00:00",
       subject: "REQ-123 Printer offline",
+      transactionId: "worklog-outcome-123",
       userPrincipalName: "mattd@egit.com.au",
     });
     await client.updateEvent({
@@ -159,6 +164,10 @@ describe("Graph client", () => {
       location: "Bairnsdale office",
       start: "2026-07-24T11:00:00",
       subject: "REQ-123 Printer offline",
+      userPrincipalName: "mattd@egit.com.au",
+    });
+    await client.deleteEvent({
+      eventId: "event-1",
       userPrincipalName: "mattd@egit.com.au",
     });
 
@@ -179,11 +188,17 @@ describe("Graph client", () => {
       location: { displayName: "Bairnsdale office" },
       start: { dateTime: "2026-07-24T10:00:00", timeZone: "AUS Eastern Standard Time" },
       subject: "REQ-123 Printer offline",
+      transactionId: "worklog-outcome-123",
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       "https://graph.microsoft.com/v1.0/users/mattd%40egit.com.au/events/event-1",
       expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "https://graph.microsoft.com/v1.0/users/mattd%40egit.com.au/events/event-1",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 

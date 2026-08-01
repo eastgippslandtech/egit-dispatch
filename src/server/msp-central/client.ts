@@ -66,6 +66,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
     async assignRequest() {
       return undefined;
     },
+    async clearRequestSchedule() {
+      return undefined;
+    },
     async getRequest(requestId) {
       return (await this.listRequests()).find(
         (request) => request.id === requestId || request.requestNumber === requestId,
@@ -194,6 +197,23 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           body: new URLSearchParams({
             input_data: JSON.stringify({
               request: { technician: { name: input.technicianName } },
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+    },
+    async clearRequestSchedule(input) {
+      assertConfigured();
+      await requestJson(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request: {
+                scheduled_end_time: null,
+                scheduled_start_time: null,
+              },
             }),
           }),
           method: "PUT",

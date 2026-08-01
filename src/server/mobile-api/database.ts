@@ -3,6 +3,7 @@ import type postgres from "postgres";
 import { getSharedPostgresClient } from "@/server/database/client";
 
 import type { NoteVisibility } from "../../../apps/technician-mobile/src/contracts/mobile";
+import type { WorklogDisposition } from "../../../apps/technician-mobile/src/contracts/mobile";
 
 export type DatabaseSyncStatus =
   | "linked"
@@ -57,8 +58,10 @@ export interface SaveDatabaseWorklogInput {
   body: string;
   clientMutationId: string;
   durationMinutes?: number;
+  disposition?: WorklogDisposition;
   endedAt?: string;
   followUpNeeded?: boolean;
+  outcomeDetails?: Record<string, string | undefined>;
   installationId: string;
   job: DatabaseJobRow;
   occurredAt?: string;
@@ -170,9 +173,11 @@ export function createPostgresMobileDatabase({
             body: input.body,
             clientMutationId: input.clientMutationId,
             durationMinutes: input.durationMinutes,
+            disposition: input.disposition,
             endedAt: input.endedAt,
             followUpNeeded: input.followUpNeeded,
             installationId: input.installationId,
+            outcomeDetails: input.outcomeDetails,
             occurredAt: input.occurredAt,
             source: "technician-mobile",
             startedAt: input.startedAt,

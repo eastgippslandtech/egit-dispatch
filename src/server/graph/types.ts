@@ -37,6 +37,7 @@ export type MicrosoftGraphEventDraft = {
   location?: string;
   start: string;
   subject: string;
+  transactionId?: string;
   userPrincipalName: string;
 };
 

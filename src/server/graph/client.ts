@@ -163,6 +163,31 @@ export function createGraphClient({
     return (await response.json()) as MicrosoftGraphEvent;
   }
 
+  async function deleteEvent({
+    eventId,
+    userPrincipalName,
+  }: GetCalendarEventInput) {
+    const token = await acquireToken();
+    const response = await fetchImpl(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
+        userPrincipalName,
+      )}/events/${encodeURIComponent(eventId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        method: "DELETE",
+      },
+    );
+
+    if (!response.ok && response.status !== 404) {
+      throw new GraphApiError(
+        `Microsoft Graph calendar delete failed for ${userPrincipalName}.`,
+        response.status,
+      );
+    }
+  }
+
   async function createEvent(input: MicrosoftGraphEventDraft) {
     const token = await acquireToken();
     const response = await fetchImpl(
@@ -220,6 +245,7 @@ export function createGraphClient({
   return {
     acquireToken,
     createEvent,
+    deleteEvent,
     getEvent,
     listCalendarView,
     updateEvent,
@@ -265,5 +291,6 @@ function graphEventBody(input: MicrosoftGraphEventDraft, timezone: string) {
       timeZone: timezone,
     },
     subject: input.subject,
+    transactionId: input.transactionId,
   };
 }

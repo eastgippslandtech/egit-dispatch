@@ -162,6 +162,7 @@ export type MspCentralClient = {
     requestId: string;
     technicianName: string;
   }): Promise<void>;
+  clearRequestSchedule(input: { requestId: string }): Promise<void>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
   getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;

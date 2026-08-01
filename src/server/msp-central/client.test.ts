@@ -450,6 +450,10 @@ describe("MSP Central live client", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ response_status: { status: "success" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -494,6 +498,15 @@ describe("MSP Central live client", () => {
           value: String(new Date("2026-07-24T10:00:00+10:00").getTime()),
         },
         technician: { email_id: "mattd@egit.com.au" },
+      },
+    });
+
+    await client.clearRequestSchedule({ requestId: "123" });
+    const clearBody = fetchMock.mock.calls[2][1].body as URLSearchParams;
+    expect(JSON.parse(clearBody.get("input_data") ?? "{}")).toEqual({
+      request: {
+        scheduled_end_time: null,
+        scheduled_start_time: null,
       },
     });
   });

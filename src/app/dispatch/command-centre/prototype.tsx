@@ -33,6 +33,11 @@ import type {
   MspCentralRequestContext,
   MspCentralRequestUpdate,
 } from "@/server/msp-central/types";
+import type {
+  WorklogDisposition,
+  WorklogForwardBooking,
+  WorklogTransfer,
+} from "@/server/worklogs/disposition";
 
 import type {
   Appointment,
@@ -520,16 +525,22 @@ export function CommandCentrePrototype({
 
   async function saveWorkLog({
     billable,
-    complete,
+    booking,
+    disposition,
+    idempotencyKey,
     minutes,
     notes,
+    transfer,
     visibility,
     workType,
   }: {
     billable: boolean;
-    complete: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
     minutes: string;
     notes: string;
+    transfer?: WorklogTransfer;
     visibility: "external" | "internal";
     workType: string;
   }) {
@@ -558,6 +569,14 @@ export function CommandCentrePrototype({
     const liveWorklog =
       dashboard.dispatchDataSource === "msp-central" &&
       selectedWorklogRequest.sourceSystem === "msp-central";
+    const scheduled = Boolean(
+      worklogAppointment || selectedWorklogRequest.scheduledStart,
+    );
+
+    if (scheduled && !disposition) {
+      setToast("Choose what happens to this scheduled job after saving.");
+      return;
+    }
 
     if (liveWorklog) {
       const endedAt = worklogAppointment?.date
@@ -570,14 +589,31 @@ export function CommandCentrePrototype({
           ).toISOString();
 
       try {
-        await publishMspCentralWorklog({
-          complete,
+        const result = await publishMspCentralWorklog({
+          booking,
+          currentBooking: worklogAppointment
+            ? {
+                eventId: worklogAppointment.outlookEventId,
+                technicianId: worklogAppointment.technicianId,
+                userPrincipalName: worklogAppointment.calendarOwnerEmail,
+              }
+            : undefined,
           description: trimmedNotes,
+          disposition,
           durationMinutes,
           endedAt,
+          idempotencyKey,
           requestId,
+          scheduled,
           startedAt,
+          transfer,
         });
+        if (result.status === "recovery_required") {
+          setToast(
+            `Work Log saved, but the selected outcome still needs recovery: ${result.error ?? "retry the save"}`,
+          );
+          return;
+        }
       } catch (error) {
         setToast(
           error instanceof Error
@@ -607,22 +643,107 @@ export function CommandCentrePrototype({
           notes: request.notes
             ? `${request.notes}\n\n${trimmedNotes} (${metadata})`
             : `${trimmedNotes} (${metadata})`,
-          readyToBook: complete ? false : request.readyToBook,
-          status: complete ? ("Resolved" as const) : request.status,
+          readyToBook:
+            disposition === "complete" || disposition === "book_forward"
+              ? false
+              : disposition === "return_to_queue" ||
+                  disposition === "transfer_escalate"
+                ? true
+                : request.readyToBook,
+          scheduledEnd:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.end)
+              : disposition
+                ? undefined
+                : request.scheduledEnd,
+          scheduledStart:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.start)
+              : disposition
+                ? undefined
+                : request.scheduledStart,
+          status:
+            disposition === "complete"
+              ? ("Resolved" as const)
+              : disposition === "book_forward"
+                ? ("Scheduled" as const)
+                : disposition === "return_to_queue" ||
+                    disposition === "transfer_escalate"
+                  ? ("Open" as const)
+                  : request.status,
+          technicianId:
+            disposition === "book_forward" && booking
+              ? booking.technicianId
+              : disposition === "transfer_escalate" && transfer
+                ? transfer.targetTechnicianId
+                : request.technicianId,
           updateInfo: {
             at: updateAt,
             detail: trimmedNotes,
             source: "command-centre" as const,
-            summary: complete ? "Work Log completed" : "Work Log added",
+            summary:
+              disposition === "complete"
+                ? "Work Log completed"
+                : disposition === "book_forward"
+                  ? "Work Log saved and booked forward"
+                  : disposition === "return_to_queue"
+                    ? "Work Log saved and returned to queue"
+                    : disposition === "transfer_escalate"
+                      ? "Work Log saved and transferred"
+                      : "Work Log added",
           },
-          warnings: complete
+          warnings: disposition === "complete"
             ? request.warnings.filter((warning) => warning !== "Ready to book")
             : request.warnings,
         };
       });
 
+      let appointments = current.appointments;
+      if (disposition) {
+        appointments = appointments.filter(
+          (appointment) => appointment.requestId !== requestId,
+        );
+      }
+      if (disposition === "book_forward" && booking) {
+        const technician = current.technicians.find(
+          (candidate) => candidate.id === booking.technicianId,
+        );
+        const replacement = applyTravelToAppointment(
+          {
+            ...(worklogAppointment ?? {
+              customer: selectedWorklogRequest.customer,
+              id: `worklog-forward-${requestId}`,
+              requestId,
+              source: "linked" as const,
+              status: "confirmed" as const,
+              title: selectedWorklogRequest.subject,
+            }),
+            bookingType: booking.bookingType,
+            calendarOwnerEmail: booking.userPrincipalName,
+            customer: selectedWorklogRequest.customer,
+            date: booking.date,
+            end: booking.end,
+            readOnly: false,
+            siteAddress: selectedWorklogRequest.siteAddress,
+            siteArea: selectedWorklogRequest.siteArea,
+            siteTown: selectedWorklogRequest.siteTown,
+            start: booking.start,
+            technicianId: booking.technicianId,
+          },
+          buildAppointmentTravel({
+            request: applyBookingTypeToRequest(
+              selectedWorklogRequest,
+              booking.bookingType,
+            ),
+            technician,
+          }),
+        );
+        appointments = [...appointments, replacement];
+      }
+
       return {
         ...current,
+        appointments,
         requests,
       };
     });
@@ -631,12 +752,14 @@ export function CommandCentrePrototype({
     setWorkLogRequestId(undefined);
     setToast(
       liveWorklog
-        ? complete
+        ? disposition === "complete"
           ? "Work Log saved and ticket resolved in MSP Central."
-          : "Work Log saved in MSP Central."
-        : complete
+          : "Work Log and outcome saved in MSP Central."
+        : disposition === "complete"
           ? "Work Log saved and ticket resolved locally for test sync."
-          : "Work Log saved locally for test sync.",
+          : disposition
+            ? "Work Log and outcome saved locally for test sync."
+            : "Work Log saved locally for test sync.",
     );
   }
 
@@ -1822,6 +1945,7 @@ export function CommandCentrePrototype({
             request={dashboard.requests.find(
               (request) => request.id === workLogRequestId,
             )}
+            technicians={dashboard.technicians}
             technician={technicianLabel(
               dashboard.technicians,
               dashboard.requests.find((request) => request.id === workLogRequestId)
@@ -1928,14 +2052,9 @@ async function publishMspCentralRequestMerge(event: {
   }
 }
 
-async function publishMspCentralWorklog(event: {
-  complete: boolean;
-  description: string;
-  durationMinutes: number;
-  endedAt: string;
-  requestId: string;
-  startedAt: string;
-}) {
+async function publishMspCentralWorklog(
+  event: import("@/server/worklogs/disposition").WorklogDispositionCommand,
+) {
   const response = await fetch("/api/internal/msp-central/worklogs", {
     body: JSON.stringify(event),
     headers: {
@@ -1944,12 +2063,16 @@ async function publishMspCentralWorklog(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string }
+    | { error?: string; status?: "completed" | "recovery_required" }
     | null;
 
   if (!response.ok) {
     throw new Error(body?.error ?? "MSP Central Work Log save failed.");
   }
+  return {
+    error: body?.error,
+    status: body?.status ?? ("completed" as const),
+  };
 }
 
 async function loadMspCentralRequestContext(requestId: string) {
@@ -2528,20 +2651,25 @@ function WorkLogModal({
   onSave,
   request,
   technician,
+  technicians,
 }: {
   appointment?: Appointment;
   liveWriteback: boolean;
   onCancel: () => void;
   onSave: (input: {
     billable: boolean;
-    complete: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
     minutes: string;
     notes: string;
+    transfer?: WorklogTransfer;
     visibility: "external" | "internal";
     workType: string;
-  }) => void;
+  }) => Promise<void>;
   request?: DispatchRequest;
   technician: string;
+  technicians: Technician[];
 }) {
   const resolvedBookingType =
     appointment?.bookingType ??
@@ -2565,6 +2693,29 @@ function WorkLogModal({
   const [workType, setWorkType] = useState(
     request?.billable === false ? "non_billable" : "billable",
   );
+  const scheduled = Boolean(appointment || request?.scheduledStart);
+  const [disposition, setDisposition] = useState<WorklogDisposition>();
+  const [idempotencyKey] = useState(
+    () => `worklog-${request?.id ?? "request"}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const [forwardTechnicianId, setForwardTechnicianId] = useState(
+    appointment?.technicianId ?? request?.technicianId ?? technicians[0]?.id ?? "",
+  );
+  const [forwardDate, setForwardDate] = useState(
+    appointment?.date ?? todayDateKey(),
+  );
+  const [forwardStart, setForwardStart] = useState(appointment?.end ?? "09:00");
+  const [forwardBookingType, setForwardBookingType] =
+    useState<BookingType>(resolvedBookingType ?? "Remote");
+  const [forwardEnd, setForwardEnd] = useState(() =>
+    timeFromMinutes(
+      minutesFromTime(appointment?.end ?? "09:00") +
+        bookingTiming(60, resolvedBookingType ?? "Remote").totalDurationMinutes,
+    ),
+  );
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [requestContext, setRequestContext] =
     useState<MspCentralRequestContext>();
   const [contextStatus, setContextStatus] = useState<
@@ -2614,6 +2765,73 @@ function WorkLogModal({
       : "Not scheduled";
   const bookingType = resolvedBookingType ?? "Not set";
   const billable = workType === "billable";
+  const selectedForwardTechnician = technicians.find(
+    (candidate) => candidate.id === forwardTechnicianId,
+  );
+  const selectedTransferTechnician = technicians.find(
+    (candidate) => candidate.id === transferTargetId,
+  );
+  const outcomeComplete =
+    !scheduled ||
+    (disposition === "book_forward"
+      ? Boolean(
+          selectedForwardTechnician &&
+            forwardDate &&
+            forwardStart &&
+            forwardEnd &&
+            minutesFromTime(forwardEnd) > minutesFromTime(forwardStart),
+        )
+      : disposition === "transfer_escalate"
+        ? Boolean(selectedTransferTechnician && transferReason.trim())
+        : Boolean(disposition));
+
+  async function submitWorklog() {
+    if (!outcomeComplete || submitting) return;
+    setSubmitting(true);
+    try {
+      const booking: WorklogForwardBooking | undefined =
+        disposition === "book_forward" && selectedForwardTechnician
+          ? {
+              bookingType: forwardBookingType,
+              customer: request?.customer,
+              date: forwardDate,
+              end: forwardEnd,
+              location: request?.siteAddress || request?.site,
+              requestNumber: request?.requestNumber ?? "",
+              start: forwardStart,
+              subject: request?.subject ?? "",
+              technicianEmail: selectedForwardTechnician.mspCentralEmail,
+              technicianId: selectedForwardTechnician.id,
+              technicianName: selectedForwardTechnician.displayName,
+              userPrincipalName:
+                selectedForwardTechnician.outlookUserPrincipalName ??
+                selectedForwardTechnician.outlookEmail,
+            }
+          : undefined;
+      const transfer: WorklogTransfer | undefined =
+        disposition === "transfer_escalate" && selectedTransferTechnician
+          ? {
+              reason: transferReason,
+              targetEmail: selectedTransferTechnician.mspCentralEmail,
+              targetTechnicianId: selectedTransferTechnician.id,
+              targetTechnicianName: selectedTransferTechnician.displayName,
+            }
+          : undefined;
+      await onSave({
+        billable,
+        booking,
+        disposition,
+        idempotencyKey,
+        minutes,
+        notes,
+        transfer,
+        visibility,
+        workType,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
@@ -2813,6 +3031,147 @@ function WorkLogModal({
             </div>
           </fieldset>
 
+          {scheduled ? (
+            <fieldset className="rounded-md border border-cc-orange/25 bg-cc-orange/[0.04] p-3">
+              <legend className="px-1 text-sm font-semibold text-slate-100">
+                Outcome
+              </legend>
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                {(
+                  [
+                    ["complete", "Complete ticket"],
+                    ["return_to_queue", "Return to queue"],
+                    ["book_forward", "Book forward"],
+                    ["transfer_escalate", "Transfer / escalate"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <label
+                    className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 ${
+                      disposition === value
+                        ? "border-cc-orange/60 bg-cc-orange/10 text-white"
+                        : "border-white/10 bg-white/[0.03] text-slate-300"
+                    }`}
+                    key={value}
+                  >
+                    <input
+                      aria-label={label}
+                      checked={disposition === value}
+                      name="worklog-outcome"
+                      type="radio"
+                      value={value}
+                      onChange={() => setDisposition(value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ) : null}
+
+          {disposition === "book_forward" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-200">
+                Technician
+                <select
+                  aria-label="Forward technician"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardTechnicianId}
+                  onChange={(event) => setForwardTechnicianId(event.target.value)}
+                >
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Date
+                <input
+                  aria-label="Forward date"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  type="date"
+                  value={forwardDate}
+                  onChange={(event) => setForwardDate(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Start
+                <input
+                  aria-label="Forward start time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardStart}
+                  onChange={(event) => setForwardStart(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                End
+                <input
+                  aria-label="Forward end time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardEnd}
+                  onChange={(event) => setForwardEnd(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200 sm:col-span-2">
+                Booking type
+                <select
+                  aria-label="Forward booking type"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardBookingType}
+                  onChange={(event) => {
+                    const nextType = event.target.value as BookingType;
+                    setForwardBookingType(nextType);
+                    setForwardEnd(
+                      timeFromMinutes(
+                        minutesFromTime(forwardStart) +
+                          bookingTiming(60, nextType).totalDurationMinutes,
+                      ),
+                    );
+                  }}
+                >
+                  <option value="Remote">Remote</option>
+                  <option value="Onsite">Onsite</option>
+                  <option value="In house">In house</option>
+                </select>
+              </label>
+            </section>
+          ) : null}
+
+          {disposition === "transfer_escalate" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <label className="text-sm font-semibold text-slate-200">
+                Transfer target
+                <select
+                  aria-label="Transfer target"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferTargetId}
+                  onChange={(event) => setTransferTargetId(event.target.value)}
+                >
+                  <option value="">Select technician</option>
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Reason
+                <textarea
+                  aria-label="Transfer reason"
+                  className="mt-2 min-h-20 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferReason}
+                  onChange={(event) => setTransferReason(event.target.value)}
+                />
+              </label>
+            </section>
+          ) : null}
+
         </div>
 
         <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
@@ -2830,22 +3189,24 @@ function WorkLogModal({
             Cancel
           </button>
           <button
-            className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-4 py-2 text-sm font-semibold text-cc-orange"
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!outcomeComplete || submitting}
             type="button"
-            onClick={() =>
-              onSave({ billable, complete: false, minutes, notes, visibility, workType })
-            }
+            onClick={submitWorklog}
           >
-            Save Work Log
-          </button>
-          <button
-            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1"
-            type="button"
-            onClick={() =>
-              onSave({ billable, complete: true, minutes, notes, visibility, workType })
-            }
-          >
-            Save and complete ticket
+            {submitting
+              ? "Saving..."
+              : !scheduled
+                ? "Save Work Log"
+                : disposition === "complete"
+                  ? "Save Work Log and complete ticket"
+                  : disposition === "return_to_queue"
+                    ? "Save Work Log and return to queue"
+                    : disposition === "book_forward"
+                      ? "Save Work Log and book forward"
+                      : disposition === "transfer_escalate"
+                        ? "Save Work Log and transfer"
+                        : "Choose an outcome"}
           </button>
         </div>
         </section>

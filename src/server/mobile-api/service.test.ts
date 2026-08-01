@@ -420,6 +420,7 @@ describe("mobile API service", () => {
       command: {
         baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
         clientMutationId: "note-1",
+        disposition: "return_to_queue",
         durationMinutes: 30,
         endedAt: "2026-07-14T02:00:00.000Z",
         billable: true,
@@ -450,6 +451,27 @@ describe("mobile API service", () => {
       resourceId: "log-mobile-note-1",
       status: "pending",
     });
+  });
+
+  it("rejects a scheduled mobile Work Log without an outcome as bad input", async () => {
+    await expect(
+      saveMobileWorklog({
+        auth: rileyMobileAuth,
+        command: {
+          baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+          clientMutationId: "note-missing-outcome",
+          durationMinutes: 30,
+          endedAt: "2026-07-14T02:00:00.000Z",
+          installationId: "phone-1",
+          occurredAt: "2026-07-14T02:00:00.000Z",
+          startedAt: "2026-07-14T01:30:00.000Z",
+          summary: "Checked the service.",
+          visibility: "external",
+        },
+        database: createDatabase(),
+        jobId: "link-100900",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
   });
 
   it("records native save-and-complete as a Command Centre completion sync intent", async () => {

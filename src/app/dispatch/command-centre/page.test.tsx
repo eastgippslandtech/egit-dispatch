@@ -388,10 +388,8 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
   expect(within(dialog).queryByRole("checkbox", { name: "Billable" })).not.toBeInTheDocument();
   expect(within(dialog).getByLabelText("Internal")).toBeDisabled();
+  expect(within(dialog).queryByText("Outcome")).not.toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
-  expect(
-    within(dialog).getByRole("button", { name: "Save and complete ticket" }),
-  ).toBeInTheDocument();
 });
 
 test("keeps Work Log billing and visibility combinations valid", async () => {
@@ -503,8 +501,10 @@ test("loads the latest job description and customer responses into a live Work L
   expect(within(dialog).getByText("1h 15m")).toBeInTheDocument();
 });
 
-test("saves Work Log locally and save-and-complete marks the request resolved", async () => {
+test("requires an outcome for a scheduled Work Log and completes the request", async () => {
   render(await CommandCentrePage());
+
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
 
   fireEvent.click(
     within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
@@ -512,38 +512,45 @@ test("saves Work Log locally and save-and-complete marks the request resolved", 
     }),
   );
 
-  let dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
   fireEvent.change(within(dialog).getByLabelText("Work Log notes"), {
     target: { value: "Replaced failed switch and verified labels print." },
   });
   fireEvent.change(within(dialog).getByLabelText("Time spent"), {
     target: { value: "45" },
   });
-  fireEvent.change(within(dialog).getByLabelText("Work type"), {
-    target: { value: "non_billable" },
-  });
-  fireEvent.click(within(dialog).getByLabelText("Internal"));
-  fireEvent.click(within(dialog).getByRole("button", { name: "Save Work Log" }));
-
-  expect(screen.queryByRole("dialog", { name: "Work Log" })).not.toBeInTheDocument();
-  expect(screen.getByText("Work Log saved locally for test sync.")).toBeInTheDocument();
-
+  expect(within(dialog).getByRole("button", { name: "Choose an outcome" })).toBeDisabled();
+  fireEvent.click(within(dialog).getByLabelText("Complete ticket"));
   fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
-  );
-  dialog = screen.getByRole("dialog", { name: "Work Log" });
-  fireEvent.change(within(dialog).getByLabelText("Work Log notes"), {
-    target: { value: "Ticket completed after verification." },
-  });
-  fireEvent.click(
-    within(dialog).getByRole("button", { name: "Save and complete ticket" }),
+    within(dialog).getByRole("button", { name: "Save Work Log and complete ticket" }),
   );
 
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+});
+
+test("shows the required conditional fields for book forward and transfer", async () => {
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  fireEvent.click(within(dialog).getByLabelText("Book forward"));
+  expect(within(dialog).getByLabelText("Forward technician")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Forward date")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Forward start time")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Forward end time")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Forward booking type")).toBeInTheDocument();
+
+  fireEvent.click(within(dialog).getByLabelText("Transfer / escalate"));
+  expect(within(dialog).getByLabelText("Transfer target")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Transfer reason")).toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Forward date")).not.toBeInTheDocument();
 });
 
 test("retries server data while the MSP Central unavailable warning is visible", async () => {

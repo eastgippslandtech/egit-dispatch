@@ -12,6 +12,7 @@ export type DispatchConfig = {
   calendarDataSource: CalendarDataSource;
   dispatchDataSource: DispatchDataSource;
   mode: DispatchRuntimeMode;
+  trainingSamplesEnabled: boolean;
   timezone: string;
   appBaseUrl?: string;
   databaseUrl?: string;
@@ -20,6 +21,7 @@ export type DispatchConfig = {
     portal?: string;
     clientId?: string;
     clientSecret?: string;
+    accountsUrl?: string;
     refreshToken?: string;
     requestWebBaseUrl?: string;
   };
@@ -44,13 +46,17 @@ const requiredLiveKeys = [
 ] as const;
 
 export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConfig {
-  const mode = env.MOCK_INTEGRATIONS === "false" ? "live" : "mock";
+  const normalizedEnv = normalizeDispatchEnv(env);
+  const mode =
+    normalizedEnv.MOCK_INTEGRATIONS === "false" ? "live" : "mock";
   const calendarDataSource =
-    env.CALENDAR_DATA_SOURCE === "outlook" ? "outlook" : "mock";
-  const dispatchDataSource = readDispatchDataSource(env.DISPATCH_DATA_SOURCE);
+    normalizedEnv.CALENDAR_DATA_SOURCE === "outlook" ? "outlook" : "mock";
+  const dispatchDataSource = readDispatchDataSource(
+    normalizedEnv.DISPATCH_DATA_SOURCE,
+  );
 
   if (mode === "live" && dispatchDataSource === "msp-central") {
-    const missing = requiredLiveKeys.filter((key) => !env[key]);
+    const missing = requiredLiveKeys.filter((key) => !normalizedEnv[key]);
 
     if (missing.length > 0) {
       throw new Error(
@@ -63,24 +69,46 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
     calendarDataSource,
     dispatchDataSource,
     mode,
-    timezone: env.DEFAULT_TIMEZONE ?? "Australia/Melbourne",
-    appBaseUrl: env.APP_BASE_URL,
-    databaseUrl: env.DATABASE_URL,
+    trainingSamplesEnabled:
+      normalizedEnv.COMMAND_CENTRE_TRAINING_SAMPLES === "true",
+    timezone: normalizedEnv.DEFAULT_TIMEZONE ?? "Australia/Melbourne",
+    appBaseUrl: normalizedEnv.APP_BASE_URL,
+    databaseUrl: normalizedEnv.DATABASE_URL,
     mspCentral: {
-      baseUrl: env.MSP_CENTRAL_BASE_URL,
-      portal: env.MSP_CENTRAL_PORTAL,
-      clientId: env.MSP_CENTRAL_CLIENT_ID,
-      clientSecret: env.MSP_CENTRAL_CLIENT_SECRET,
-      refreshToken: env.MSP_CENTRAL_REFRESH_TOKEN,
-      requestWebBaseUrl: env.MSP_CENTRAL_REQUEST_WEB_BASE_URL,
+      baseUrl: normalizedEnv.MSP_CENTRAL_BASE_URL,
+      portal: normalizedEnv.MSP_CENTRAL_PORTAL,
+      clientId: normalizedEnv.MSP_CENTRAL_CLIENT_ID,
+      clientSecret: normalizedEnv.MSP_CENTRAL_CLIENT_SECRET,
+      accountsUrl: normalizedEnv.MSP_CENTRAL_ACCOUNTS_URL,
+      refreshToken: normalizedEnv.MSP_CENTRAL_REFRESH_TOKEN,
+      requestWebBaseUrl: normalizedEnv.MSP_CENTRAL_REQUEST_WEB_BASE_URL,
     },
     microsoft: {
-      tenantId: env.MICROSOFT_TENANT_ID,
-      clientId: env.MICROSOFT_CLIENT_ID,
-      clientSecret: env.MICROSOFT_CLIENT_SECRET,
-      timezone: env.GRAPH_CALENDAR_TIMEZONE ?? "AUS Eastern Standard Time",
+      tenantId: normalizedEnv.MICROSOFT_TENANT_ID,
+      clientId: normalizedEnv.MICROSOFT_CLIENT_ID,
+      clientSecret: normalizedEnv.MICROSOFT_CLIENT_SECRET,
+      timezone:
+        normalizedEnv.GRAPH_CALENDAR_TIMEZONE ??
+        "AUS Eastern Standard Time",
     },
   };
+}
+
+function normalizeDispatchEnv(env: DispatchEnv): DispatchEnv {
+  return Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [
+      key,
+      cleanEnvironmentValue(value),
+    ]),
+  );
+}
+
+function cleanEnvironmentValue(value?: string) {
+  const clean = value?.replace(
+    /^[\s\u200B-\u200D\u2060]+|[\s\u200B-\u200D\u2060]+$/gu,
+    "",
+  );
+  return clean || undefined;
 }
 
 function readDispatchDataSource(value?: string): DispatchDataSource {

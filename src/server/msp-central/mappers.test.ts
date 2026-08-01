@@ -6,6 +6,7 @@ import {
   mapMspCentralPriority,
   mapMspCentralRequest,
   mapMspCentralRequests,
+  mapMspCentralSentiment,
   mapMspCentralSlaState,
   mapMspCentralStatus,
   mapMspCentralTechnicians,
@@ -13,6 +14,7 @@ import {
 
 describe("MSP Central request mappers", () => {
   const now = new Date("2026-07-09T09:00:00+10:00");
+  const afterHours = new Date("2026-07-09T19:00:00+10:00");
 
   it("maps fixture-style requests into Command Centre requests", () => {
     const request = mapMspCentralRequest(
@@ -99,6 +101,90 @@ describe("MSP Central request mappers", () => {
     );
   });
 
+  it("maps ServiceDesk timestamp objects and ignores malformed dates", () => {
+    const dueTime = new Date("2026-07-10T12:00:00+10:00");
+    const structured = mapMspCentralRequest(
+      {
+        created_time: {
+          display_value: "Jul 9, 2026 9:00 AM",
+          value: String(new Date("2026-07-09T09:00:00+10:00").getTime()),
+        },
+        due_by_time: {
+          display_value: "Jul 10, 2026 12:00 PM",
+          value: String(dueTime.getTime()),
+        },
+        request_number: "REQ-MSP-TIME",
+        updated_time: {
+          value: String(new Date("2026-07-09T10:00:00+10:00").getTime()),
+        },
+      },
+      { now },
+    );
+    const malformed = mapMspCentralRequest(
+      {
+        created_time: { value: "not-a-date" },
+        due_by_time: { display_value: "Unknown" },
+        request_number: "REQ-MSP-BAD-TIME",
+        scheduled_start_time: {
+          value: "not-a-date",
+        },
+      },
+      { now },
+    );
+
+    expect(structured).toMatchObject({
+      ageHours: 0,
+      dueAt: dueTime.toISOString(),
+      updatedAt: new Date("2026-07-09T10:00:00+10:00").toISOString(),
+    });
+    expect(malformed).toMatchObject({
+      dueAt: new Date(0).toISOString(),
+      scheduledStart: undefined,
+    });
+  });
+
+  it("maps nested MSP customer details and cleans HTML descriptions", () => {
+    const request = mapMspCentralRequest(
+      {
+        customer: { name: "Client Company" },
+        description:
+          "<p>Printer is offline.</p><p>Please call reception &amp; confirm access.</p>",
+        id: "msp-detail-1",
+        requester: {
+          email_id: "requester@example.com",
+          name: "Requesting User",
+        },
+      },
+      { now },
+    );
+
+    expect(request).toMatchObject({
+      contact: "requester@example.com",
+      customer: "Client Company",
+      notes: "Printer is offline.\nPlease call reception & confirm access.",
+    });
+  });
+
+  it("does not auto-assign Advanced Works during office hours", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: { name: "Advanced Works" },
+        request_number: "REQ-AW-DAYTIME",
+        site: {
+          city: "Bairnsdale",
+          name: "Bairnsdale client site",
+        },
+        technician: null,
+      },
+      { now },
+    );
+
+    expect(request.technicianId).toBeUndefined();
+    expect(request.warnings).not.toContain(
+      "Auto-assigned by Advanced Works/Viridian IT site proximity.",
+    );
+  });
+
   it("maps priority, status, due, and scheduled classification", () => {
     expect(mapMspCentralPriority("urgent")).toBe("Critical");
     expect(mapMspCentralPriority("low")).toBe("Low");
@@ -114,6 +200,23 @@ describe("MSP Central request mappers", () => {
         now,
       ),
     ).toBe("due-soon");
+  });
+
+  it("maps supported Zia sentiment values and hides unknown sentiment", () => {
+    expect(mapMspCentralSentiment("Positive")).toBe("positive");
+    expect(mapMspCentralSentiment("Neutral")).toBe("neutral");
+    expect(mapMspCentralSentiment("Very negative")).toBe("negative");
+    expect(mapMspCentralSentiment("Not calculated")).toBeUndefined();
+
+    expect(
+      mapMspCentralRequest(
+        {
+          request_number: "REQ-SENTIMENT",
+          sentiment_analysis: { name: "Negative" },
+        },
+        { now },
+      ).sentiment,
+    ).toBe("negative");
   });
 
   it("prefers MSP technician ID and warns on display-name-only matches", () => {
@@ -138,7 +241,7 @@ describe("MSP Central request mappers", () => {
         request_number: "REQ-MSP-NAME",
         technician: { name: "Riley" },
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(displayNameOnly.technicianId).toBe("tech-riley");
@@ -164,6 +267,23 @@ describe("MSP Central request mappers", () => {
     ]);
   });
 
+  it("does not treat a missing onsite flag as remote", () => {
+    const unknown = mapMspCentralRequest({
+      description: "Technician required at the customer office.",
+      request_number: "REQ-ONSITE-UNKNOWN",
+      subject: "Printer offline",
+    });
+    const remote = mapMspCentralRequest({
+      description: "Please resolve remotely using Microsoft Teams.",
+      request_number: "REQ-REMOTE-INFERRED",
+      subject: "Mailbox support",
+    });
+
+    expect(unknown.onsite).toBeUndefined();
+    expect(unknown.bookingType).toBe("Onsite");
+    expect(remote.bookingType).toBe("Remote");
+  });
+
   it("auto-assigns Advanced Works and Viridian IT requests by site proximity", () => {
     const bairnsdaleRequest = mapMspCentralRequest(
       {
@@ -176,7 +296,7 @@ describe("MSP Central request mappers", () => {
         },
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
     const saleRequest = mapMspCentralRequest(
       {
@@ -189,7 +309,7 @@ describe("MSP Central request mappers", () => {
         },
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(bairnsdaleRequest.technicianId).toBe("tech-jervy");
@@ -218,7 +338,7 @@ describe("MSP Central request mappers", () => {
           name: "Jervy",
         },
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(request.technicianId).toBe("tech-jervy");
@@ -235,7 +355,7 @@ describe("MSP Central request mappers", () => {
         subject: "Printer offline at Lakes Entrance office",
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
     const descriptionLocation = mapMspCentralRequest(
       {
@@ -245,10 +365,35 @@ describe("MSP Central request mappers", () => {
         subject: "POS issue",
         technician: null,
       },
-      { now },
+      { now: afterHours },
     );
 
     expect(subjectLocation.technicianId).toBe("tech-jervy");
     expect(descriptionLocation.technicianId).toBe("tech-matt");
+  });
+
+  it("maps a known site town from request subject or description", () => {
+    const fromSubject = mapMspCentralRequest({
+      account: { name: "Coastal Retail" },
+      request_number: "REQ-SITE-SUBJECT",
+      subject: "Printer offline at Lakes Entrance office",
+    });
+    const fromDescription = mapMspCentralRequest({
+      account: { name: "Regional Client" },
+      description: "Please attend the Sale showroom to replace the router.",
+      request_number: "REQ-SITE-DESCRIPTION",
+      subject: "Router replacement",
+    });
+
+    expect(fromSubject).toMatchObject({
+      site: "Lakes Entrance",
+      siteName: "Lakes Entrance",
+      siteTown: "Lakes Entrance",
+    });
+    expect(fromDescription).toMatchObject({
+      site: "Sale",
+      siteName: "Sale",
+      siteTown: "Sale",
+    });
   });
 });

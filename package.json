@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "wallboard:hash": "node scripts/generate-wallboard-password-hash.mjs",
     "supabase": "supabase",
     "vercel": "vercel"
   },

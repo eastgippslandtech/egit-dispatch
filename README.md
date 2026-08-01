@@ -83,6 +83,28 @@ Zoho OAuth uses fixed callback URLs only. Test live OAuth on `https://command.eg
 
 Zoho OAuth access is for approved EGIT work accounts only. Do not add `eastgippsland.tech` addresses for Command Centre access unless they are specifically approved later.
 
+### Wallboard login
+
+`/wallboard` also supports one dedicated local account for the wallboard PC. It
+can view the wallboard and live presence feed only; it cannot open Dispatch or
+use write/admin endpoints. The session lasts up to 30 days.
+
+Generate the password hash:
+
+```bash
+pnpm wallboard:hash -- "your wallboard password"
+```
+
+Set these protected server-side values in Vercel:
+
+```bash
+WALLBOARD_LOCAL_USERNAME=wallboard
+WALLBOARD_LOCAL_PASSWORD_HASH=<generated scrypt hash>
+```
+
+Do not reuse an EGIT staff password or store the plain-text password in the
+repository.
+
 Future server-side service values:
 
 ```bash
@@ -256,6 +278,55 @@ pnpm vercel --prod --scope east-gippsland-it
 ```
 
 Production domain target: `command.egit.com.au`.
+
+## Yeastar Call Reporting
+
+Command Centre can ingest completed external calls from a Yeastar P-Series
+Software Edition PBX without changing the existing Yeastar recording
+integration.
+
+The implementation:
+
+- Verifies signed completed-call (`30012`) webhooks.
+- Reconciles recent CDRs every five minutes.
+- Uses CDR v2 per-leg connected talk time and excludes internal/unanswered
+  calls, ringing, and separately reported hold time.
+- Retrieves Yeastar AI transcripts and summaries only. It never downloads or
+  stores call audio.
+- Matches external numbers to Zoho CRM Contacts first, then Accounts, using a
+  separate service OAuth client.
+- Adds read-only call activities to Dispatch and weekly external talk time to
+  Wallboard staff cards.
+- Keeps transcripts behind approved staff authentication; the local wallboard
+  account receives totals only.
+
+Required server variables:
+
+```text
+YEASTAR_BASE_URL=https://eastgippslandit.ras.yeastar.com
+YEASTAR_CLIENT_ID=
+YEASTAR_CLIENT_SECRET=
+YEASTAR_WEBHOOK_SECRET=
+YEASTAR_API_USER_AGENT=EGIT-Command-Centre/1.0
+ZOHO_CRM_ACCOUNTS_URL=https://accounts.zoho.com.au
+ZOHO_CRM_CLIENT_ID=
+ZOHO_CRM_CLIENT_SECRET=
+ZOHO_CRM_REFRESH_TOKEN=
+ZOHO_CRM_API_DOMAIN=https://www.zohoapis.com.au
+INTEGRATION_CRON_SECRET=
+```
+
+`INTEGRATION_CRON_SECRET` may fall back to the existing `CRON_SECRET`.
+Configure the PBX webhook as:
+
+```text
+POST https://command.egit.com.au/api/integrations/yeastar/webhook
+```
+
+After deployment, authorize one request to
+`POST /api/internal/yeastar/scheduler` with the cron bearer secret. This stores
+the secret in Supabase Vault and installs the one-minute processor and
+five-minute reconciliation schedules.
 
 ## Current Scope
 

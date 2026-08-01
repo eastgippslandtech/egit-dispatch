@@ -155,7 +155,11 @@ export function createOfflineTechnicianRepository({
 
     async saveWorklog(command: SaveWorklogCommand): Promise<MutationReceipt> {
       if (remote?.saveWorklog) {
-        return remote.saveWorklog(command);
+        try {
+          return await remote.saveWorklog(command);
+        } catch {
+          return queueCommand("notes", command);
+        }
       }
       return queueCommand("notes", command);
     },

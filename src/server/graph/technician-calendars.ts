@@ -25,18 +25,23 @@ export async function buildOutlookCalendarDashboardData({
   );
 
   try {
-    const appointments = await readTechnicianCalendarAppointments({
+    const appointments = (
+      await readTechnicianCalendarAppointments({
       config,
       range,
       technicians: enabledTechnicians,
-    });
+      })
+    ).map((appointment) =>
+      config.mode === "live" ? { ...appointment, readOnly: false } : appointment,
+    );
 
     return {
       ...mockData,
       appointments,
       calendarDataSource: "outlook",
-      calendarReadOnly: true,
-      calendarStatusLabel: "Outlook Read Only",
+      calendarReadOnly: config.mode !== "live",
+      calendarStatusLabel:
+        config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
       healthItems: buildDispatchHealthItems({
         appointments,
         requests: mockData.requests,
@@ -52,8 +57,9 @@ export async function buildOutlookCalendarDashboardData({
       calendarDataSource: "outlook",
       calendarError:
         "Outlook calendar read failed. Mock mode is still available.",
-      calendarReadOnly: true,
-      calendarStatusLabel: "Outlook Read Only",
+      calendarReadOnly: config.mode !== "live",
+      calendarStatusLabel:
+        config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
       healthItems: buildDispatchHealthItems({
         appointments: [],
         requests: mockData.requests,

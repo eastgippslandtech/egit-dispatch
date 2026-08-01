@@ -2,6 +2,7 @@ export type Severity = "critical" | "warning" | "info" | "healthy";
 export type SlaState = "overdue" | "due-soon" | "normal";
 export type Priority = "Critical" | "High" | "Medium" | "Low";
 export type BookingType = "Remote" | "Onsite" | "In house";
+export type RequestSentiment = "positive" | "neutral" | "negative";
 export type RequestStatus =
   | "Open"
   | "Ready for Scheduling"
@@ -18,6 +19,7 @@ export type Technician = {
   id: string;
   displayName: string;
   zohoEmail?: string;
+  zohoPeopleEmployeeId?: string | null;
   sdpTechnicianName?: string;
   outlookEmail: string;
   outlookUserPrincipalName?: string;
@@ -54,6 +56,13 @@ export type DispatchRequest = {
   helpdeskUrl?: string;
   notes?: string;
   updatedAt?: string;
+  updatedByEmail?: string;
+  updateInfo?: {
+    at: string;
+    detail?: string;
+    source: "command-centre" | "msp-central" | "technician-app" | "test-sync";
+    summary: string;
+  };
   category?: string;
   subcategory?: string;
   item?: string;
@@ -69,6 +78,7 @@ export type DispatchRequest = {
   requester: string;
   contact: string;
   priority: Priority;
+  sentiment?: RequestSentiment;
   status: RequestStatus;
   bookingType?: BookingType;
   technicianId?: string;
@@ -92,6 +102,8 @@ export type ActiveDispatchTimer = {
 };
 
 export type Appointment = {
+  activityType?: "appointment" | "external_call";
+  callDirection?: "inbound" | "outbound" | "unknown";
   id: string;
   date?: string;
   requestId?: string;
@@ -114,14 +126,21 @@ export type Appointment = {
   start: string;
   end: string;
   bookingType?: BookingType;
+  noteTimeMinutes?: number;
+  workDurationMinutes?: number;
   status: "confirmed" | "tentative" | "busy" | "sdp-only";
-  source: "outlook" | "linked" | "sdp";
+  source: "outlook" | "linked" | "sdp" | "yeastar";
+  externalTalkSeconds?: number;
+  transcriptStatus?: import("@/server/yeastar/types").YeastarTranscriptStatus;
+  yeastarCallId?: string;
   syncIssue?: "double-booked" | "missing-calendar" | "time-mismatch" | "past-open";
   outlookEventId?: string;
   outlookWebLink?: string;
   outlookOrganizer?: string;
   outlookAttendees?: string[];
+  outlookCategories?: string[];
   outlookShowAs?: string;
+  outlookSensitivity?: string;
   outlookLinkedRequestNumber?: string;
   outlookIssue?: "unlinked" | "private" | "all-day" | "closed-day";
   calendarOwnerEmail?: string;

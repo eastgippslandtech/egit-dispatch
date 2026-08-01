@@ -1,57 +1,161 @@
+import type postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createPostgresPresenceOverrideRepository,
   createPresenceOverrideRepository,
   type PresenceOverrideRow,
+  type PresenceOverrideStore,
 } from "./repository";
 
+function memoryStore(seed: PresenceOverrideRow[] = []) {
+  const rows = [...seed];
+  const store: PresenceOverrideStore = {
+    async clearActive({ clearedAt, technicianEmail }) {
+      for (const row of rows) {
+        if (
+          row.technicianEmail.toLowerCase() === technicianEmail.toLowerCase() &&
+          !row.clearedAt
+        ) {
+          row.clearedAt = clearedAt;
+        }
+      }
+    },
+    async insert(row) {
+      const stored: PresenceOverrideRow = {
+        ...row,
+        clearedAt: null,
+        createdAt: row.startsAt,
+        id: `override-${rows.length + 1}`,
+      };
+      rows.push(stored);
+      return stored;
+    },
+    async listActive(now) {
+      return rows.filter(
+        (row) =>
+          !row.clearedAt &&
+          new Date(row.startsAt) <= now &&
+          new Date(row.endsAt) > now,
+      );
+    },
+  };
+
+  return { rows, store };
+}
+
 describe("presence override repository", () => {
-  it("starts a technician app lunch override for exactly 30 minutes", async () => {
-    const now = new Date("2026-07-30T02:15:00.000Z");
-    const inserted: PresenceOverrideRow = {
-      clearedAt: null,
-      createdAt: now.toISOString(),
-      createdByEmail: "tech@egit.com.au",
-      endsAt: "2026-07-30T02:45:00.000Z",
-      id: "presence-lunch",
-      reason: null,
-      source: "technician_app",
-      startsAt: now.toISOString(),
-      status: "lunch",
-      technicianEmail: "tech@egit.com.au",
-    };
-    const store = {
-      clearActive: vi.fn().mockResolvedValue(undefined),
-      insert: vi.fn().mockResolvedValue(inserted),
-      listActive: vi.fn(),
-    };
+  it("does not run schema DDL during an ordinary presence read", async () => {
+    const sql = Object.assign(vi.fn(async () => []), {
+      unsafe: vi.fn(async () => []),
+    });
+    const repository = createPostgresPresenceOverrideRepository({
+      databaseUrl: "postgresql://example",
+      sql: sql as unknown as postgres.Sql,
+    });
 
-    const override = await createPresenceOverrideRepository(store).startLunch({
-      createdByEmail: " Tech@EGIT.com.au ",
+    await repository.listActive(new Date("2026-07-26T02:15:00.000Z"));
+
+    expect(sql.unsafe).not.toHaveBeenCalled();
+  });
+
+  it("starts Lunch immediately with an exact 30-minute expiry", async () => {
+    const { store } = memoryStore();
+    const repository = createPresenceOverrideRepository(store);
+
+    const lunch = await repository.startLunch({
+      createdByEmail: "jervy@egit.com.au",
+      now: new Date("2026-07-26T02:00:00.000Z"),
+      source: "technician_app",
+      technicianEmail: "jervy@egit.com.au",
+    });
+
+    expect(lunch).toMatchObject({
+      endsAt: "2026-07-26T02:30:00.000Z",
+      startsAt: "2026-07-26T02:00:00.000Z",
+      status: "lunch",
+      technicianEmail: "jervy@egit.com.au",
+    });
+  });
+
+  it("rejects Leave without a future end time", async () => {
+    const { store } = memoryStore();
+    const repository = createPresenceOverrideRepository(store);
+
+    await expect(
+      repository.setLeave({
+        createdByEmail: "simeon@egit.com.au",
+        endsAt: "2026-07-26T02:00:00.000Z",
+        now: new Date("2026-07-26T02:00:00.000Z"),
+        reason: "Annual leave",
+        source: "dispatch",
+        technicianEmail: "jervy@egit.com.au",
+      }),
+    ).rejects.toThrow("Leave must end after it starts.");
+  });
+
+  it("normalises identity and stores a safe Leave reason", async () => {
+    const { store } = memoryStore();
+    const repository = createPresenceOverrideRepository(store);
+
+    const leave = await repository.setLeave({
+      createdByEmail: "SIMEON@EGIT.COM.AU",
+      endsAt: "2026-07-26T07:30:00.000Z",
+      now: new Date("2026-07-26T02:00:00.000Z"),
+      reason: "  Sick  ",
+      source: "dispatch",
+      technicianEmail: " JERVY@EGIT.COM.AU ",
+    });
+
+    expect(leave).toMatchObject({
+      createdByEmail: "simeon@egit.com.au",
+      reason: "Sick",
+      status: "leave",
+      technicianEmail: "jervy@egit.com.au",
+    });
+  });
+
+  it("lists only active overrides and clears the technician's current state", async () => {
+    const now = new Date("2026-07-26T02:15:00.000Z");
+    const { rows, store } = memoryStore([
+      {
+        clearedAt: null,
+        createdAt: "2026-07-26T02:00:00.000Z",
+        createdByEmail: "jervy@egit.com.au",
+        endsAt: "2026-07-26T02:30:00.000Z",
+        id: "active",
+        reason: null,
+        source: "technician_app",
+        startsAt: "2026-07-26T02:00:00.000Z",
+        status: "lunch",
+        technicianEmail: "jervy@egit.com.au",
+      },
+      {
+        clearedAt: null,
+        createdAt: "2026-07-26T01:00:00.000Z",
+        createdByEmail: "jervy@egit.com.au",
+        endsAt: "2026-07-26T01:30:00.000Z",
+        id: "expired",
+        reason: null,
+        source: "technician_app",
+        startsAt: "2026-07-26T01:00:00.000Z",
+        status: "lunch",
+        technicianEmail: "jervy@egit.com.au",
+      },
+    ]);
+    const repository = createPresenceOverrideRepository(store);
+
+    await expect(repository.listActive(now)).resolves.toEqual([
+      expect.objectContaining({ id: "active" }),
+    ]);
+    await repository.clear({
       now,
-      source: "technician_app",
-      technicianEmail: " Tech@EGIT.com.au ",
+      technicianEmail: "jervy@egit.com.au",
     });
 
-    expect(store.clearActive).toHaveBeenCalledWith({
-      clearedAt: now.toISOString(),
-      technicianEmail: "tech@egit.com.au",
-    });
-    expect(store.insert).toHaveBeenCalledWith({
-      createdByEmail: "tech@egit.com.au",
-      endsAt: "2026-07-30T02:45:00.000Z",
-      reason: null,
-      source: "technician_app",
-      startsAt: now.toISOString(),
-      status: "lunch",
-      technicianEmail: "tech@egit.com.au",
-    });
-    expect(override).toMatchObject({
-      endsAt: "2026-07-30T02:45:00.000Z",
-      source: "technician_app",
-      startsAt: now.toISOString(),
-      status: "lunch",
-      technicianEmail: "tech@egit.com.au",
-    });
+    expect(rows.find((row) => row.id === "active")?.clearedAt).toBe(
+      "2026-07-26T02:15:00.000Z",
+    );
+    await expect(repository.listActive(now)).resolves.toEqual([]);
   });
 });

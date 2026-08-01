@@ -5,7 +5,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import MobilePage from "./page";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "riley@egit.com.au",
     name: "Riley",
   });
@@ -112,6 +114,15 @@ test("/mobile redirects unauthenticated users to Zoho sign-in", async () => {
   );
 });
 
+test("/mobile redirects wallboard-only sessions to the wallboard", async () => {
+  getCommandCentreAccessMock.mockResolvedValue({
+    name: "Command Centre Wallboard",
+    status: "wallboard-only",
+  });
+
+  await expect(MobilePage()).rejects.toThrow("NEXT_REDIRECT:/wallboard");
+});
+
 test("/mobile blocks Zoho users outside the Command Centre allowlist", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "not-approved",
@@ -192,6 +203,7 @@ test("job detail renders on a narrow mobile viewport", async () => {
 test("does not show a future job detail when today has no jobs", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });
@@ -301,6 +313,7 @@ test("denied location permission keeps job detail usable and shows Maps fallback
 test("ETA controls are hidden for jobs without a site address", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });

@@ -1,4 +1,5 @@
-import { ShieldAlert } from "lucide-react";
+import { Monitor, ShieldAlert } from "lucide-react";
+import Link from "next/link";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 
@@ -31,6 +32,13 @@ export function CommandCentreSignIn() {
             Sign in with Zoho
           </button>
         </form>
+        <Link
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-md border border-cc-border-strong bg-cc-surface-2 px-4 py-2.5 text-sm font-semibold text-cc-text transition hover:border-cc-orange/60 hover:bg-cc-surface-3 active:brightness-95"
+          href="/auth/wallboard-sign-in"
+        >
+          <Monitor className="h-4 w-4" aria-hidden="true" />
+          Wallboard login
+        </Link>
       </section>
     </main>
   );

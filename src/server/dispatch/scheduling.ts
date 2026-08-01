@@ -1,4 +1,10 @@
-import type { Appointment, DispatchRequest, Technician } from "./types";
+import { bookingTiming, bookingTypeForRequest } from "./booking";
+import type {
+  Appointment,
+  BookingType,
+  DispatchRequest,
+  Technician,
+} from "./types";
 import {
   applyTravelToAppointment,
   detectTravelScheduleWarnings,
@@ -6,12 +12,13 @@ import {
 } from "./travel";
 
 export const WORKDAY_START_MINUTES = 9 * 60;
-export const WORKDAY_END_MINUTES = 17 * 60 + 30;
+export const WORKDAY_END_MINUTES = 17 * 60;
 export const TIMELINE_MINUTES = WORKDAY_END_MINUTES - WORKDAY_START_MINUTES;
 export const TIMELINE_PIXELS_PER_MINUTE = 2;
 export const TIMELINE_TRACK_WIDTH_PX =
   TIMELINE_MINUTES * TIMELINE_PIXELS_PER_MINUTE;
 export const SNAP_MINUTES = 15;
+export const TIMELINE_END_LABEL_MINIMUM_GAP_PX = 76;
 
 export type ScheduleWarningCode =
   | "missing-technician-mapping"
@@ -176,6 +183,27 @@ export function buildTimelineMarkers({
   return markers;
 }
 
+export function shouldShowTimelineHourLabel(
+  time: string,
+  trackWidth: number,
+  minimumEndGapPx = TIMELINE_END_LABEL_MINIMUM_GAP_PX,
+) {
+  if (minutesFromTime(time) >= WORKDAY_END_MINUTES) {
+    return true;
+  }
+
+  if (time !== "17:00") {
+    return true;
+  }
+
+  const minutesToTimelineEnd =
+    WORKDAY_END_MINUTES - minutesFromTime(time);
+  const availableEndGap =
+    (Math.max(0, trackWidth) * minutesToTimelineEnd) / TIMELINE_MINUTES;
+
+  return availableEndGap >= minimumEndGapPx;
+}
+
 function formatTimelineMarkerLabel(totalMinutes: number) {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -273,7 +301,7 @@ export function detectScheduleWarnings({
   if (startMinutes < WORKDAY_START_MINUTES || endMinutes > WORKDAY_END_MINUTES) {
     warnings.push({
       code: "out-of-hours",
-      message: "This booking sits outside 9:00 AM to 5:30 PM.",
+      message: "This booking sits outside 9:00 AM to 5:00 PM.",
     });
   }
 
@@ -330,6 +358,7 @@ export function detectScheduleWarnings({
 export function scheduleRequest({
   appointmentId,
   appointments,
+  bookingType,
   durationMinutes,
   request,
   start,
@@ -339,6 +368,7 @@ export function scheduleRequest({
 }: {
   appointmentId: string;
   appointments: Appointment[];
+  bookingType?: BookingType;
   date?: string;
   durationMinutes: number;
   request: DispatchRequest;
@@ -346,7 +376,9 @@ export function scheduleRequest({
   technicianId: string;
   travel?: TravelEstimate;
 }) {
-  const slot = buildScheduleSlot(start, durationMinutes);
+  const resolvedBookingType = bookingType ?? bookingTypeForRequest(request);
+  const timing = bookingTiming(durationMinutes, resolvedBookingType);
+  const slot = buildScheduleSlot(start, timing.totalDurationMinutes);
   const appointment: Appointment = {
     id: appointmentId,
     date,
@@ -359,7 +391,9 @@ export function scheduleRequest({
     siteTown: request.siteTown,
     start: slot.start,
     end: slot.end,
-    bookingType: request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite"),
+    bookingType: resolvedBookingType,
+    noteTimeMinutes: timing.noteTimeMinutes,
+    workDurationMinutes: timing.workDurationMinutes,
     status: "tentative",
     source: "linked",
   };
@@ -370,19 +404,25 @@ export function scheduleRequest({
 export function moveAppointment({
   appointmentId,
   appointments,
+  bookingType,
   durationMinutes,
   start,
   technicianId,
   date,
+  noteTimeMinutes,
   travel,
+  workDurationMinutes,
 }: {
   appointmentId: string;
   appointments: Appointment[];
+  bookingType?: BookingType;
   date?: string;
+  noteTimeMinutes?: number;
   durationMinutes: number;
   start: string;
   technicianId: string;
   travel?: TravelEstimate;
+  workDurationMinutes?: number;
 }) {
   const slot = buildScheduleSlot(start, durationMinutes);
 
@@ -391,8 +431,13 @@ export function moveAppointment({
       ? applyTravelToAppointment(
           {
             ...appointment,
+            bookingType: bookingType ?? appointment.bookingType,
             date: date ?? appointment.date,
+            noteTimeMinutes:
+              noteTimeMinutes ?? appointment.noteTimeMinutes,
             technicianId,
+            workDurationMinutes:
+              workDurationMinutes ?? appointment.workDurationMinutes,
             start: slot.start,
             end: slot.end,
             syncIssue:

@@ -1,9 +1,12 @@
-import postgres from "postgres";
+import type postgres from "postgres";
+
+import { getSharedPostgresClient } from "@/server/database/client";
 
 import type {
   ActiveTimer,
   NoteVisibility,
   StoppedTimer,
+  WorklogDisposition,
 } from "../../../apps/technician-mobile/src/contracts/mobile";
 
 export type DatabaseSyncStatus =
@@ -59,8 +62,10 @@ export interface SaveDatabaseWorklogInput {
   body: string;
   clientMutationId: string;
   durationMinutes?: number;
+  disposition?: WorklogDisposition;
   endedAt?: string;
   followUpNeeded?: boolean;
+  outcomeDetails?: Record<string, string | undefined>;
   installationId: string;
   job: DatabaseJobRow;
   occurredAt?: string;
@@ -101,7 +106,6 @@ export interface MobileDatabase {
   saveWorklog(input: SaveDatabaseWorklogInput): Promise<SaveDatabaseWorklogResult>;
 }
 
-let sqlSingleton: postgres.Sql | undefined;
 let databaseSingleton: MobileDatabase | undefined;
 
 export function hasMobileDatabase(env: Record<string, string | undefined> = process.env) {
@@ -183,9 +187,11 @@ export function createPostgresMobileDatabase({
             body: input.body,
             clientMutationId: input.clientMutationId,
             durationMinutes: input.durationMinutes,
+            disposition: input.disposition,
             endedAt: input.endedAt,
             followUpNeeded: input.followUpNeeded,
             installationId: input.installationId,
+            outcomeDetails: input.outcomeDetails,
             occurredAt: input.occurredAt,
             source: "technician-mobile",
             startedAt: input.startedAt,
@@ -276,13 +282,7 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for Command Centre database access.");
   }
 
-  sqlSingleton ??= postgres(databaseUrl, {
-    max: 5,
-    prepare: false,
-    ssl: "require",
-  });
-
-  return sqlSingleton;
+  return getSharedPostgresClient(databaseUrl);
 }
 
 function selectJobRows(

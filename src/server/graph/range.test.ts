@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildGraphDayRange, buildGraphWorkWeekRange } from "./range";
+import {
+  buildGraphDayRange,
+  buildGraphPlanningRange,
+  buildGraphWorkWeekRange,
+} from "./range";
 
 describe("Graph calendar range helpers", () => {
   it("builds a day view range for calendarView", () => {
@@ -14,6 +18,13 @@ describe("Graph calendar range helpers", () => {
     expect(buildGraphWorkWeekRange("2026-07-08")).toEqual({
       endDateTime: "2026-07-11T00:00:00",
       startDateTime: "2026-07-06T00:00:00",
+    });
+  });
+
+  it("includes the upcoming work week when today is a weekend", () => {
+    expect(buildGraphPlanningRange("2026-08-01")).toEqual({
+      endDateTime: "2026-08-08T00:00:00",
+      startDateTime: "2026-07-27T00:00:00",
     });
   });
 });

@@ -208,6 +208,12 @@ describe("dispatch test sync overlays", () => {
       notes:
         "Work Log (45 min, billable, Remote, Internal): Reset remote print service and confirmed test label.",
       status: "Resolved",
+      updateInfo: {
+        at: "2026-07-08T01:00:00.000Z",
+        detail: "Reset remote print service and confirmed test label.",
+        source: "test-sync",
+        summary: "Work Log added",
+      },
     });
     expect(dashboard.requests[0].warnings).toContain("Work Log added");
   });

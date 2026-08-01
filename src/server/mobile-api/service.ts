@@ -22,6 +22,7 @@ import type {
 
 import type { MobileAuthContext, MobileWorklogCommand } from "./contracts";
 import { mockIsoTime } from "@/server/dispatch/date-scope";
+import { readDispatchConfig } from "@/server/dispatch/env";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import {
   applyDispatchTestSyncEvents,
@@ -42,6 +43,22 @@ import {
   type DatabaseStaffRow,
   type MobileDatabase,
 } from "./database";
+import {
+  getConfiguredNotificationRepository,
+  type PushRegistrationRepository,
+} from "@/server/notifications/repository";
+import {
+  getConfiguredMobileOutlookCalendar,
+  type MobileOutlookCalendar,
+} from "./outlook";
+import { createMspCentralClient } from "@/server/msp-central/client";
+import type { MspCentralClient } from "@/server/msp-central/types";
+import { createGraphClient } from "@/server/graph/client";
+import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
+import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
+import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
+import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 
 type ResolvedTimerJob = {
   databaseJob?: DatabaseJobRow;
@@ -75,11 +92,13 @@ export async function listMobileJobs({
   auth,
   database = getConfiguredMobileDatabase(),
   from,
+  outlookCalendar = getConfiguredMobileOutlookCalendar(),
   to,
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   from: string;
+  outlookCalendar?: MobileOutlookCalendar | null;
   to: string;
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
@@ -90,11 +109,42 @@ export async function listMobileJobs({
       to,
     });
     const testJobs = await listTestSyncedMobileJobs({ auth, from, to });
+    const outlookJobs = await listOutlookMobileJobs({
+      from,
+      outlookCalendar,
+      staff,
+      to,
+    });
+    const linkedOutlookEventIds = new Set(
+      [...jobs.map(mapDatabaseJob), ...testJobs]
+        .map((job) => job.outlookEventId)
+        .filter((eventId): eventId is string => Boolean(eventId)),
+    );
 
     return {
-      jobs: [...jobs.map(mapDatabaseJob), ...testJobs].sort((left, right) =>
-        left.startAt.localeCompare(right.startAt),
-      ),
+      jobs: [
+        ...jobs.map(mapDatabaseJob),
+        ...testJobs,
+        ...outlookJobs.filter(
+          (job) =>
+            !job.outlookEventId ||
+            !linkedOutlookEventIds.has(job.outlookEventId),
+        ),
+      ].sort((left, right) => left.startAt.localeCompare(right.startAt)),
+    };
+  }
+
+  if (outlookCalendar) {
+    const staff = fixtureStaffAsDatabaseRow(auth);
+    return {
+      jobs: (
+        await listOutlookMobileJobs({
+          from,
+          outlookCalendar,
+          staff,
+          to,
+        })
+      ).sort((left, right) => left.startAt.localeCompare(right.startAt)),
     };
   }
 
@@ -115,10 +165,12 @@ export async function getMobileJob({
   auth,
   database = getConfiguredMobileDatabase(),
   jobId,
+  outlookCalendar = getConfiguredMobileOutlookCalendar(),
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   jobId: string;
+  outlookCalendar?: MobileOutlookCalendar | null;
 }): Promise<{ job: MobileJob }> {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -128,6 +180,14 @@ export async function getMobileJob({
       if (testJob) {
         return { job: testJob };
       }
+      const outlookJob = await findOutlookMobileJob({
+        jobId,
+        outlookCalendar,
+        staff,
+      });
+      if (outlookJob) {
+        return { job: outlookJob };
+      }
 
       throw Object.assign(new Error("Mobile job was not found."), {
         code: "NOT_FOUND",
@@ -135,6 +195,17 @@ export async function getMobileJob({
       });
     }
     return { job: mapDatabaseJob(job) };
+  }
+
+  if (outlookCalendar && jobId.startsWith("outlook-")) {
+    const outlookJob = await findOutlookMobileJob({
+      jobId,
+      outlookCalendar,
+      staff: fixtureStaffAsDatabaseRow(auth),
+    });
+    if (outlookJob) {
+      return { job: outlookJob };
+    }
   }
 
   const job = findOwnedJob(auth, jobId);
@@ -146,11 +217,13 @@ export async function saveMobileWorklog({
   command,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
 }: {
   auth: MobileAuthContext;
   command: MobileWorklogCommand;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
 }) {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -180,14 +253,22 @@ export async function saveMobileWorklog({
       });
     }
 
+    const dispositionCommand = buildMobileDispositionCommand({ body, command, job });
+    const dispositionResult = await processMobileDisposition({
+      command: dispositionCommand,
+      mspClient,
+    });
+
     const saved = await database.saveWorklog({
       billable: command.billable,
       body,
       clientMutationId: command.clientMutationId,
       durationMinutes: command.durationMinutes,
+      disposition: command.disposition,
       endedAt: command.endedAt,
       installationId: command.installationId,
       job,
+      outcomeDetails: command.forwardBooking ?? command.transfer,
       occurredAt: command.occurredAt,
       startedAt: command.startedAt,
       timerSessionId: command.timerSessionId,
@@ -201,7 +282,10 @@ export async function saveMobileWorklog({
         mode: "database",
         resourceId: saved.resourceId,
         resourceVersion: saved.resourceVersion,
-        status: "pending",
+        status:
+          dispositionResult?.status === "recovery_required"
+            ? "recovery_required"
+            : "pending",
         recordedAt: saved.recordedAt,
       } satisfies MutationReceipt,
     };
@@ -222,6 +306,27 @@ export async function saveMobileWorklog({
       status: 400,
     });
   }
+  validateMobileDisposition({
+    booking: command.forwardBooking
+      ? {
+          ...command.forwardBooking,
+          customer: job.customerName ?? undefined,
+          location: job.siteAddress ?? job.siteName ?? undefined,
+          requestNumber: job.requestNumber ?? job.id,
+          subject: job.title,
+          userPrincipalName: command.forwardBooking.technicianEmail,
+        }
+      : undefined,
+    description: body,
+    disposition: command.disposition,
+    durationMinutes: command.durationMinutes,
+    endedAt: command.endedAt ?? command.occurredAt,
+    idempotencyKey: command.clientMutationId,
+    requestId: job.requestNumber ?? job.id,
+    scheduled: true,
+    startedAt: command.startedAt ?? command.occurredAt,
+    transfer: command.transfer,
+  });
 
   return {
     receipt: {
@@ -366,11 +471,13 @@ export async function completeMobileJob({
   command,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
 }: {
   auth: MobileAuthContext;
   command: MobileWorklogCommand;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
 }) {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
@@ -395,6 +502,19 @@ export async function completeMobileJob({
       throw Object.assign(new Error("Completion worklog body is required."), {
         code: "BAD_REQUEST",
         status: 400,
+      });
+    }
+
+    await writeMobileWorklogToMsp({
+      body,
+      command,
+      mspClient,
+      requestId: job.sdpRequestId,
+    });
+    if (mspClient?.updateRequestStatus) {
+      await mspClient.updateRequestStatus({
+        requestId: job.sdpRequestId,
+        status: command.followUpNeeded ? "Needs Follow-up" : "Resolved",
       });
     }
 
@@ -457,14 +577,28 @@ export async function completeMobileJob({
 
 export async function registerMobilePushToken({
   appVersion,
+  auth,
   installationId,
   platform,
+  repository = getConfiguredNotificationRepository(),
+  pushToken,
 }: {
   appVersion: string;
+  auth: MobileAuthContext;
   installationId: string;
   platform: string;
+  repository?: PushRegistrationRepository | null;
   pushToken: string;
 }) {
+  if (repository) {
+    await repository.registerDevice({
+      appVersion,
+      installationId,
+      platform,
+      pushToken,
+      staffEmail: auth.email,
+    });
+  }
   return {
     device: {
       appVersion,
@@ -486,6 +620,172 @@ function findOwnedJob(auth: MobileAuthContext, jobId: string): MobileJob {
   return job;
 }
 
+function buildMobileDispositionCommand({
+  body,
+  command,
+  job,
+}: {
+  body: string;
+  command: MobileWorklogCommand;
+  job: DatabaseJobRow;
+}) {
+  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
+  const startedAt =
+    command.startedAt ??
+    new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+  const summaries = payloadSummaries(job);
+  return validateMobileDisposition({
+    booking: command.forwardBooking
+      ? {
+          ...command.forwardBooking,
+          customer: pickString(summaries, ["customerName", "customer"]) ?? undefined,
+          location:
+            pickString(summaries, ["siteAddress", "address", "siteName", "site"]) ??
+            undefined,
+          requestNumber: job.sdpRequestNumber,
+          subject:
+            pickString(summaries, ["subject", "title"]) ??
+            `Request ${job.sdpRequestNumber}`,
+          userPrincipalName: command.forwardBooking.technicianEmail,
+        }
+      : undefined,
+    currentBooking: {
+      eventId: job.outlookEventId ?? undefined,
+      userPrincipalName: job.outlookCalendarEmail ?? undefined,
+    },
+    description: body,
+    disposition: command.disposition,
+    durationMinutes,
+    endedAt,
+    idempotencyKey: command.clientMutationId,
+    requestId: job.sdpRequestId,
+    scheduled: Boolean(job.scheduledStart && job.scheduledEnd),
+    startedAt,
+    transfer: command.transfer,
+  });
+}
+
+function validateMobileDisposition(
+  input: Parameters<typeof validateWorklogDispositionCommand>[0],
+) {
+  try {
+    return validateWorklogDispositionCommand(input);
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error("Invalid Work Log outcome."),
+      { code: "BAD_REQUEST", status: 400 },
+    );
+  }
+}
+
+async function processMobileDisposition({
+  command,
+  mspClient,
+}: {
+  command: ReturnType<typeof buildMobileDispositionCommand>;
+  mspClient: MspCentralClient | null;
+}) {
+  const config = readDispatchConfig();
+  if (!mspClient || !config.databaseUrl) {
+    await writeMobileWorklogToMsp({
+      body: command.description,
+      command: {
+        baseVersion: "mobile",
+        clientMutationId: command.idempotencyKey,
+        durationMinutes: command.durationMinutes,
+        endedAt: command.endedAt,
+        installationId: "mobile",
+        startedAt: command.startedAt,
+        visibility: "external",
+      },
+      mspClient,
+      requestId: command.requestId,
+    });
+    return null;
+  }
+
+  const runtime = createWorklogDispositionRuntime({
+    graphClient: createGraphClient(config.microsoft),
+    mspClient,
+    outcomeStore: createPostgresWorklogOutcomeStore({
+      databaseUrl: config.databaseUrl,
+    }),
+  });
+  return createWorklogDispositionProcessor({
+    applyDisposition: runtime.applyDisposition,
+    repository: createPostgresWorklogDispositionRepository({
+      databaseUrl: config.databaseUrl,
+    }),
+    saveWorklog: runtime.saveWorklog,
+  }).process(command);
+}
+
+function getConfiguredMobileMspClient() {
+  const config = readDispatchConfig();
+  return config.dispatchDataSource === "msp-central"
+    ? createMspCentralClient(config)
+    : null;
+}
+
+async function writeMobileWorklogToMsp({
+  body,
+  command,
+  mspClient,
+  requestId,
+}: {
+  body: string;
+  command: MobileWorklogCommand;
+  mspClient: MspCentralClient | null;
+  requestId: string;
+}) {
+  if (!mspClient?.addRequestWorklog) {
+    return;
+  }
+
+  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
+  const startedAt =
+    command.startedAt ??
+    new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+
+  await mspClient.addRequestWorklog({
+    description: body,
+    durationMinutes,
+    endedAt,
+    requestId,
+    startedAt,
+  });
+}
+
+function fixtureStaffAsDatabaseRow(auth: MobileAuthContext): DatabaseStaffRow {
+  const staff = MOBILE_STAFF_FIXTURES.find(
+    (candidate) =>
+      candidate.email.toLowerCase() === auth.email.toLowerCase() ||
+      candidate.zohoEmail.toLowerCase() === auth.email.toLowerCase(),
+  );
+  if (!staff) {
+    throw Object.assign(new Error("Mobile staff profile was not found."), {
+      code: "UNAUTHORIZED",
+      status: 401,
+    });
+  }
+
+  return {
+    active: staff.active,
+    baseOffice: staff.baseOffice,
+    displayName: staff.displayName,
+    dispatchEnabled: true,
+    id: staff.id,
+    mspCentralEmail: staff.mspCentralEmail,
+    mspCentralTechnicianId: staff.mspCentralTechnicianId,
+    outlookEmail: staff.outlookEmail,
+    outlookUserPrincipalName: staff.outlookUserPrincipalName,
+    role: staff.role,
+    zohoEmail: staff.zohoEmail,
+  };
+}
+
 async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string) {
   const staff = await database.findStaffByZohoEmail(zohoEmail);
   if (!staff) {
@@ -495,34 +795,6 @@ async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string)
     });
   }
   return staff;
-}
-
-async function requireDatabaseOrTestSyncedJobForStaff({
-  auth,
-  database,
-  jobId,
-}: {
-  auth: MobileAuthContext;
-  database: MobileDatabase;
-  jobId: string;
-}): Promise<MobileJob> {
-  const staff = await requireDatabaseStaff(database, auth.email);
-  const job = isUuid(jobId)
-    ? await database.findJobForStaff({ jobId, staffId: staff.id })
-    : null;
-  if (job) {
-    return mapDatabaseJob(job);
-  }
-
-  const testJob = await findTestSyncedMobileJob({ auth, jobId });
-  if (testJob) {
-    return testJob;
-  }
-
-  throw Object.assign(new Error("Mobile job was not found."), {
-    code: "NOT_FOUND",
-    status: 404,
-  });
 }
 
 async function requireTimerJobForStaff({
@@ -609,6 +881,143 @@ const WRITABLE_PERMISSIONS: MobileJobPermissions = {
   canWriteWorklog: true,
   readOnlyReason: null,
 };
+
+const OUTLOOK_READ_ONLY_PERMISSIONS: MobileJobPermissions = {
+  canAddPart: false,
+  canAttachEvidence: false,
+  canComplete: false,
+  canSignOff: false,
+  canStartTimer: false,
+  canUpdateStatus: false,
+  canWriteWorklog: false,
+  readOnlyReason: "Outlook calendar events are read-only.",
+};
+
+async function listOutlookMobileJobs({
+  from,
+  outlookCalendar,
+  staff,
+  to,
+}: {
+  from: string;
+  outlookCalendar: MobileOutlookCalendar | null;
+  staff: DatabaseStaffRow;
+  to: string;
+}) {
+  if (!outlookCalendar) {
+    return [];
+  }
+
+  try {
+    const appointments = await outlookCalendar.listAppointments({
+      from,
+      staff,
+      to,
+    });
+    return appointments
+      .map((appointment) => mapOutlookAppointment(staff, appointment))
+      .filter((job): job is MobileJob => Boolean(job));
+  } catch (error) {
+    console.error("Mobile Outlook calendar read failed", safeError(error));
+    return [];
+  }
+}
+
+async function findOutlookMobileJob({
+  jobId,
+  outlookCalendar,
+  staff,
+}: {
+  jobId: string;
+  outlookCalendar: MobileOutlookCalendar | null;
+  staff: DatabaseStaffRow;
+}) {
+  if (!outlookCalendar) {
+    return null;
+  }
+
+  try {
+    const appointment = await outlookCalendar.findAppointment({ jobId, staff });
+    return appointment ? mapOutlookAppointment(staff, appointment) : null;
+  } catch (error) {
+    console.error("Mobile Outlook calendar event read failed", safeError(error));
+    return null;
+  }
+}
+
+function mapOutlookAppointment(
+  staff: DatabaseStaffRow,
+  appointment: Appointment,
+): MobileJob | null {
+  if (!appointment.date) {
+    return null;
+  }
+
+  const startAt = melbourneIsoTime(appointment.date, appointment.start);
+  const endAt = melbourneIsoTime(appointment.date, appointment.end);
+  return {
+    attachments: [],
+    bookingType: appointment.bookingType ?? "In house",
+    contactEmail: null,
+    contactName: null,
+    contactPhone: null,
+    customerName: appointment.customer,
+    customerSignOff: null,
+    description: appointment.bodyPreview ?? null,
+    endAt,
+    id: appointment.id,
+    isAllDay: Boolean(appointment.isAllDay),
+    outlookEventId: appointment.outlookEventId ?? null,
+    outlookWebLink: appointment.outlookWebLink ?? null,
+    parts: [],
+    permissions: OUTLOOK_READ_ONLY_PERMISSIONS,
+    previousNotes: [],
+    priority: null,
+    requestNumber: appointment.outlookLinkedRequestNumber
+      ? `REQ-${appointment.outlookLinkedRequestNumber}`
+      : null,
+    siteAddress: appointment.siteAddress ?? null,
+    siteName: appointment.siteArea ?? null,
+    siteTown: appointment.siteTown ?? null,
+    slaDueAt: null,
+    source: "outlook",
+    startAt,
+    status: "Scheduled",
+    syncState: "synced",
+    tags: [
+      "Outlook only",
+      appointment.outlookIssue === "private" ? "Private" : undefined,
+      appointment.isAllDay ? "All day" : undefined,
+    ].filter((tag): tag is string => Boolean(tag)),
+    technician: mapDatabaseStaff(staff),
+    timezone: "Australia/Melbourne",
+    title: appointment.title,
+    travel: null,
+    updatedAt: startAt,
+    version: `outlook-${appointment.outlookEventId ?? appointment.id}-${startAt}-${endAt}`,
+  };
+}
+
+function melbourneIsoTime(dateKey: string, time: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const approximateInstant = new Date(
+    Date.UTC(year, month - 1, day, hour, minute),
+  );
+  const offsetName = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    timeZoneName: "longOffset",
+  })
+    .formatToParts(approximateInstant)
+    .find((part) => part.type === "timeZoneName")?.value;
+  const offset = offsetName?.match(/GMT([+-]\d{2}:\d{2})/)?.[1] ?? "+10:00";
+
+  return `${dateKey}T${time}:00${offset}`;
+}
+
+function safeError(error: unknown) {
+  return error instanceof Error ? { message: error.message } : { message: "Unknown error" };
+}
 
 async function listTestSyncedMobileJobs({
   auth,

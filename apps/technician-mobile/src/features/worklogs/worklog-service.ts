@@ -3,7 +3,10 @@ import type {
   MobileJobStatus,
   NoteVisibility,
   MutationReceipt,
+  MobileForwardBooking,
+  MobileWorklogTransfer,
   SaveWorklogCommand,
+  WorklogDisposition,
   WorkLogType,
 } from "../../contracts/mobile";
 
@@ -11,9 +14,13 @@ export interface WorklogDraft {
   jobId: string;
   billable: boolean;
   durationMinutes: number;
+  disposition?: WorklogDisposition;
+  forwardBooking?: MobileForwardBooking;
+  idempotencyKey: string;
   note: string;
   technicianId: string;
   visibility: NoteVisibility;
+  transfer?: MobileWorklogTransfer;
   workType: WorkLogType;
 }
 
@@ -38,21 +45,29 @@ export async function saveWorklogWithDraft({
   note,
   billable = true,
   durationMinutes = 0,
+  disposition,
+  forwardBooking,
+  idempotencyKey,
   simulateFailure,
   submit,
   technicianId,
   visibility,
+  transfer,
   workType = "billable",
 }: {
   billable?: boolean;
   draftStore: ReturnType<typeof createWorklogDraftStore>;
   durationMinutes?: number;
+  disposition?: WorklogDisposition;
+  forwardBooking?: MobileForwardBooking;
+  idempotencyKey: string;
   job: MobileJob;
   note: string;
   simulateFailure?: boolean;
   submit?: (command: SaveWorklogCommand) => Promise<MutationReceipt>;
   technicianId: string;
   visibility: NoteVisibility;
+  transfer?: MobileWorklogTransfer;
   workType?: WorkLogType;
 }) {
   if (!job.permissions.canWriteWorklog) {
@@ -61,14 +76,30 @@ export async function saveWorklogWithDraft({
   if (!note.trim()) {
     throw new Error("Work note is required.");
   }
+  if (!disposition) {
+    throw new Error("Choose what happens to this scheduled job after saving.");
+  }
+  if (disposition === "book_forward" && !validForwardBooking(forwardBooking)) {
+    throw new Error("Book Forward requires a technician, date, start, and end time.");
+  }
+  if (
+    disposition === "transfer_escalate" &&
+    (!transfer?.targetTechnicianId || !transfer.reason.trim())
+  ) {
+    throw new Error("Transfer / escalate requires a target and reason.");
+  }
 
   const draft: WorklogDraft = {
     billable,
     durationMinutes,
+    disposition,
+    forwardBooking,
+    idempotencyKey,
     jobId: job.id,
     note: note.trim(),
     technicianId,
     visibility,
+    transfer,
     workType,
   };
   await draftStore.save(draft);
@@ -81,7 +112,8 @@ export async function saveWorklogWithDraft({
     await submit({
       baseVersion: job.version,
       billable,
-      clientMutationId: `worklog-${job.id}-${Date.now()}`,
+      clientMutationId: idempotencyKey,
+      disposition,
       durationMinutes: Math.max(1, durationMinutes),
       endedAt: new Date().toISOString(),
       installationId: "local-simulator",
@@ -90,6 +122,8 @@ export async function saveWorklogWithDraft({
       startedAt: new Date().toISOString(),
       summary: note.trim(),
       timerSessionId: null,
+      forwardBooking,
+      transfer,
       visibility,
       workType,
     });
@@ -97,6 +131,17 @@ export async function saveWorklogWithDraft({
 
   await draftStore.remove(technicianId, job.id);
   return { draft, status: "saved" as const };
+}
+
+function validForwardBooking(booking?: MobileForwardBooking) {
+  if (!booking) return false;
+  return Boolean(
+    booking.technicianId &&
+      booking.date &&
+      booking.start &&
+      booking.end &&
+      booking.end > booking.start,
+  );
 }
 
 export function completeJobLocally({

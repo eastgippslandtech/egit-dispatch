@@ -8,27 +8,52 @@ type AuthEnv = Record<string, string | undefined> & {
 };
 
 type MinimalSession = {
+  accessLevel?: "staff" | "wallboard";
   user?: {
     email?: string | null;
     name?: string | null;
   };
 } | null;
 
-export type CommandCentreAccess =
+export type ApprovedStaffAccess = {
+  status: "approved";
+  accessLevel: "staff";
+  email: string;
+  name?: string;
+  authDisabled?: boolean;
+};
+
+type NotApprovedAccess = {
+  status: "not-approved";
+  email: string;
+  name?: string;
+};
+
+type UnauthenticatedAccess = {
+  status: "unauthenticated";
+};
+
+type WallboardOnlyAccess = {
+  status: "wallboard-only";
+  name?: string;
+};
+
+type StaffAccess =
+  | ApprovedStaffAccess
+  | NotApprovedAccess
+  | UnauthenticatedAccess;
+
+export type CommandCentreAccess = StaffAccess | WallboardOnlyAccess;
+
+export type WallboardAccess =
+  | (ApprovedStaffAccess & { accessLevel: "staff" })
   | {
       status: "approved";
-      email: string;
-      name?: string;
-      authDisabled?: boolean;
-    }
-  | {
-      status: "not-approved";
-      email: string;
+      accessLevel: "wallboard";
       name?: string;
     }
-  | {
-      status: "unauthenticated";
-    };
+  | NotApprovedAccess
+  | UnauthenticatedAccess;
 
 export function isAuthDisabled(env: AuthEnv = process.env) {
   if (env.NODE_ENV === "production" || env.VERCEL_ENV === "production") {
@@ -44,18 +69,54 @@ export function commandCentreAccessFromSession(
   session: MinimalSession,
   env: AuthEnv = process.env,
 ): CommandCentreAccess {
+  const name = session?.user?.name?.trim() || undefined;
+  if (!isAuthDisabled(env) && session?.accessLevel === "wallboard") {
+    return { status: "wallboard-only", name };
+  }
+
+  return staffAccessFromSession(session, env);
+}
+
+export function wallboardAccessFromSession(
+  session: MinimalSession,
+  env: AuthEnv = process.env,
+): WallboardAccess {
+  if (!isAuthDisabled(env) && session?.accessLevel === "wallboard") {
+    return {
+      status: "approved",
+      accessLevel: "wallboard",
+      name: session.user?.name?.trim() || undefined,
+    };
+  }
+
+  const access = staffAccessFromSession(session, env);
+  if (access.status !== "approved") {
+    return access;
+  }
+
+  return { ...access, accessLevel: "staff" };
+}
+
+function staffAccessFromSession(
+  session: MinimalSession,
+  env: AuthEnv,
+): StaffAccess {
   if (isAuthDisabled(env)) {
     return {
       status: "approved",
+      accessLevel: "staff",
       email: "build-mode@egit.local",
       name: "Build Mode",
       authDisabled: true,
     };
   }
 
+  if (session?.accessLevel !== "staff") {
+    return { status: "unauthenticated" };
+  }
+
   const email = session?.user?.email?.trim().toLowerCase();
   const name = session?.user?.name?.trim() || undefined;
-
   if (!email) {
     return { status: "unauthenticated" };
   }
@@ -64,7 +125,17 @@ export function commandCentreAccessFromSession(
     return { status: "not-approved", email, name };
   }
 
-  return { status: "approved", email, name };
+  return { status: "approved", accessLevel: "staff", email, name };
+}
+
+export function isApprovedStaffAccess(
+  access: CommandCentreAccess | WallboardAccess,
+): access is ApprovedStaffAccess {
+  return (
+    access.status === "approved" &&
+    access.accessLevel === "staff" &&
+    "email" in access
+  );
 }
 
 export async function getCommandCentreAccess() {
@@ -75,4 +146,14 @@ export async function getCommandCentreAccess() {
   const { auth } = await import("@/auth");
 
   return commandCentreAccessFromSession(await auth());
+}
+
+export async function getWallboardAccess() {
+  if (isAuthDisabled()) {
+    return wallboardAccessFromSession(null);
+  }
+
+  const { auth } = await import("@/auth");
+
+  return wallboardAccessFromSession(await auth());
 }

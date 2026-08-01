@@ -10,16 +10,34 @@ import {
   Clock3,
   ExternalLink,
   Filter,
+  Frown,
+  GitMerge,
   LogOut,
   MailWarning,
+  Meh,
+  Monitor,
+  PhoneCall,
   RefreshCw,
   Search,
+  Smile,
   X,
 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import { PresenceControls } from "@/app/components/presence-controls";
+import type {
+  MspCentralRequestContext,
+  MspCentralRequestUpdate,
+} from "@/server/msp-central/types";
+import type {
+  WorklogDisposition,
+  WorklogForwardBooking,
+  WorklogTransfer,
+} from "@/server/worklogs/disposition";
 
 import type {
   Appointment,
@@ -30,8 +48,15 @@ import type {
   Severity,
   Technician,
 } from "@/server/dispatch/types";
+import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
+import {
+  applyBookingTypeToRequest,
+  bookingTiming,
+  bookingTypeForRequest,
+} from "@/server/dispatch/booking";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
+  buildStackedTimelineLayout,
   buildTimelineLayout,
   getTimelineAppointmentSegments,
   type TimelineLayoutItem,
@@ -58,6 +83,7 @@ import {
   minutesFromTime,
   moveAppointment,
   scheduleRequest,
+  shouldShowTimelineHourLabel,
   TIMELINE_TRACK_WIDTH_PX,
   timeFromMinutes,
   timelinePositionToTime,
@@ -68,6 +94,7 @@ import {
   getWeekTodayDateKey,
   type CurrentTimeIndicator,
 } from "@/server/dispatch/current-time";
+import { formatTalkTime } from "@/server/yeastar/talk-time";
 import {
   applyTravelToAppointment,
   buildAppointmentTravel,
@@ -82,6 +109,11 @@ type Selection =
 type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
+
+type LiveScheduleResult = {
+  id?: string;
+  webLink?: string;
+};
 
 const PRIMARY_HEALTH_KEYS = [
   "unscheduled",
@@ -135,6 +167,7 @@ export function bookingCardPriorityClass(
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
 type SearchState = "dimmed" | "match" | "normal";
+type SeenTicketUpdateIds = Set<string>;
 
 const TECHNICIAN_COLUMN_WIDTH_PX = 170;
 const TIMELINE_HEADER_HEIGHT_PX = 40;
@@ -151,6 +184,7 @@ type DropPreview = {
 
 type PendingSchedule =
   | {
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "request";
       date: string;
@@ -163,6 +197,7 @@ type PendingSchedule =
     }
   | {
       appointmentId: string;
+      bookingType: BookingType;
       durationMinutes: number;
       kind: "appointment";
       date: string;
@@ -208,6 +243,7 @@ export function CommandCentrePrototype({
   authDisabled?: boolean;
   data: DispatchDashboardData;
 }) {
+  const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
@@ -222,13 +258,25 @@ export function CommandCentrePrototype({
   const [queueSearch, setQueueSearch] = useState("");
   const [queueFilters, setQueueFilters] = useState<QueueFilters>({});
   const [openQueueFilter, setOpenQueueFilter] = useState<QueueFilterKey>();
+  const [seenTicketUpdateIds, setSeenTicketUpdateIds] =
+    useState<SeenTicketUpdateIds>(() => new Set());
   const [dragPayload, setDragPayload] = useState<DragPayload | undefined>();
   const [dropPreview, setDropPreview] = useState<DropPreview | undefined>();
   const [pendingSchedule, setPendingSchedule] = useState<
     PendingSchedule | undefined
   >();
+  const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
   const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
   const [toast, setToast] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!data.calendarError?.includes("MSP Central is temporarily unavailable")) {
+      return;
+    }
+
+    const retry = window.setInterval(() => router.refresh(), 30_000);
+    return () => window.clearInterval(retry);
+  }, [data.calendarError, router]);
 
   const selectedDateLabel = formatSelectedDateLabel(selectedDateKey);
   const weekDays = useMemo(() => getWeekRange(selectedDateKey), [selectedDateKey]);
@@ -310,8 +358,8 @@ export function CommandCentrePrototype({
 
   const fallbackRequest = selectedRequest ?? dashboard.requests[0];
 
-  const readyRequests = dashboard.requests.filter(
-    (request) => request.readyToBook && !request.scheduledStart,
+  const unscheduledRequests = dashboard.requests.filter(
+    (request) => !request.scheduledStart && request.status !== "Resolved",
   );
   const queueRequests = activeHealth
     ? dashboard.requests.filter((request) =>
@@ -321,7 +369,7 @@ export function CommandCentrePrototype({
           scopedData.appointments,
         ),
       )
-    : readyRequests;
+    : unscheduledRequests;
   const filteredQueueRequests = queueRequests.filter(
     (request) =>
       requestMatchesSearch(request, queueSearch, dashboard.technicians) &&
@@ -350,6 +398,75 @@ export function CommandCentrePrototype({
     setQueueFilters({});
     setOpenQueueFilter(undefined);
     setActiveHealth(undefined);
+  }
+
+  function markTicketUpdateSeen(requestId?: string) {
+    if (!requestId) {
+      return;
+    }
+
+    setSeenTicketUpdateIds((current) => {
+      if (current.has(requestId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.add(requestId);
+      return next;
+    });
+  }
+
+  function selectRequest(requestId: string) {
+    setSelection({ kind: "request", requestId });
+    markTicketUpdateSeen(requestId);
+  }
+
+  function selectAppointment(appointment: Appointment) {
+    setSelection({
+      kind: "appointment",
+      appointmentId: appointment.id,
+      requestId: appointment.requestId,
+    });
+    markTicketUpdateSeen(appointment.requestId);
+  }
+
+  async function mergeRequestIntoParent(parentRequestId: string) {
+    const childRequest = dashboard.requests.find(
+      (request) => request.id === mergeRequestId,
+    );
+    const parentRequest = dashboard.requests.find(
+      (request) => request.id === parentRequestId,
+    );
+
+    if (!childRequest || !parentRequest) {
+      throw new Error("The duplicate or surviving request is no longer available.");
+    }
+
+    await publishMspCentralRequestMerge({
+      childRequestId: childRequest.id,
+      parentRequestId: parentRequest.id,
+    });
+
+    setDashboard((current) => ({
+      ...current,
+      appointments: current.appointments.map((appointment) =>
+        appointment.requestId === childRequest.id
+          ? { ...appointment, requestId: parentRequest.id }
+          : appointment,
+      ),
+      requests: current.requests.filter(
+        (request) => request.id !== childRequest.id,
+      ),
+      selectedRequestId:
+        current.selectedRequestId === childRequest.id
+          ? parentRequest.id
+          : current.selectedRequestId,
+    }));
+    setSelection({ kind: "request", requestId: parentRequest.id });
+    setMergeRequestId(undefined);
+    setToast(
+      `${childRequest.requestNumber} merged into ${parentRequest.requestNumber}.`,
+    );
   }
 
   useEffect(() => {
@@ -406,28 +523,105 @@ export function CommandCentrePrototype({
     setDropPreview(undefined);
   }
 
-  function saveWorkLog({
+  async function saveWorkLog({
     billable,
-    complete,
+    booking,
+    disposition,
+    idempotencyKey,
     minutes,
     notes,
+    transfer,
     visibility,
     workType,
   }: {
     billable: boolean;
-    complete: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
     minutes: string;
     notes: string;
+    transfer?: WorklogTransfer;
     visibility: "external" | "internal";
     workType: string;
   }) {
     const requestId = workLogRequestId;
     if (!requestId) return;
+    const selectedWorklogRequest = dashboard.requests.find(
+      (candidate) => candidate.id === requestId,
+    );
+    const worklogAppointment = dashboard.appointments.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (!selectedWorklogRequest) return;
 
     const trimmedNotes = notes.trim();
     if (!trimmedNotes) {
       setToast("Work Log notes are required.");
       return;
+    }
+    const durationMinutes = Math.round(Number(minutes));
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+      setToast("Work Log time must be greater than zero.");
+      return;
+    }
+
+    const updateAt = new Date().toISOString();
+    const liveWorklog =
+      dashboard.dispatchDataSource === "msp-central" &&
+      selectedWorklogRequest.sourceSystem === "msp-central";
+    const scheduled = Boolean(
+      worklogAppointment || selectedWorklogRequest.scheduledStart,
+    );
+
+    if (scheduled && !disposition) {
+      setToast("Choose what happens to this scheduled job after saving.");
+      return;
+    }
+
+    if (liveWorklog) {
+      const endedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.end)
+        : updateAt;
+      const startedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.start)
+        : new Date(
+            new Date(endedAt).getTime() - durationMinutes * 60_000,
+          ).toISOString();
+
+      try {
+        const result = await publishMspCentralWorklog({
+          booking,
+          currentBooking: worklogAppointment
+            ? {
+                eventId: worklogAppointment.outlookEventId,
+                technicianId: worklogAppointment.technicianId,
+                userPrincipalName: worklogAppointment.calendarOwnerEmail,
+              }
+            : undefined,
+          description: trimmedNotes,
+          disposition,
+          durationMinutes,
+          endedAt,
+          idempotencyKey,
+          requestId,
+          scheduled,
+          startedAt,
+          transfer,
+        });
+        if (result.status === "recovery_required") {
+          setToast(
+            `Work Log saved, but the selected outcome still needs recovery: ${result.error ?? "retry the save"}`,
+          );
+          return;
+        }
+      } catch (error) {
+        setToast(
+          error instanceof Error
+            ? `Work Log did not save: ${error.message}`
+            : "Work Log did not save.",
+        );
+        return;
+      }
     }
 
     setDashboard((current) => {
@@ -437,11 +631,11 @@ export function CommandCentrePrototype({
         }
 
         const metadata = [
-          `${minutes || "0"} min`,
+          `${durationMinutes} min`,
           workTypeLabel(workType),
           visibility === "external" ? "customer-facing" : "internal",
           billable ? "billable" : "non-billable",
-          "mock/test-sync only",
+          liveWorklog ? "MSP Central" : "mock/test-sync",
         ].join(" · ");
 
         return {
@@ -449,25 +643,123 @@ export function CommandCentrePrototype({
           notes: request.notes
             ? `${request.notes}\n\n${trimmedNotes} (${metadata})`
             : `${trimmedNotes} (${metadata})`,
-          readyToBook: complete ? false : request.readyToBook,
-          status: complete ? ("Resolved" as const) : request.status,
-          warnings: complete
+          readyToBook:
+            disposition === "complete" || disposition === "book_forward"
+              ? false
+              : disposition === "return_to_queue" ||
+                  disposition === "transfer_escalate"
+                ? true
+                : request.readyToBook,
+          scheduledEnd:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.end)
+              : disposition
+                ? undefined
+                : request.scheduledEnd,
+          scheduledStart:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.start)
+              : disposition
+                ? undefined
+                : request.scheduledStart,
+          status:
+            disposition === "complete"
+              ? ("Resolved" as const)
+              : disposition === "book_forward"
+                ? ("Scheduled" as const)
+                : disposition === "return_to_queue" ||
+                    disposition === "transfer_escalate"
+                  ? ("Open" as const)
+                  : request.status,
+          technicianId:
+            disposition === "book_forward" && booking
+              ? booking.technicianId
+              : disposition === "transfer_escalate" && transfer
+                ? transfer.targetTechnicianId
+                : request.technicianId,
+          updateInfo: {
+            at: updateAt,
+            detail: trimmedNotes,
+            source: "command-centre" as const,
+            summary:
+              disposition === "complete"
+                ? "Work Log completed"
+                : disposition === "book_forward"
+                  ? "Work Log saved and booked forward"
+                  : disposition === "return_to_queue"
+                    ? "Work Log saved and returned to queue"
+                    : disposition === "transfer_escalate"
+                      ? "Work Log saved and transferred"
+                      : "Work Log added",
+          },
+          warnings: disposition === "complete"
             ? request.warnings.filter((warning) => warning !== "Ready to book")
             : request.warnings,
         };
       });
 
+      let appointments = current.appointments;
+      if (disposition) {
+        appointments = appointments.filter(
+          (appointment) => appointment.requestId !== requestId,
+        );
+      }
+      if (disposition === "book_forward" && booking) {
+        const technician = current.technicians.find(
+          (candidate) => candidate.id === booking.technicianId,
+        );
+        const replacement = applyTravelToAppointment(
+          {
+            ...(worklogAppointment ?? {
+              customer: selectedWorklogRequest.customer,
+              id: `worklog-forward-${requestId}`,
+              requestId,
+              source: "linked" as const,
+              status: "confirmed" as const,
+              title: selectedWorklogRequest.subject,
+            }),
+            bookingType: booking.bookingType,
+            calendarOwnerEmail: booking.userPrincipalName,
+            customer: selectedWorklogRequest.customer,
+            date: booking.date,
+            end: booking.end,
+            readOnly: false,
+            siteAddress: selectedWorklogRequest.siteAddress,
+            siteArea: selectedWorklogRequest.siteArea,
+            siteTown: selectedWorklogRequest.siteTown,
+            start: booking.start,
+            technicianId: booking.technicianId,
+          },
+          buildAppointmentTravel({
+            request: applyBookingTypeToRequest(
+              selectedWorklogRequest,
+              booking.bookingType,
+            ),
+            technician,
+          }),
+        );
+        appointments = [...appointments, replacement];
+      }
+
       return {
         ...current,
+        appointments,
         requests,
       };
     });
 
+    markTicketUpdateSeen(requestId);
     setWorkLogRequestId(undefined);
     setToast(
-      complete
-        ? "Work Log saved and ticket resolved locally for test sync."
-        : "Work Log saved locally for test sync.",
+      liveWorklog
+        ? disposition === "complete"
+          ? "Work Log saved and ticket resolved in MSP Central."
+          : "Work Log and outcome saved in MSP Central."
+        : disposition === "complete"
+          ? "Work Log saved and ticket resolved locally for test sync."
+          : disposition
+            ? "Work Log and outcome saved locally for test sync."
+            : "Work Log saved locally for test sync.",
     );
   }
 
@@ -501,9 +793,18 @@ export function CommandCentrePrototype({
     });
   }
 
-  function buildTravel(request: DispatchRequest | undefined, technicianId: string) {
+  function buildTravel(
+    request: DispatchRequest | undefined,
+    technicianId: string,
+    bookingType?: BookingType,
+  ) {
     return buildAppointmentTravel({
-      request,
+      request: request
+        ? applyBookingTypeToRequest(
+            request,
+            bookingType ?? bookingTypeForRequest(request),
+          )
+        : undefined,
       technician: dashboard.technicians.find(
         (technician) => technician.id === technicianId,
       ),
@@ -512,6 +813,7 @@ export function CommandCentrePrototype({
 
   function buildTravelCandidate({
     appointmentId,
+    bookingType,
     date,
     end,
     request,
@@ -520,6 +822,7 @@ export function CommandCentrePrototype({
     travel,
   }: {
     appointmentId?: string;
+    bookingType?: BookingType;
     date: string;
     end: string;
     request?: DispatchRequest;
@@ -530,6 +833,7 @@ export function CommandCentrePrototype({
     return applyTravelToAppointment(
       {
         id: appointmentId ?? "pending",
+        bookingType,
         customer: request?.customer ?? "Pending",
         date,
         end,
@@ -562,8 +866,13 @@ export function CommandCentrePrototype({
         return undefined;
       }
 
-      const slot = buildScheduleSlot(start, 60);
-      const travel = buildTravel(request, technicianId);
+      const bookingType = bookingTypeForRequest(request);
+      const durationMinutes = 60;
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, technicianId, bookingType);
       const travelAppointment = buildTravelCandidate({
         date,
         end: slot.end,
@@ -574,7 +883,8 @@ export function CommandCentrePrototype({
       });
 
       return {
-        durationMinutes: 60,
+        bookingType,
+        durationMinutes,
         kind: "request",
         date,
         requestId: request.id,
@@ -600,15 +910,30 @@ export function CommandCentrePrototype({
       return undefined;
     }
 
-    const durationMinutes =
-      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
-    const slot = buildScheduleSlot(start, durationMinutes);
     const request = dashboard.requests.find(
       (candidate) => candidate.id === appointment.requestId,
     );
-    const travel = request ? buildTravel(request, technicianId) : undefined;
+    const bookingType =
+      appointment.bookingType ??
+      (request ? bookingTypeForRequest(request) : "Remote");
+    const totalDurationMinutes =
+      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
+    const durationMinutes =
+      appointment.workDurationMinutes ??
+      Math.max(
+        15,
+        totalDurationMinutes - (bookingType === "Onsite" ? 15 : 0),
+      );
+    const slot = buildScheduleSlot(
+      start,
+      bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+    );
+    const travel = request
+      ? buildTravel(request, technicianId, bookingType)
+      : undefined;
     const travelAppointment = buildTravelCandidate({
       appointmentId: appointment.id,
+      bookingType,
       date,
       end: slot.end,
       request,
@@ -619,6 +944,7 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      bookingType,
       durationMinutes,
       kind: "appointment",
       date,
@@ -693,7 +1019,10 @@ export function CommandCentrePrototype({
         return current;
       }
 
-      const slot = buildScheduleSlot(current.start, durationMinutes);
+      const slot = buildScheduleSlot(
+        current.start,
+        bookingTiming(durationMinutes, current.bookingType).totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -707,6 +1036,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -739,7 +1069,11 @@ export function CommandCentrePrototype({
         return current;
       }
 
-      const slot = buildScheduleSlot(start, current.durationMinutes);
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(current.durationMinutes, current.bookingType)
+          .totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -753,6 +1087,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -795,10 +1130,11 @@ export function CommandCentrePrototype({
                   (appointment) => appointment.id === current.appointmentId,
                 )?.requestId,
             );
-      const travel = buildTravel(request, technicianId);
+      const travel = buildTravel(request, technicianId, current.bookingType);
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: current.end,
         request,
@@ -821,6 +1157,57 @@ export function CommandCentrePrototype({
         technicianId,
         travel,
         warnings,
+      };
+    });
+  }
+
+  function updatePendingBookingType(bookingType: BookingType) {
+    setPendingSchedule((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const slot = buildScheduleSlot(
+        current.start,
+        bookingTiming(current.durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, current.technicianId, bookingType);
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType,
+        date: current.date,
+        end: slot.end,
+        request,
+        start: current.start,
+        technicianId: current.technicianId,
+        travel,
+      });
+
+      return {
+        ...current,
+        bookingType,
+        end: slot.end,
+        travel,
+        warnings: buildWarnings({
+          appointmentId:
+            current.kind === "appointment" ? current.appointmentId : undefined,
+          date: current.date,
+          end: slot.end,
+          start: current.start,
+          technicianId: current.technicianId,
+          travelAppointment,
+        }),
       };
     });
   }
@@ -864,32 +1251,68 @@ export function CommandCentrePrototype({
         return;
       }
 
-      const appointmentId = `mock-${request.id}-${Date.now()}`;
-      const bookingType = bookingTypeForRequest(request);
+      const liveSchedule = canUseLiveSchedule(dashboard, request);
+      let liveEvent: LiveScheduleResult | undefined;
+      const appointmentId = liveSchedule
+        ? `pending-live-${request.id}-${Date.now()}`
+        : `mock-${request.id}-${Date.now()}`;
+      const bookingType = pendingSchedule.bookingType;
 
       try {
-        await publishDispatchTestSyncEvent({
-          appointmentId,
-          bookingType,
-          date: pendingSchedule.date,
-          end: pendingSchedule.end,
-          eventType: "scheduled",
-          priority: request.priority,
-          requestId: request.id,
-          start: pendingSchedule.start,
-          technicianId: pendingSchedule.technicianId,
-          payload: {
-            travel: pendingSchedule.travel,
-          },
-        });
+        if (liveSchedule) {
+          liveEvent = await publishLiveSchedule({
+            bookingType,
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            location: request.siteAddress ?? request.site,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            start: pendingSchedule.start,
+            subject: request.subject,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await publishDispatchTestSyncEvent({
+            appointmentId,
+            bookingType,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventType: "scheduled",
+            priority: request.priority,
+            requestId: request.id,
+            start: pendingSchedule.start,
+            technicianId: pendingSchedule.technicianId,
+            payload: {
+              travel: pendingSchedule.travel,
+            },
+          });
+        }
       } catch (error) {
-        setToast(testSyncErrorMessage(error));
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
         return;
       }
 
+      const finalAppointmentId = liveEvent?.id
+        ? `outlook-${pendingSchedule.technicianId}-${liveEvent.id}`
+        : appointmentId;
       const appointments = scheduleRequest({
-        appointmentId,
+        appointmentId: finalAppointmentId,
         appointments: dashboard.appointments,
+        bookingType,
         date: pendingSchedule.date,
         durationMinutes: pendingSchedule.durationMinutes,
         request,
@@ -900,12 +1323,23 @@ export function CommandCentrePrototype({
 
       setDashboard((current) => ({
         ...current,
-        appointments,
+        appointments: appointments.map((appointment) =>
+          appointment.id === finalAppointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+                status: liveSchedule ? "confirmed" : appointment.status,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((candidate) =>
           candidate.id === request.id
             ? {
                 ...candidate,
                 bookingType,
+                onsite: bookingType === "Onsite",
                 status: "Scheduled",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
@@ -918,7 +1352,7 @@ export function CommandCentrePrototype({
                 ),
                 readyToBook: false,
                 warnings: [
-                  "Mock scheduled",
+                  liveSchedule ? "Scheduled" : "Mock scheduled",
                   ...(pendingSchedule.travel?.travelWarning
                     ? [pendingSchedule.travel.travelWarning]
                     : []),
@@ -929,10 +1363,14 @@ export function CommandCentrePrototype({
       }));
       setSelection({
         kind: "appointment",
-        appointmentId,
+        appointmentId: finalAppointmentId,
         requestId: request.id,
       });
-      setToast(`${request.requestNumber} scheduled in mock mode.`);
+      setToast(
+        liveSchedule
+          ? `${request.requestNumber} scheduled in MSP Central and Outlook.`
+          : `${request.requestNumber} scheduled in mock mode.`,
+      );
     } else {
       const currentAppointment = dashboard.appointments.find(
         (appointment) => appointment.id === pendingSchedule.appointmentId,
@@ -942,42 +1380,91 @@ export function CommandCentrePrototype({
             (candidate) => candidate.id === currentAppointment.requestId,
           )
         : undefined;
-      const bookingType =
-        currentAppointment?.bookingType ?? (request ? bookingTypeForRequest(request) : undefined);
+      const bookingType = pendingSchedule.bookingType;
+
+      const liveSchedule =
+        Boolean(request) && canUseLiveSchedule(dashboard, request);
+      let liveEvent: LiveScheduleResult | undefined;
 
       try {
-        await publishDispatchTestSyncEvent({
-          appointmentId: pendingSchedule.appointmentId,
-          bookingType,
-          date: pendingSchedule.date,
-          end: pendingSchedule.end,
-          eventType: "rescheduled",
-          priority: request?.priority,
-          requestId: currentAppointment?.requestId,
-          start: pendingSchedule.start,
-          technicianId: pendingSchedule.technicianId,
-          payload: {
-            travel: pendingSchedule.travel,
-          },
-        });
+        if (liveSchedule && request) {
+          liveEvent = await publishLiveSchedule({
+            bookingType,
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventId: currentAppointment?.outlookEventId,
+            location: request.siteAddress ?? request.site,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            start: pendingSchedule.start,
+            subject: request.subject,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await publishDispatchTestSyncEvent({
+            appointmentId: pendingSchedule.appointmentId,
+            bookingType,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventType: "rescheduled",
+            priority: request?.priority,
+            requestId: currentAppointment?.requestId,
+            start: pendingSchedule.start,
+            technicianId: pendingSchedule.technicianId,
+            payload: {
+              travel: pendingSchedule.travel,
+            },
+          });
+        }
       } catch (error) {
-        setToast(testSyncErrorMessage(error));
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
         return;
       }
 
       const movedAppointments = moveAppointment({
         appointmentId: pendingSchedule.appointmentId,
         appointments: dashboard.appointments,
+        bookingType,
         date: pendingSchedule.date,
-        durationMinutes: pendingSchedule.durationMinutes,
+        durationMinutes:
+          minutesFromTime(pendingSchedule.end) -
+          minutesFromTime(pendingSchedule.start),
+        noteTimeMinutes: bookingTiming(
+          pendingSchedule.durationMinutes,
+          bookingType,
+        ).noteTimeMinutes,
         start: pendingSchedule.start,
         technicianId: pendingSchedule.technicianId,
         travel: pendingSchedule.travel,
+        workDurationMinutes: pendingSchedule.durationMinutes,
       });
 
       setDashboard((current) => ({
         ...current,
-        appointments: movedAppointments,
+        appointments: movedAppointments.map((appointment) =>
+          appointment.id === pendingSchedule.appointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((request) =>
           request.id ===
           current.appointments.find(
@@ -985,6 +1472,8 @@ export function CommandCentrePrototype({
           )?.requestId
             ? {
                 ...request,
+                bookingType,
+                onsite: bookingType === "Onsite",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
                   pendingSchedule.date,
@@ -1002,10 +1491,70 @@ export function CommandCentrePrototype({
         kind: "appointment",
         appointmentId: pendingSchedule.appointmentId,
       });
-      setToast("Appointment moved in mock mode.");
+      setToast(
+        liveSchedule
+          ? "Appointment moved in MSP Central and Outlook."
+          : "Appointment moved in mock mode.",
+      );
     }
 
     setPendingSchedule(undefined);
+  }
+
+  async function syncSelectedCalendarEvent() {
+    if (
+      !selectedAppointment ||
+      !selectedRequest ||
+      !canUseLiveSchedule(dashboard, selectedRequest)
+    ) {
+      return;
+    }
+
+    try {
+      const liveEvent = await publishLiveSchedule({
+        bookingType:
+          selectedAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+        customer: selectedRequest.customer,
+        date: selectedAppointment.date ?? selectedDateKey,
+        end: selectedAppointment.end,
+        eventId: selectedAppointment.outlookEventId,
+        location: selectedRequest.siteAddress ?? selectedRequest.site,
+        requestId: selectedRequest.id,
+        requestNumber: selectedRequest.requestNumber,
+        start: selectedAppointment.start,
+        subject: selectedRequest.subject,
+        technicianName: technicianLabel(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+        technicianEmail: technicianMspCentralIdentity(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+        userPrincipalName: technicianOutlookIdentity(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+      });
+
+      setDashboard((current) => ({
+        ...current,
+        appointments: current.appointments.map((appointment) =>
+          appointment.id === selectedAppointment.id
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+                status: "confirmed",
+              }
+            : appointment,
+        ),
+      }));
+      setToast(`${selectedRequest.requestNumber} synced to MSP Central and Outlook.`);
+    } catch (error) {
+      setToast(liveScheduleErrorMessage(error));
+    }
   }
 
   return (
@@ -1019,6 +1568,7 @@ export function CommandCentrePrototype({
           calendarStatusLabel={dashboard.calendarStatusLabel}
           date={selectedDateLabel}
           dateKey={selectedDateKey}
+          technicians={dashboard.technicians}
           timezone={dashboard.timezone}
           viewMode={viewMode}
           searchValue={topSearch}
@@ -1118,16 +1668,9 @@ export function CommandCentrePrototype({
           </div>
         </section>
 
-        <section
-          className={`grid min-h-0 flex-1 gap-3 px-3 pb-3 ${
-            viewMode === "week"
-              ? "grid-cols-1"
-              : "grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]"
-          }`}
-          data-testid="dispatch-workspace"
-        >
-          {viewMode === "week" ? null : (
-            <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
+        {/* TODO: Future /dispatch/wallboard can reuse this viewport shell, hide side panels, and give the timeline the full wall display width. */}
+        <section className="grid min-h-0 flex-1 grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] gap-3 px-3 pb-3 max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]">
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="shrink-0 border-b border-white/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Queue
@@ -1139,7 +1682,7 @@ export function CommandCentrePrototype({
                 <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
                   {filtersActive
                     ? `${filteredQueueRequests.length} of ${queueRequests.length}`
-                    : readyRequests.length}
+                    : unscheduledRequests.length}
                 </span>
               </div>
               <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cc-orange/40">
@@ -1256,20 +1799,26 @@ export function CommandCentrePrototype({
                     selection.kind === "request" &&
                     selection.requestId === request.id
                   }
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    request,
+                    seenTicketUpdateIds,
+                  )}
+                  mergeEnabled={
+                    request.sourceSystem === "msp-central" ||
+                    request.sourceSystem === "msp-central-fixture"
+                  }
                   request={request}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
                     beginDrag({ kind: "request", requestId: request.id })
                   }
-                  onSelect={() =>
-                    setSelection({ kind: "request", requestId: request.id })
-                  }
+                  onMerge={() => setMergeRequestId(request.id)}
+                  onSelect={() => selectRequest(request.id)}
                 />
               ))}
             </div>
           </aside>
-          )}
 
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2.5">
@@ -1285,7 +1834,7 @@ export function CommandCentrePrototype({
                 <p className="mt-0.5 text-xs text-slate-400">
                   {viewMode === "week"
                     ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
-                    : "9:00 AM - 5:30 PM"}
+                    : "9:00 AM - 5:00 PM"}
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-300">
@@ -1299,6 +1848,7 @@ export function CommandCentrePrototype({
                 appointments={weekAppointments}
                 dragPayload={dragPayload}
                 requests={dashboard.requests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1315,13 +1865,7 @@ export function CommandCentrePrototype({
                 }
                 onDragEnd={endDrag}
                 onWeekDrop={handleWeekDrop}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             ) : (
               <TimelineBoard
@@ -1332,6 +1876,7 @@ export function CommandCentrePrototype({
                 globalSearch={topSearch}
                 activeHealth={activeHealth}
                 requests={dashboard.requests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1344,13 +1889,7 @@ export function CommandCentrePrototype({
                 onDragEnd={endDrag}
                 onTimelineDrop={handleTimelineDrop}
                 onTimelineHover={handleTimelineHover}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             )}
             {dashboard.calendarError ? (
@@ -1360,27 +1899,31 @@ export function CommandCentrePrototype({
             ) : null}
           </section>
 
-          {viewMode === "week" ? null : (
-            <DetailDrawer
-              appointment={selectedAppointment}
-              now={now}
-              onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
-              request={selectedRequest}
-              selectionKind={selection.kind}
-              technician={technicianLabel(
-                dashboard.technicians,
-                selectedAppointment?.technicianId ?? fallbackRequest?.technicianId,
-              )}
-            />
-          )}
+          <DetailDrawer
+            appointment={selectedAppointment}
+            calendarWriteEnabled={canUseLiveSchedule(dashboard)}
+            now={now}
+            onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
+            onSyncCalendar={syncSelectedCalendarEvent}
+            request={selectedRequest}
+            selectionKind={selection.kind}
+            technician={technicianLabel(
+              dashboard.technicians,
+              selectedAppointment?.technicianId ?? fallbackRequest?.technicianId,
+            )}
+          />
         </section>
         {pendingSchedule ? (
           <ScheduleConfirmModal
+            liveSchedule={Boolean(
+              pendingRequest && canUseLiveSchedule(dashboard, pendingRequest),
+            )}
             pending={pendingSchedule}
             request={pendingRequest}
             technicians={dashboard.technicians}
             onCancel={() => setPendingSchedule(undefined)}
             onConfirm={confirmPendingSchedule}
+            onBookingTypeChange={updatePendingBookingType}
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
             onTechnicianChange={updatePendingTechnician}
@@ -1391,16 +1934,34 @@ export function CommandCentrePrototype({
             appointment={dashboard.appointments.find(
               (appointment) => appointment.requestId === workLogRequestId,
             )}
+            key={workLogRequestId}
+            liveWriteback={
+              dashboard.dispatchDataSource === "msp-central" &&
+              dashboard.requests.find(
+                (request) => request.id === workLogRequestId,
+              )?.sourceSystem === "msp-central"
+            }
             onCancel={() => setWorkLogRequestId(undefined)}
             onSave={saveWorkLog}
             request={dashboard.requests.find(
               (request) => request.id === workLogRequestId,
             )}
+            technicians={dashboard.technicians}
             technician={technicianLabel(
               dashboard.technicians,
               dashboard.requests.find((request) => request.id === workLogRequestId)
                 ?.technicianId,
             )}
+          />
+        ) : null}
+        {mergeRequestId ? (
+          <MergeRequestModal
+            childRequest={dashboard.requests.find(
+              (request) => request.id === mergeRequestId,
+            )}
+            requests={dashboard.requests}
+            onCancel={() => setMergeRequestId(undefined)}
+            onConfirm={mergeRequestIntoParent}
           />
         ) : null}
         {toast ? (
@@ -1439,6 +2000,98 @@ async function publishDispatchTestSyncEvent(
   }
 }
 
+async function publishLiveSchedule(event: {
+  bookingType?: BookingType;
+  customer: string;
+  date: string;
+  end: string;
+  eventId?: string;
+  location: string;
+  requestId: string;
+  requestNumber: string;
+  start: string;
+  subject: string;
+  technicianName: string;
+  technicianEmail?: string;
+  userPrincipalName: string;
+}): Promise<LiveScheduleResult> {
+  const response = await fetch("/api/internal/dispatch/live-schedule", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; event?: LiveScheduleResult }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "Live schedule write failed.");
+  }
+
+  return body?.event ?? {};
+}
+
+async function publishMspCentralRequestMerge(event: {
+  childRequestId: string;
+  parentRequestId: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/merge-requests", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central request merge failed.");
+  }
+}
+
+async function publishMspCentralWorklog(
+  event: import("@/server/worklogs/disposition").WorklogDispositionCommand,
+) {
+  const response = await fetch("/api/internal/msp-central/worklogs", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; status?: "completed" | "recovery_required" }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central Work Log save failed.");
+  }
+  return {
+    error: body?.error,
+    status: body?.status ?? ("completed" as const),
+  };
+}
+
+async function loadMspCentralRequestContext(requestId: string) {
+  const response = await fetch(
+    `/api/internal/msp-central/requests/${encodeURIComponent(requestId)}/context`,
+    { cache: "no-store" },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | (MspCentralRequestContext & { error?: string })
+    | null;
+
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Latest ticket information could not be loaded.");
+  }
+
+  return body;
+}
+
 function testSyncErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
@@ -1446,12 +2099,311 @@ function testSyncErrorMessage(error: unknown) {
   return `Mock schedule did not save: ${message}`;
 }
 
-function bookingTypeForRequest(request: DispatchRequest): BookingType {
-  return request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite");
+function liveScheduleErrorMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Live schedule write failed.";
+
+  return `Live schedule did not save: ${message}`;
 }
 
-function ScheduleConfirmModal({
+function canUseLiveSchedule(
+  dashboard: DispatchDashboardData,
+  request?: DispatchRequest,
+) {
+  return (
+    request?.sourceSystem === "msp-central" &&
+    dashboard.dispatchDataSource === "msp-central" &&
+    dashboard.calendarDataSource === "outlook" &&
+    dashboard.calendarReadOnly === false
+  );
+}
+
+function technicianOutlookIdentity(technicians: Technician[], technicianId: string) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+  const identity =
+    technician?.outlookUserPrincipalName ?? technician?.outlookEmail;
+
+  if (!identity) {
+    throw new Error("Technician does not have an Outlook calendar identity.");
+  }
+
+  return identity;
+}
+
+function technicianMspCentralIdentity(
+  technicians: Technician[],
+  technicianId: string,
+) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+
+  return technician?.mspCentralEmail ?? technician?.zohoEmail;
+}
+
+function MergeRequestModal({
+  childRequest,
   onCancel,
+  onConfirm,
+  requests,
+}: {
+  childRequest?: DispatchRequest;
+  onCancel: () => void;
+  onConfirm: (parentRequestId: string) => Promise<void>;
+  requests: DispatchRequest[];
+}) {
+  const [step, setStep] = useState<"search" | "confirm">("search");
+  const [search, setSearch] = useState("");
+  const [parentRequestId, setParentRequestId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  if (!childRequest) {
+    return null;
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const searchResults = normalizedSearch
+    ? requests
+        .filter((request) => request.id !== childRequest.id)
+        .filter((request) =>
+          [
+            request.requestNumber,
+            request.subject,
+            request.customer,
+            request.site,
+            request.requester,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch),
+        )
+        .slice(0, 8)
+    : [];
+  const parentRequest = requests.find(
+    (request) => request.id === parentRequestId,
+  );
+
+  async function confirmMerge() {
+    if (!parentRequest) {
+      return;
+    }
+
+    setSaving(true);
+    setError(undefined);
+
+    try {
+      await onConfirm(parentRequest.id);
+    } catch (mergeError) {
+      setError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : "MSP Central request merge failed.",
+      );
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6">
+      <section
+        aria-label={step === "search" ? "Merge request" : "Confirm request merge"}
+        aria-modal="true"
+        className="w-full max-w-2xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+              MSP Central
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">
+              {step === "search" ? "Merge request" : "Confirm request merge"}
+            </h2>
+          </div>
+          <GitMerge className="h-5 w-5 text-cc-orange" />
+        </div>
+
+        {step === "search" ? (
+          <>
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Duplicate ticket
+              </p>
+              <MergeRequestSummary request={childRequest} tone="duplicate" />
+            </div>
+
+            <label className="mt-4 block text-sm font-semibold text-slate-200">
+              Find the surviving parent
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 focus-within:border-cc-orange/50">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                  placeholder="Search request number, subject or customer"
+                  type="search"
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setParentRequestId(undefined);
+                  }}
+                />
+              </div>
+            </label>
+
+            <div className="mt-3 max-h-64 space-y-2 overflow-auto">
+              {!normalizedSearch ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  Search the loaded Helpdesk requests.
+                </div>
+              ) : null}
+              {normalizedSearch && searchResults.length === 0 ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  No matching requests
+                </div>
+              ) : null}
+              {searchResults.map((request) => (
+                <button
+                  key={request.id}
+                  aria-label={`Select ${request.requestNumber} as surviving parent`}
+                  aria-pressed={parentRequestId === request.id}
+                  className={`w-full rounded-md border p-3 text-left transition ${
+                    parentRequestId === request.id
+                      ? "border-cc-orange/70 bg-cc-orange/12"
+                      : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                  }`}
+                  type="button"
+                  onClick={() => setParentRequestId(request.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-mono text-xs text-cc-orange">
+                        {request.requestNumber}
+                      </div>
+                      <div className="mt-1 font-semibold text-slate-100">
+                        {request.subject}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {request.customer} / {request.site}
+                      </div>
+                    </div>
+                    <PriorityChip priority={request.priority} />
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
+                type="button"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!parentRequest}
+                type="button"
+                onClick={() => setStep("confirm")}
+              >
+                Review merge
+              </button>
+            </div>
+          </>
+        ) : parentRequest ? (
+          <>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                  Duplicate removed
+                </p>
+                <MergeRequestSummary request={childRequest} tone="duplicate" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                  Surviving parent
+                </p>
+                <MergeRequestSummary request={parentRequest} tone="parent" />
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-start gap-3 rounded-md border border-rose-300/30 bg-rose-400/10 p-3 text-sm text-rose-50">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-semibold">
+                  This merge is effectively irreversible.
+                </div>
+                <p className="mt-1 text-rose-100/80">
+                  {childRequest.requestNumber} will disappear and its history will
+                  be merged into {parentRequest.requestNumber}.
+                </p>
+              </div>
+            </div>
+
+            {error ? (
+              <div className="mt-3 rounded-md border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">
+                {error}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-40"
+                disabled={saving}
+                type="button"
+                onClick={() => {
+                  setError(undefined);
+                  setStep("search");
+                }}
+              >
+                Back
+              </button>
+              <button
+                className="rounded-md bg-rose-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50"
+                disabled={saving}
+                type="button"
+                onClick={confirmMerge}
+              >
+                {saving ? "Merging..." : "Merge duplicate into parent"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function MergeRequestSummary({
+  request,
+  tone,
+}: {
+  request: DispatchRequest;
+  tone: "duplicate" | "parent";
+}) {
+  return (
+    <div
+      className={`mt-2 rounded-md border p-3 ${
+        tone === "duplicate"
+          ? "border-rose-300/20 bg-rose-400/[0.06]"
+          : "border-emerald-300/20 bg-emerald-400/[0.06]"
+      }`}
+    >
+      <div className="font-mono text-xs text-cc-orange">
+        {request.requestNumber}
+      </div>
+      <div className="mt-1 font-semibold text-slate-100">{request.subject}</div>
+      <div className="mt-1 text-xs text-slate-400">
+        {request.customer} / {request.site}
+      </div>
+    </div>
+  );
+}
+
+export function ScheduleConfirmModal({
+  liveSchedule,
+  onCancel,
+  onBookingTypeChange,
   onConfirm,
   onDurationChange,
   onStartChange,
@@ -1460,7 +2412,9 @@ function ScheduleConfirmModal({
   request,
   technicians,
 }: {
+  liveSchedule: boolean;
   onCancel: () => void;
+  onBookingTypeChange: (bookingType: BookingType) => void;
   onConfirm: () => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
@@ -1497,14 +2451,14 @@ function ScheduleConfirmModal({
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
-              Confirm mock schedule
+              {liveSchedule ? "Confirm live schedule" : "Confirm mock schedule"}
             </p>
             <h2 className="mt-2 text-xl font-semibold">
               {pending.kind === "request" ? "Schedule request" : "Move appointment"}
             </h2>
           </div>
           <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-xs font-semibold text-amber-100">
-            Mock only
+            {liveSchedule ? "MSP Central + Outlook" : "Mock only"}
           </span>
         </div>
 
@@ -1578,20 +2532,41 @@ function ScheduleConfirmModal({
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-200">
-            Duration
+            Job duration
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
               value={pending.durationMinutes}
               onChange={(event) => onDurationChange(Number(event.target.value))}
             >
-              {[30, 60, 90, 120, 150, 180].map((duration) => (
+              {[15, 30, 45, 60, 90, 120, 150, 180].map((duration) => (
                 <option key={duration} value={duration}>
                   {formatDuration(duration)}
                 </option>
               ))}
             </select>
           </label>
+          <label className="block text-sm font-semibold text-slate-200">
+            Booking type
+            <select
+              aria-label="Booking type"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              value={pending.bookingType}
+              onChange={(event) =>
+                onBookingTypeChange(event.target.value as BookingType)
+              }
+            >
+              <option value="Remote">Remote</option>
+              <option value="Onsite">Onsite</option>
+              <option value="In house">In house</option>
+            </select>
+          </label>
         </div>
+
+        {pending.bookingType === "Onsite" ? (
+          <p className="mt-2 text-xs text-slate-400">
+            Includes 15 minutes for onsite notes.
+          </p>
+        ) : null}
 
         {pending.travel ? (
           <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3 text-sm">
@@ -1662,7 +2637,7 @@ function ScheduleConfirmModal({
             type="button"
             onClick={onConfirm}
           >
-            Confirm mock schedule
+            {liveSchedule ? "Confirm schedule" : "Confirm mock schedule"}
           </button>
         </div>
       </section>
@@ -1672,56 +2647,206 @@ function ScheduleConfirmModal({
 
 function WorkLogModal({
   appointment,
+  liveWriteback,
   onCancel,
   onSave,
   request,
   technician,
+  technicians,
 }: {
   appointment?: Appointment;
+  liveWriteback: boolean;
   onCancel: () => void;
   onSave: (input: {
     billable: boolean;
-    complete: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
     minutes: string;
     notes: string;
+    transfer?: WorklogTransfer;
     visibility: "external" | "internal";
     workType: string;
-  }) => void;
+  }) => Promise<void>;
   request?: DispatchRequest;
   technician: string;
+  technicians: Technician[];
 }) {
-  const [billable, setBillable] = useState(request?.billable ?? true);
-  const [minutes, setMinutes] = useState("");
+  const resolvedBookingType =
+    appointment?.bookingType ??
+    request?.bookingType ??
+    (request?.onsite === true
+      ? "Onsite"
+      : request?.onsite === false
+        ? "Remote"
+        : undefined);
+  const chargeableTime = getChargeableTicketTime({
+    appointment,
+    bookingType: resolvedBookingType,
+  });
+  const [minutes, setMinutes] = useState(
+    String(Math.max(1, chargeableTime.totalMinutes)),
+  );
   const [notes, setNotes] = useState("");
   const [visibility, setVisibility] = useState<"external" | "internal">(
     "external",
   );
-  const [workType, setWorkType] = useState("billable");
+  const [workType, setWorkType] = useState(
+    request?.billable === false ? "non_billable" : "billable",
+  );
+  const scheduled = Boolean(appointment || request?.scheduledStart);
+  const [disposition, setDisposition] = useState<WorklogDisposition>();
+  const [idempotencyKey] = useState(
+    () => `worklog-${request?.id ?? "request"}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const [forwardTechnicianId, setForwardTechnicianId] = useState(
+    appointment?.technicianId ?? request?.technicianId ?? technicians[0]?.id ?? "",
+  );
+  const [forwardDate, setForwardDate] = useState(
+    appointment?.date ?? todayDateKey(),
+  );
+  const [forwardStart, setForwardStart] = useState(appointment?.end ?? "09:00");
+  const [forwardBookingType, setForwardBookingType] =
+    useState<BookingType>(resolvedBookingType ?? "Remote");
+  const [forwardEnd, setForwardEnd] = useState(() =>
+    timeFromMinutes(
+      minutesFromTime(appointment?.end ?? "09:00") +
+        bookingTiming(60, resolvedBookingType ?? "Remote").totalDurationMinutes,
+    ),
+  );
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [requestContext, setRequestContext] =
+    useState<MspCentralRequestContext>();
+  const [contextStatus, setContextStatus] = useState<
+    "idle" | "loading" | "loaded" | "failed"
+  >(liveWriteback ? "loading" : "idle");
+  const [contextError, setContextError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    if (!liveWriteback || !request?.id) {
+      return () => {
+        active = false;
+      };
+    }
+
+    loadMspCentralRequestContext(request.id)
+      .then((context) => {
+        if (!active) return;
+        setRequestContext(context);
+        setContextStatus("loaded");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setContextStatus("failed");
+        setContextError(
+          error instanceof Error
+            ? error.message
+            : "Latest ticket information could not be loaded.",
+        );
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [liveWriteback, request?.id]);
 
   if (!request) {
     return null;
   }
+
+  const latestRequest = requestContext?.request ?? request;
 
   const scheduledTime = appointment
     ? `${appointment.start}-${appointment.end}`
     : request.scheduledStart
       ? `${formatTime(request.scheduledStart)}-${formatTime(request.scheduledEnd ?? request.scheduledStart)}`
       : "Not scheduled";
-  const bookingType =
-    request.onsite === true ? "Onsite" : request.onsite === false ? "Remote" : "Not set";
+  const bookingType = resolvedBookingType ?? "Not set";
+  const billable = workType === "billable";
+  const selectedForwardTechnician = technicians.find(
+    (candidate) => candidate.id === forwardTechnicianId,
+  );
+  const selectedTransferTechnician = technicians.find(
+    (candidate) => candidate.id === transferTargetId,
+  );
+  const outcomeComplete =
+    !scheduled ||
+    (disposition === "book_forward"
+      ? Boolean(
+          selectedForwardTechnician &&
+            forwardDate &&
+            forwardStart &&
+            forwardEnd &&
+            minutesFromTime(forwardEnd) > minutesFromTime(forwardStart),
+        )
+      : disposition === "transfer_escalate"
+        ? Boolean(selectedTransferTechnician && transferReason.trim())
+        : Boolean(disposition));
+
+  async function submitWorklog() {
+    if (!outcomeComplete || submitting) return;
+    setSubmitting(true);
+    try {
+      const booking: WorklogForwardBooking | undefined =
+        disposition === "book_forward" && selectedForwardTechnician
+          ? {
+              bookingType: forwardBookingType,
+              customer: request?.customer,
+              date: forwardDate,
+              end: forwardEnd,
+              location: request?.siteAddress || request?.site,
+              requestNumber: request?.requestNumber ?? "",
+              start: forwardStart,
+              subject: request?.subject ?? "",
+              technicianEmail: selectedForwardTechnician.mspCentralEmail,
+              technicianId: selectedForwardTechnician.id,
+              technicianName: selectedForwardTechnician.displayName,
+              userPrincipalName:
+                selectedForwardTechnician.outlookUserPrincipalName ??
+                selectedForwardTechnician.outlookEmail,
+            }
+          : undefined;
+      const transfer: WorklogTransfer | undefined =
+        disposition === "transfer_escalate" && selectedTransferTechnician
+          ? {
+              reason: transferReason,
+              targetEmail: selectedTransferTechnician.mspCentralEmail,
+              targetTechnicianId: selectedTransferTechnician.id,
+              targetTechnicianName: selectedTransferTechnician.displayName,
+            }
+          : undefined;
+      await onSave({
+        billable,
+        booking,
+        disposition,
+        idempotencyKey,
+        minutes,
+        notes,
+        transfer,
+        visibility,
+        workType,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
       <section
         aria-labelledby="work-log-title"
         aria-modal="true"
-        className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        className="flex h-[96vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-lg border border-cc-orange/20 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        data-layout="full-screen-split"
         role="dialog"
       >
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
-              Mock/test-sync only
+              {liveWriteback ? "MSP Central" : "Mock/test-sync only"}
             </p>
             <h2 id="work-log-title" className="mt-2 text-xl font-semibold">
               Work Log
@@ -1737,42 +2862,97 @@ function WorkLogModal({
           </button>
         </div>
 
-        <section className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+        <section
+          aria-label="Ticket information"
+          className="min-h-0 overflow-y-auto p-4 sm:p-5"
+        >
+        <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
           <h3 className="text-sm font-semibold text-slate-50">
             Latest job information
           </h3>
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            <DetailInline label="Request number" value={request.requestNumber} />
-            <DetailInline label="Subject" value={request.subject} />
+            <DetailInline label="Request number" value={latestRequest.requestNumber} />
+            <DetailInline label="Subject" value={latestRequest.subject} />
             <DetailInline
               label="Customer/site"
-              value={`${request.customer} / ${request.site}`}
+              value={`${latestRequest.customer} / ${latestRequest.site}`}
             />
-            <DetailInline label="Status" value={request.status} />
-            <DetailInline label="Priority" value={request.priority} />
+            <DetailInline label="Status" value={latestRequest.status} />
+            <DetailInline label="Priority" value={latestRequest.priority} />
             <DetailInline label="Technician" value={technician} />
             <DetailInline label="Scheduled time" value={scheduledTime} />
-            <DetailInline label="Due time" value={formatDateTime(request.dueAt)} />
+            <DetailInline
+              label="Due time"
+              value={formatDateTime(latestRequest.dueAt)}
+            />
             <DetailInline label="Booking type" value={bookingType} />
+            {chargeableTime.travelMinutes > 0 ? (
+              <DetailInline
+                label="Chargeable time"
+                value={`${chargeableTime.jobMinutes} min job + ${chargeableTime.travelMinutes} min travel = ${chargeableTime.totalMinutes} min`}
+              />
+            ) : null}
             <DetailInline
               label="Contact"
-              value={`${request.requester} / ${request.contact}`}
+              value={`${latestRequest.requester} / ${latestRequest.contact}`}
             />
             <DetailInline
               label="Site/address"
-              value={request.siteAddress || request.site}
-            />
-            <DetailInline
-              label="Current/latest notes"
-              value={
-                request.notes ??
-                "No current notes recorded in Command Centre yet."
-              }
+              value={latestRequest.siteAddress || latestRequest.site}
             />
           </div>
+
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <h4 className="text-xs font-semibold uppercase text-slate-300">
+              Job description
+            </h4>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-slate-100">
+              {latestRequest.notes ?? "No job description is recorded in MSP Central."}
+            </p>
+          </div>
+
+          {contextStatus === "loading" ? (
+            <p className="mt-4 text-xs text-slate-400">
+              Loading latest customer responses and notes...
+            </p>
+          ) : null}
+          {contextStatus === "failed" ? (
+            <p className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+              {contextError}
+            </p>
+          ) : null}
+          {requestContext ? (
+            <div className="mt-4 grid gap-4">
+              <TicketUpdateList
+                emptyLabel="No previous work logs are recorded."
+                title="Previous work logs"
+                updates={requestContext.worklogs ?? []}
+                warning={requestContext.worklogsWarning}
+              />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TicketUpdateList
+                  emptyLabel="No customer responses are recorded."
+                  title="Customer responses"
+                  updates={requestContext.customerResponses}
+                />
+                <TicketUpdateList
+                  emptyLabel="No technician or internal notes are recorded."
+                  title="Internal notes"
+                  updates={requestContext.internalNotes}
+                  warning={requestContext.notesWarning}
+                />
+              </div>
+            </div>
+          ) : null}
+        </section>
         </section>
 
-        <div className="mt-5 grid gap-4">
+        <section
+          aria-label="Work Log entry"
+          className="min-h-0 overflow-y-auto border-t border-white/10 bg-black/10 p-4 lg:border-l lg:border-t-0 sm:p-5"
+        >
+        <div className="grid gap-4">
           <label className="block text-sm font-semibold text-slate-200">
             Work Log notes
             <textarea
@@ -1802,7 +2982,16 @@ function WorkLogModal({
                 aria-label="Work type"
                 className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
                 value={workType}
-                onChange={(event) => setWorkType(event.target.value)}
+                onChange={(event) => {
+                  const nextWorkType = event.target.value;
+                  setWorkType(nextWorkType);
+
+                  if (nextWorkType === "billable") {
+                    setVisibility("external");
+                  } else if (nextWorkType === "internal") {
+                    setVisibility("internal");
+                  }
+                }}
               >
                 <option value="billable">Billable</option>
                 <option value="non_billable">Non-billable</option>
@@ -1820,6 +3009,7 @@ function WorkLogModal({
                 <input
                   aria-label="Customer-facing"
                   checked={visibility === "external"}
+                  disabled={workType === "internal"}
                   name="worklog-visibility"
                   type="radio"
                   value="external"
@@ -1831,6 +3021,7 @@ function WorkLogModal({
                 <input
                   aria-label="Internal"
                   checked={visibility === "internal"}
+                  disabled={workType === "billable"}
                   name="worklog-visibility"
                   type="radio"
                   value="internal"
@@ -1841,20 +3032,153 @@ function WorkLogModal({
             </div>
           </fieldset>
 
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-            <input
-              aria-label="Billable"
-              checked={billable}
-              type="checkbox"
-              onChange={(event) => setBillable(event.target.checked)}
-            />
-            Billable
-          </label>
+          {scheduled ? (
+            <fieldset className="rounded-md border border-cc-orange/25 bg-cc-orange/[0.04] p-3">
+              <legend className="px-1 text-sm font-semibold text-slate-100">
+                Outcome
+              </legend>
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                {(
+                  [
+                    ["complete", "Complete ticket"],
+                    ["return_to_queue", "Return to queue"],
+                    ["book_forward", "Book forward"],
+                    ["transfer_escalate", "Transfer / escalate"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <label
+                    className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 ${
+                      disposition === value
+                        ? "border-cc-orange/60 bg-cc-orange/10 text-white"
+                        : "border-white/10 bg-white/[0.03] text-slate-300"
+                    }`}
+                    key={value}
+                  >
+                    <input
+                      aria-label={label}
+                      checked={disposition === value}
+                      name="worklog-outcome"
+                      type="radio"
+                      value={value}
+                      onChange={() => setDisposition(value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ) : null}
+
+          {disposition === "book_forward" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-200">
+                Technician
+                <select
+                  aria-label="Forward technician"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardTechnicianId}
+                  onChange={(event) => setForwardTechnicianId(event.target.value)}
+                >
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Date
+                <input
+                  aria-label="Forward date"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  type="date"
+                  value={forwardDate}
+                  onChange={(event) => setForwardDate(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Start
+                <input
+                  aria-label="Forward start time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardStart}
+                  onChange={(event) => setForwardStart(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                End
+                <input
+                  aria-label="Forward end time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardEnd}
+                  onChange={(event) => setForwardEnd(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200 sm:col-span-2">
+                Booking type
+                <select
+                  aria-label="Forward booking type"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardBookingType}
+                  onChange={(event) => {
+                    const nextType = event.target.value as BookingType;
+                    setForwardBookingType(nextType);
+                    setForwardEnd(
+                      timeFromMinutes(
+                        minutesFromTime(forwardStart) +
+                          bookingTiming(60, nextType).totalDurationMinutes,
+                      ),
+                    );
+                  }}
+                >
+                  <option value="Remote">Remote</option>
+                  <option value="Onsite">Onsite</option>
+                  <option value="In house">In house</option>
+                </select>
+              </label>
+            </section>
+          ) : null}
+
+          {disposition === "transfer_escalate" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <label className="text-sm font-semibold text-slate-200">
+                Transfer target
+                <select
+                  aria-label="Transfer target"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferTargetId}
+                  onChange={(event) => setTransferTargetId(event.target.value)}
+                >
+                  <option value="">Select technician</option>
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Reason
+                <textarea
+                  aria-label="Transfer reason"
+                  className="mt-2 min-h-20 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferReason}
+                  onChange={(event) => setTransferReason(event.target.value)}
+                />
+              </label>
+            </section>
+          ) : null}
+
         </div>
 
         <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
-          MSP Central live Work Log writeback is not enabled here. These actions
-          are local/test-sync only and do not use Zoho login tokens for MSP API calls.
+          {liveWriteback
+            ? "Saving writes this Work Log and its charged time to MSP Central. Onsite travel is included in the ticket time."
+            : "This request is not a live MSP Central ticket. The Work Log remains local/test-sync only."}
         </div>
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -1866,23 +3190,27 @@ function WorkLogModal({
             Cancel
           </button>
           <button
-            className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-4 py-2 text-sm font-semibold text-cc-orange"
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!outcomeComplete || submitting}
             type="button"
-            onClick={() =>
-              onSave({ billable, complete: false, minutes, notes, visibility, workType })
-            }
+            onClick={submitWorklog}
           >
-            Save Work Log
+            {submitting
+              ? "Saving..."
+              : !scheduled
+                ? "Save Work Log"
+                : disposition === "complete"
+                  ? "Save Work Log and complete ticket"
+                  : disposition === "return_to_queue"
+                    ? "Save Work Log and return to queue"
+                    : disposition === "book_forward"
+                      ? "Save Work Log and book forward"
+                      : disposition === "transfer_escalate"
+                        ? "Save Work Log and transfer"
+                        : "Choose an outcome"}
           </button>
-          <button
-            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1"
-            type="button"
-            onClick={() =>
-              onSave({ billable, complete: true, minutes, notes, visibility, workType })
-            }
-          >
-            Save and complete ticket
-          </button>
+        </div>
+        </section>
         </div>
       </section>
     </div>
@@ -1914,6 +3242,106 @@ function ScheduleSummary({
   );
 }
 
+export function ReadOnlyDispatchCalendar({
+  data,
+  dateKey,
+  now,
+  viewMode,
+}: {
+  data: DispatchDashboardData;
+  dateKey: string;
+  now: Date;
+  viewMode: ViewMode;
+}) {
+  const weekDays = useMemo(() => getWeekRange(dateKey), [dateKey]);
+  const dayAppointments = useMemo(
+    () => appointmentsForDate(data.appointments, dateKey),
+    [data.appointments, dateKey],
+  );
+  const weekAppointments = useMemo(
+    () =>
+      appointmentsForRange(
+        data.appointments,
+        weekDays.map((day) => day.dateKey),
+      ),
+    [data.appointments, weekDays],
+  );
+  const currentTimeIndicator = useMemo(
+    () => getCurrentTimeIndicator(dateKey, now),
+    [dateKey, now],
+  );
+  const weekToday = useMemo(
+    () => getWeekTodayDateKey(weekDays, now),
+    [now, weekDays],
+  );
+  const seenUpdates = useMemo(() => new Set<string>(), []);
+  const ignoreAppointment = () => undefined;
+  const ignoreDrop = () => undefined;
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2">
+        <div>
+          <p className="text-[10px] font-semibold uppercase text-slate-400">
+            Schedule
+          </p>
+          <h2 className="text-base font-semibold">
+            {viewMode === "week" ? "Weekly planner" : "Technician timeline"}
+          </h2>
+          <p className="text-[11px] text-slate-400">
+            {viewMode === "week"
+              ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
+              : "9:00 AM - 5:00 PM"}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-slate-300">
+          <Legend color="bg-sky-400" label="Scheduled" />
+          <Legend color="bg-amber-400" label="Warning" />
+          <Legend color="bg-rose-500" label="Conflict" />
+        </div>
+      </div>
+      <div className="pointer-events-none flex min-h-0 flex-1 flex-col">
+        {viewMode === "week" ? (
+          <WeekPlanner
+            appointments={weekAppointments}
+            readOnly
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            technicians={data.technicians}
+            todayDateKey={weekToday}
+            weekDays={weekDays}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDateOpen={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onWeekDrop={ignoreDrop}
+          />
+        ) : (
+          <TimelineBoard
+            appointments={dayAppointments}
+            currentTimeIndicator={currentTimeIndicator}
+            globalSearch=""
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            stackOverlaps
+            technicians={data.technicians}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onTimelineDrop={ignoreDrop}
+            onTimelineHover={ignoreDrop}
+          />
+        )}
+      </div>
+      {data.calendarError ? (
+        <div className="border-t border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-50">
+          {data.calendarError}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CommandHeader({
   authDisabled,
   calendarStatusLabel,
@@ -1927,6 +3355,7 @@ function CommandHeader({
   onSearchChange,
   onToday,
   onViewModeChange,
+  technicians,
   timezone,
   viewMode,
 }: {
@@ -1942,6 +3371,7 @@ function CommandHeader({
   onSearchChange: (value: string) => void;
   onToday: () => void;
   onViewModeChange: (mode: ViewMode) => void;
+  technicians: Technician[];
   timezone: string;
   viewMode: ViewMode;
 }) {
@@ -2039,6 +3469,21 @@ function CommandHeader({
               </button>
             ) : null}
           </label>
+          <PresenceControls technicians={technicians} />
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/calls"
+          >
+            <PhoneCall className="h-4 w-4" />
+            Calls
+          </Link>
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/wallboard"
+          >
+            <Monitor className="h-4 w-4" />
+            Wallboard
+          </Link>
           {authDisabled ? null : (
             <button
               className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200"
@@ -2164,72 +3609,160 @@ function QueueFilterMenu({
 
 function RequestQueueCard({
   active,
+  hasUnreadUpdate,
+  mergeEnabled,
   onDragEnd,
   onDragStart,
+  onMerge,
   onSelect,
   request,
   technician,
 }: {
   active: boolean;
+  hasUnreadUpdate: boolean;
+  mergeEnabled: boolean;
   onDragEnd: () => void;
   onDragStart: () => void;
+  onMerge: () => void;
   onSelect: () => void;
   request: DispatchRequest;
   technician: string;
 }) {
   return (
-    <button
-      aria-label={`${request.requestNumber} ${request.subject}`}
+    <article
       draggable
-      className={`w-full rounded-md border p-2.5 text-left transition ${
+      className={`w-full overflow-hidden rounded-md border text-left transition ${
         active
           ? "border-cc-orange/80 bg-cc-orange/15 shadow-[0_0_0_1px_rgba(255,130,58,0.28),0_14px_32px_rgba(255,130,58,0.16)]"
           : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.06]"
       }`}
-      type="button"
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", `request:${request.id}`);
         onDragStart();
       }}
-      onClick={onSelect}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="font-mono text-[11px] text-cc-orange">
-            {request.requestNumber}
+      <button
+        aria-label={`${request.requestNumber} ${request.subject}`}
+        className="w-full p-2.5 text-left"
+        type="button"
+        onClick={onSelect}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-mono text-[11px] text-cc-orange">
+              {request.requestNumber}
+            </div>
+            <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
+              {request.subject}
+            </div>
           </div>
-          <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
-            {request.subject}
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <PriorityChip priority={request.priority} />
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge dataTestId={`queue-ticket-update-${request.id}`} />
+            ) : null}
           </div>
         </div>
-        <PriorityChip priority={request.priority} />
-      </div>
-      <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
-        <span>{request.customer}</span>
-        <span>/</span>
-        <span>{request.site}</span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1">
-        <Badge tone="info">{request.status}</Badge>
-        <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
-          {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
-        </Badge>
-        {request.warnings.slice(0, 2).map((warning) => (
-          <Badge key={warning} tone="warning">
-            {warning}
+        <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
+          <span>{request.customer}</span>
+          {hasDisplayableSite(request.site) ? (
+            <>
+              <span>/</span>
+              <span>{request.site}</span>
+            </>
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge tone="info">{request.status}</Badge>
+          <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
+            {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
           </Badge>
-        ))}
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400">
-        <span>Age {request.ageHours}h</span>
-        <span>{request.billable ? "Billable" : "Non-billable"}</span>
-        <span>{technician}</span>
-        <span>Due {formatTime(request.dueAt)}</span>
-      </div>
-    </button>
+          {request.warnings.slice(0, 2).map((warning) => (
+            <Badge key={warning} tone="warning">
+              {warning}
+            </Badge>
+          ))}
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-x-2 text-[11px] text-slate-400">
+          <span>Age {request.ageHours}h</span>
+          <span className="truncate text-center">{technician}</span>
+          <span className="text-right">Due {formatTime(request.dueAt)}</span>
+        </div>
+      </button>
+      {mergeEnabled ? (
+        <div className="flex justify-end border-t border-white/[0.07] px-2 py-1">
+          <button
+            aria-label={`Merge ${request.requestNumber}`}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
+            draggable={false}
+            type="button"
+            onClick={onMerge}
+          >
+            <GitMerge className="h-3.5 w-3.5" />
+            Merge
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
+}
+
+function TicketUpdateList({
+  emptyLabel,
+  title,
+  updates,
+  warning,
+}: {
+  emptyLabel: string;
+  title: string;
+  updates: MspCentralRequestUpdate[];
+  warning?: string;
+}) {
+  return (
+    <section>
+      <h4 className="text-xs font-semibold uppercase text-slate-300">{title}</h4>
+      {warning ? (
+        <p className="mt-2 text-xs text-amber-200">{warning}</p>
+      ) : updates.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-400">{emptyLabel}</p>
+      ) : (
+        <div className="mt-2 grid max-h-40 gap-2 overflow-auto pr-1">
+          {updates.map((update) => (
+            <article
+              className="rounded-md border border-white/10 bg-[#111d30] p-2"
+              key={update.id}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                <span className="font-semibold text-slate-200">{update.author}</span>
+                <span className="flex flex-wrap items-center gap-2">
+                  {update.durationMinutes ? (
+                    <span>{formatWorklogDuration(update.durationMinutes)}</span>
+                  ) : null}
+                  {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
+                </span>
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-100">
+                {update.body}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatWorklogDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours === 0) {
+    return `${remainingMinutes}m`;
+  }
+
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function TimelineBoard({
@@ -2245,7 +3778,9 @@ function TimelineBoard({
   onTimelineDrop,
   onTimelineHover,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
+  stackOverlaps = false,
   technicians,
 }: {
   activeHealth?: string;
@@ -2268,7 +3803,9 @@ function TimelineBoard({
     start: string,
   ) => void;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
+  stackOverlaps?: boolean;
   technicians: Technician[];
 }) {
   const markers = timelineMarkers();
@@ -2347,29 +3884,38 @@ function TimelineBoard({
             className="relative h-10 bg-[#0f1b2e]"
             style={{ width: timelineTrackWidth }}
           >
-            {markers.map((marker) => (
-              <div
-                key={marker.time}
-                className="absolute inset-y-0 border-l border-white/10"
-                style={{ left: scaleTimelineX(marker.leftPx, timelineTrackWidth) }}
-              >
-                {marker.kind === "end" ? (
-                  <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
-                    {marker.label}
-                  </span>
-                ) : (
-                  <span
-                    className={`absolute top-3 whitespace-nowrap px-3 text-xs font-semibold text-slate-300 ${
-                      marker.time === "17:00"
-                        ? "hidden min-[1180px]:inline"
-                        : ""
-                    }`}
-                  >
-                    {marker.label}
-                  </span>
-                )}
-              </div>
-            ))}
+            {markers.map((marker) => {
+              const showLabel = shouldShowTimelineHourLabel(
+                marker.time,
+                timelineTrackWidth,
+              );
+
+              return (
+                <div
+                  key={marker.time}
+                  className="absolute inset-y-0 border-l border-white/10"
+                  style={{
+                    left: scaleTimelineX(marker.leftPx, timelineTrackWidth),
+                  }}
+                >
+                  {marker.kind === "end" ? (
+                    <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
+                      {marker.label}
+                    </span>
+                  ) : (
+                    <span
+                      className={`absolute top-3 whitespace-nowrap text-xs font-semibold text-slate-300 ${
+                        marker.time === "17:00"
+                          ? "-translate-x-1/2 px-1"
+                          : "px-3"
+                      } ${showLabel ? "" : "hidden"}`}
+                    >
+                      {marker.label}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
             <CurrentTimeHeaderMarker
               indicator={currentTimeIndicator}
               trackWidth={timelineTrackWidth}
@@ -2380,7 +3926,9 @@ function TimelineBoard({
           const laneAppointments = appointments.filter(
             (appointment) => appointment.technicianId === technician.id,
           );
-          const layout = buildTimelineLayout(laneAppointments);
+          const layout = stackOverlaps
+            ? buildStackedTimelineLayout(laneAppointments)
+            : buildTimelineLayout(laneAppointments);
           const rowHeight = Math.max(layout.rowHeight, distributedRowHeight);
           const rowExtra = Math.max(0, rowHeight - layout.rowHeight);
           const rowOffset = rowExtra / 2;
@@ -2497,6 +4045,12 @@ function TimelineBoard({
                       request={requests.find(
                         (request) => request.id === item.appointment.requestId,
                       )}
+                      hasUnreadUpdate={hasUnreadTicketUpdate(
+                        requests.find(
+                          (request) => request.id === item.appointment.requestId,
+                        ),
+                        seenTicketUpdateIds,
+                      )}
                       onBeginDrag={() => onBeginAppointmentDrag(item.appointment.id)}
                       onDragEnd={onDragEnd}
                       onSelect={() => onSelectAppointment(item.appointment)}
@@ -2528,7 +4082,9 @@ function WeekPlanner({
   onDragEnd,
   onSelectAppointment,
   onWeekDrop,
+  readOnly = false,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
   technicians,
   todayDateKey,
@@ -2545,22 +4101,37 @@ function WeekPlanner({
     technicianId: string,
     dateKey: string,
   ) => void;
+  readOnly?: boolean;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
   technicians: Technician[];
   todayDateKey?: string;
   weekDays: ReturnType<typeof getWeekRange>;
 }) {
   const grouped = groupWeekAppointments(appointments, technicians, weekDays);
+  const [expandedCell, setExpandedCell] = useState<
+    { dateKey: string; technicianId: string } | undefined
+  >();
+  const expandedTechnician = expandedCell
+    ? technicians.find((technician) => technician.id === expandedCell.technicianId)
+    : undefined;
+  const expandedDay = expandedCell
+    ? weekDays.find((day) => day.dateKey === expandedCell.dateKey)
+    : undefined;
+  const expandedAppointments =
+    expandedCell && expandedTechnician && expandedDay
+      ? grouped[expandedCell.technicianId]?.[expandedCell.dateKey] ?? []
+      : [];
 
   return (
     <div
-      className="min-h-0 flex-1 overflow-auto"
+      className="min-h-0 flex-1 overflow-hidden"
       data-testid="week-calendar-viewport"
     >
-      <div className="min-w-[980px]">
-        <div className="sticky top-0 z-40 grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10">
-          <div className="sticky left-0 z-50 bg-[#0f1b2e] px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
+      <div className="w-full">
+        <div className="grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10">
+          <div className="sticky left-0 z-30 bg-[#0f1b2e] px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
             Technician
           </div>
           {weekDays.map((day) => {
@@ -2589,9 +4160,9 @@ function WeekPlanner({
         {technicians.map((technician) => (
           <div
             key={technician.id}
-            className="grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
+            className="grid min-h-[96px] grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
           >
-            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-4 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
+            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-3 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-slate-50">
                   {technician.displayName}
@@ -2613,19 +4184,19 @@ function WeekPlanner({
             {weekDays.map((day) => {
               const cellAppointments = grouped[technician.id][day.dateKey];
               const visibleAppointments = cellAppointments.slice(0, 1);
-              const hiddenAppointmentCount =
-                cellAppointments.length - visibleAppointments.length;
+              const hiddenAppointments = cellAppointments.slice(1);
               const isToday = day.dateKey === todayDateKey;
               return (
                 <div
                   key={`${technician.id}-${day.dateKey}`}
-                  className={`h-[132px] overflow-hidden border-l p-1.5 ${
+                  className={`relative min-h-[96px] border-l p-1.5 ${
                     isToday
                       ? "border-cc-orange/20 bg-cc-orange/[0.045]"
                       : "border-white/[0.06] bg-cc-surface-1"
                   } ${
                     dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                   }`}
+                  data-testid={`week-cell-${technician.id}-${day.dateKey}`}
                   onDragOver={(event) => {
                     if (!dragPayload) {
                       return;
@@ -2648,8 +4219,15 @@ function WeekPlanner({
                         key={appointment.id}
                         active={selectedAppointmentId === appointment.id}
                         appointment={appointment}
+                        dataTestId="week-appointment-card"
                         request={requests.find(
                           (request) => request.id === appointment.requestId,
+                        )}
+                        hasUnreadUpdate={hasUnreadTicketUpdate(
+                          requests.find(
+                            (request) => request.id === appointment.requestId,
+                          ),
+                          seenTicketUpdateIds,
                         )}
                         onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                         onDragEnd={onDragEnd}
@@ -2657,16 +4235,22 @@ function WeekPlanner({
                       />
                     ))}
                   </div>
-                  {hiddenAppointmentCount > 0 ? (
+                  {hiddenAppointments.length > 0 ? (
                     <button
-                      className="mt-1.5 w-full rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-center text-[11px] font-semibold text-slate-300 hover:border-cyan-200/30 hover:text-cyan-100"
+                      aria-label={`Show ${hiddenAppointments.length} more ${technician.displayName} bookings on ${day.shortLabel}`}
+                      className="mt-1.5 w-full rounded-md border border-cc-orange/20 bg-cc-orange/10 px-2 py-1 text-center text-[11px] font-bold text-cc-orange transition hover:border-cc-orange/45 hover:bg-cc-orange/16"
                       type="button"
-                      onClick={() => onDateOpen(day.dateKey)}
+                      onClick={() =>
+                        setExpandedCell({
+                          dateKey: day.dateKey,
+                          technicianId: technician.id,
+                        })
+                      }
                     >
-                      +{hiddenAppointmentCount} more — open day
+                      +{hiddenAppointments.length}
                     </button>
                   ) : null}
-                  {cellAppointments.length === 0 ? (
+                  {cellAppointments.length === 0 && !readOnly ? (
                     <div className="rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-[11px] text-slate-500">
                       Drop here
                     </div>
@@ -2677,6 +4261,59 @@ function WeekPlanner({
           </div>
         ))}
       </div>
+      {expandedCell && expandedTechnician && expandedDay ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-6">
+          <section
+            aria-label={`${expandedTechnician.displayName} bookings on ${expandedDay.shortLabel}`}
+            className="max-h-[72vh] w-full max-w-xl overflow-hidden rounded-lg border border-cc-orange/25 bg-cc-surface-1 shadow-2xl"
+            data-testid="week-overflow-reveal"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+                  Week bookings
+                </p>
+                <h3 className="mt-0.5 text-base font-semibold text-slate-50">
+                  {expandedTechnician.displayName} · {expandedDay.shortLabel}
+                </h3>
+              </div>
+              <button
+                aria-label="Close week bookings"
+                className="rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-200 hover:border-white/25"
+                type="button"
+                onClick={() => setExpandedCell(undefined)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[calc(72vh-76px)] space-y-2 overflow-auto p-3">
+              {expandedAppointments.map((appointment) => (
+                <WeekAppointmentCard
+                  key={appointment.id}
+                  active={selectedAppointmentId === appointment.id}
+                  appointment={appointment}
+                  dataTestId="week-overflow-appointment"
+                  request={requests.find(
+                    (request) => request.id === appointment.requestId,
+                  )}
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    requests.find(
+                      (request) => request.id === appointment.requestId,
+                    ),
+                    seenTicketUpdateIds,
+                  )}
+                  onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
+                  onDragEnd={onDragEnd}
+                  onSelect={() => {
+                    onSelectAppointment(appointment);
+                    setExpandedCell(undefined);
+                  }}
+                />
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2684,6 +4321,8 @@ function WeekPlanner({
 function WeekAppointmentCard({
   active,
   appointment,
+  dataTestId,
+  hasUnreadUpdate,
   onBeginDrag,
   onDragEnd,
   onSelect,
@@ -2691,24 +4330,26 @@ function WeekAppointmentCard({
 }: {
   active: boolean;
   appointment: Appointment;
+  dataTestId?: string;
+  hasUnreadUpdate: boolean;
   onBeginDrag: () => void;
   onDragEnd: () => void;
   onSelect: () => void;
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const priorityClass = bookingCardPriorityClass(request?.priority);
 
   return (
     <button
       aria-label={`${appointment.title} ${appointment.customer}`}
       aria-pressed={active}
-      draggable
-      className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${
+      data-testid={dataTestId}
+      draggable={!appointment.readOnly}
+      className={`w-full cursor-pointer rounded-md border px-2 py-1.5 text-left text-xs transition hover:-translate-y-0.5 ${
         active
           ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
-          : warning
-            ? "border-amber-300/50 bg-amber-300/15 text-amber-50"
-            : "border-sky-300/40 bg-sky-300/12 text-sky-50"
+          : `${priorityClass} ${warning ? "ring-1 ring-amber-200/70" : ""}`
       }`}
       type="button"
       onClick={onSelect}
@@ -2720,15 +4361,32 @@ function WeekAppointmentCard({
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="font-mono text-[11px] font-semibold">
+        <span className="flex items-center gap-1 font-mono text-[11px] font-semibold">
+          {appointment.activityType === "external_call" ? (
+            <PhoneCall className="h-3 w-3" />
+          ) : null}
           {appointment.start}
         </span>
-        {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        <span className="flex shrink-0 items-center gap-1">
+          <SentimentIcon sentiment={request?.sentiment} />
+          {hasUnreadUpdate ? (
+            <TicketUpdateBadge
+              compact
+              dataTestId={`week-ticket-update-${appointment.id}`}
+            />
+          ) : null}
+          {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        </span>
       </div>
       <div className="mt-1 line-clamp-2 font-semibold leading-snug">
         {appointment.customer}
       </div>
       <div className="mt-1 truncate opacity-90">{appointment.title}</div>
+      {appointment.activityType === "external_call" ? (
+        <div className="mt-1 text-[10px] font-semibold text-cyan-100">
+          {formatTalkTime(appointment.externalTalkSeconds ?? 0)} external talk
+        </div>
+      ) : null}
       {request ? (
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-mono text-[10px]">
@@ -2784,11 +4442,13 @@ function CurrentTimeLaneOverlay({
   return (
     <>
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-[1] bg-cc-orange/[0.045]"
+        data-testid="current-time-elapsed-shade"
+        className="pointer-events-none absolute inset-y-0 left-0 z-[2] bg-cc-orange/[0.14] shadow-[inset_-34px_0_42px_rgba(255,130,58,0.12)]"
         style={{ width: scaleTimelineX(indicator.elapsedWidthPx, trackWidth) }}
       />
       <div
-        className="pointer-events-none absolute inset-y-0 z-[4] w-px bg-cc-orange/90 shadow-[0_0_14px_rgba(255,130,58,0.6)]"
+        data-testid="current-time-line"
+        className="pointer-events-none absolute inset-y-0 z-[12] w-0.5 -translate-x-1/2 bg-cc-orange shadow-[0_0_18px_rgba(255,130,58,0.82)]"
         style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
       />
     </>
@@ -2833,6 +4493,7 @@ function TimelineOverlapGroup({
     frontAppointment.end,
     trackWidth,
   );
+  const frontPriorityClass = bookingCardPriorityClass(frontRequest?.priority);
 
   return (
     <div
@@ -2857,12 +4518,12 @@ function TimelineOverlapGroup({
       <button
         aria-label={`${item.overlapCount} overlapping appointments. ${frontAppointment.title} ${frontAppointment.customer}`}
         aria-pressed={active}
-        draggable
+        draggable={!frontAppointment.readOnly}
         title={`${frontAppointment.title} | ${frontAppointment.start}-${frontAppointment.end} | ${frontAppointment.customer}${frontRequest ? ` | ${frontRequest.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
             ? "border-cc-orange bg-cc-orange/24 text-cc-orange ring-2 ring-cc-orange"
-            : "border-rose-200/70 bg-rose-300/18 text-rose-50"
+            : `${frontPriorityClass} ring-1 ring-rose-200/70`
         }`}
         style={{
           height: item.cardHeight,
@@ -2894,7 +4555,10 @@ function TimelineOverlapGroup({
             {frontAppointment.title}
           </span>
           <span className="shrink-0 rounded-full border border-rose-100/40 bg-rose-100/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-50">
-            +{item.overlapCount - 1}
+            <span className="flex items-center gap-1">
+              <SentimentIcon sentiment={frontRequest?.sentiment} />
+              +{item.overlapCount - 1}
+            </span>
           </span>
         </div>
         <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] font-semibold leading-4 text-white/90">
@@ -2938,7 +4602,7 @@ function TimelineOverlapGroup({
                       ? "border-cc-orange/70 bg-cc-orange/14"
                       : "border-white/10 bg-white/[0.035]"
                   }`}
-                  draggable
+                  draggable={!appointment.readOnly}
                   type="button"
                   onClick={() => onSelectAppointment(appointment)}
                   onDragEnd={onDragEnd}
@@ -2952,8 +4616,9 @@ function TimelineOverlapGroup({
                     <span className="line-clamp-2 font-semibold leading-snug text-slate-50">
                       {appointment.title}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-cc-orange">
-                      {appointment.start}-{appointment.end}
+                    <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-cc-orange">
+                      <SentimentIcon sentiment={request?.sentiment} />
+                      <span>{appointment.start}-{appointment.end}</span>
                     </span>
                   </div>
                   <div className="mt-1 truncate text-[11px] text-slate-300">
@@ -2982,6 +4647,7 @@ function TimelineAppointment({
   active,
   appointment,
   cardHeight,
+  hasUnreadUpdate,
   laneTop,
   onBeginDrag,
   onDragEnd,
@@ -2993,6 +4659,7 @@ function TimelineAppointment({
   active: boolean;
   appointment: Appointment;
   cardHeight: number;
+  hasUnreadUpdate: boolean;
   laneTop: number;
   onBeginDrag: () => void;
   onDragEnd: () => void;
@@ -3022,7 +4689,7 @@ function TimelineAppointment({
         aria-pressed={active}
         data-search-state={searchState}
         data-testid={`timeline-appointment-${appointment.id}`}
-        draggable
+        draggable={!appointment.readOnly}
         title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
@@ -3051,19 +4718,35 @@ function TimelineAppointment({
         onClick={onSelect}
       >
         <div className="flex items-start justify-between gap-2">
-          <span className="block truncate text-[12px] font-bold leading-4">
+          <span className="flex min-w-0 items-center gap-1 truncate text-[12px] font-bold leading-4">
+            {appointment.activityType === "external_call" ? (
+              <PhoneCall className="h-3 w-3 shrink-0" />
+            ) : null}
             {appointment.title}
           </span>
-          {warning || appointment.travelWarning ? (
-            <MailWarning className="h-3.5 w-3.5 shrink-0" />
-          ) : null}
+          <span className="flex shrink-0 items-center gap-1">
+            <SentimentIcon sentiment={request?.sentiment} />
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge
+                compact
+                dataTestId={`timeline-ticket-update-${appointment.id}`}
+              />
+            ) : null}
+            {warning || appointment.travelWarning ? (
+              <MailWarning className="h-3.5 w-3.5 shrink-0" />
+            ) : null}
+          </span>
         </div>
         <div className="mt-0.5 font-mono text-[11px] font-semibold leading-4 text-white/90">
           {appointment.start}-{appointment.end}
         </div>
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {appointment.customer}
-          {request ? ` - ${request.requestNumber}` : ""}
+          {request
+            ? ` - ${request.requestNumber}`
+            : appointment.activityType === "external_call"
+              ? ` - ${formatTalkTime(appointment.externalTalkSeconds ?? 0)}`
+              : ""}
         </div>
       </button>
       <TravelSideExtension
@@ -3202,15 +4885,19 @@ function TravelSideExtension({
 
 function DetailDrawer({
   appointment,
+  calendarWriteEnabled,
   now,
   onOpenWorkLog,
+  onSyncCalendar,
   request,
   selectionKind,
   technician,
 }: {
   appointment?: Appointment;
+  calendarWriteEnabled: boolean;
   now: Date;
   onOpenWorkLog: (requestId: string) => void;
+  onSyncCalendar: () => void;
   request?: DispatchRequest;
   selectionKind: Selection["kind"];
   technician: string;
@@ -3258,6 +4945,27 @@ function DetailDrawer({
             </Badge>
           ))}
         </div>
+        {request?.updateInfo ? (
+          <div className="mt-2 rounded-md border border-cc-orange/25 bg-cc-orange/10 px-2.5 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-cc-orange">
+                Ticket update
+              </span>
+              <span className="text-[10px] font-semibold text-slate-300">
+                {formatTicketUpdateSource(request.updateInfo.source)}{" - "}
+                {formatDateTime(request.updateInfo.at)}
+              </span>
+            </div>
+            <div className="mt-1 text-xs font-semibold text-slate-50">
+              {request.updateInfo.summary}
+            </div>
+            {request.updateInfo.detail ? (
+              <div className="mt-0.5 text-xs leading-snug text-slate-300">
+                {request.updateInfo.detail}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="space-y-2.5 p-3">
         <DrawerSection title="Helpdesk">
@@ -3268,12 +4976,15 @@ function DetailDrawer({
               <DetailRow label="Source" value={requestSourceLabel(request)} />
               <DetailRow label="Status" value={request.status} />
               <DetailRow label="Due time" value={formatDateTime(request.dueAt)} />
+              {request.sentiment ? (
+                <DetailRow
+                  label="Sentiment"
+                  value={sentimentLabel(request.sentiment)}
+                />
+              ) : null}
               <DetailRow
                 label="Notes"
-                value={
-                  request.notes ??
-                  "Mock note. Confirm access and parts before dispatch."
-                }
+                value={requestNotesSummary(request)}
               />
             </>
           ) : (
@@ -3405,11 +5116,16 @@ function DetailDrawer({
               Reschedule
             </ActionButton>
             <ActionButton
-              disabled
+              disabled={!request || !appointment || !calendarWriteEnabled}
               icon={<RefreshCw className="h-4 w-4" />}
-              title="Outlook writeback is not enabled yet."
+              onClick={onSyncCalendar}
+              title={
+                request && appointment && calendarWriteEnabled
+                  ? "Create or update the linked Outlook event and MSP Central schedule."
+                  : "Select a linked scheduled request while Outlook writeback is enabled."
+              }
             >
-              {appointment?.readOnly ? "Calendar Read Only" : "Create / Update Calendar Event"}
+              Create / Update Calendar Event
             </ActionButton>
           </div>
         </DrawerSection>
@@ -3570,6 +5286,44 @@ function requestSourceLabel(request: DispatchRequest) {
   return "Mock";
 }
 
+export function requestNotesSummary(request: DispatchRequest) {
+  if (request.notes?.trim()) {
+    return request.notes;
+  }
+
+  return request.sourceSystem === "msp-central" ||
+    request.sourceSystem === "msp-central-fixture"
+    ? "No notes provided."
+    : "Mock note. Confirm access and parts before dispatch.";
+}
+
+function hasUnreadTicketUpdate(
+  request: DispatchRequest | undefined,
+  seenTicketUpdateIds: SeenTicketUpdateIds,
+) {
+  return Boolean(
+    request?.updateInfo && !seenTicketUpdateIds.has(request.id),
+  );
+}
+
+function formatTicketUpdateSource(
+  source: NonNullable<DispatchRequest["updateInfo"]>["source"],
+) {
+  if (source === "msp-central") {
+    return "MSP Central";
+  }
+
+  if (source === "technician-app") {
+    return "Technician app";
+  }
+
+  if (source === "test-sync") {
+    return "Test sync";
+  }
+
+  return "Command Centre";
+}
+
 function workTypeLabel(value: string) {
   if (value === "non_billable") {
     return "non-billable";
@@ -3619,6 +5373,64 @@ function PriorityChip({ priority }: { priority: DispatchRequest["priority"] }) {
       className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${classes[priority]}`}
     >
       {priority}
+    </span>
+  );
+}
+
+function SentimentIcon({
+  sentiment,
+}: {
+  sentiment?: DispatchRequest["sentiment"];
+}) {
+  if (!sentiment) {
+    return null;
+  }
+
+  const config = {
+    negative: {
+      className: "text-rose-200",
+      Icon: Frown,
+      label: "Negative sentiment",
+    },
+    neutral: {
+      className: "text-slate-200",
+      Icon: Meh,
+      label: "Neutral sentiment",
+    },
+    positive: {
+      className: "text-emerald-200",
+      Icon: Smile,
+      label: "Positive sentiment",
+    },
+  }[sentiment];
+
+  return (
+    <config.Icon
+      aria-label={config.label}
+      className={`h-3.5 w-3.5 shrink-0 ${config.className}`}
+    />
+  );
+}
+
+function sentimentLabel(sentiment: NonNullable<DispatchRequest["sentiment"]>) {
+  return `${sentiment[0].toUpperCase()}${sentiment.slice(1)}`;
+}
+
+function TicketUpdateBadge({
+  compact = false,
+  dataTestId,
+}: {
+  compact?: boolean;
+  dataTestId?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border border-cc-orange/45 bg-cc-orange/20 font-bold uppercase tracking-wide text-cc-orange shadow-[0_0_12px_rgba(255,130,58,0.18)] ${
+        compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[10px]"
+      }`}
+      data-testid={dataTestId}
+    >
+      Updated
     </span>
   );
 }
@@ -3766,11 +5578,22 @@ function requestSearchFields(
     request.subcategory,
     request.item,
     request.assetNames,
-    request.billable ? "Billable" : "Non-billable",
+    request.updateInfo?.summary,
+    request.updateInfo?.detail,
+    request.updateInfo?.source,
     request.readyToBook ? "Ready to book" : undefined,
     technicianLabel(technicians, request.technicianId),
     ...request.warnings,
   ];
+}
+
+function hasDisplayableSite(site?: string) {
+  const normalized = site?.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      normalized !== "unknown site" &&
+      normalized !== "site not provided",
+  );
 }
 
 function includesQuery(values: unknown, search: string) {
@@ -4029,7 +5852,7 @@ function appointmentIsOutOfHours(appointment: Appointment) {
   }
 
   return minutesFromTime(appointment.start) < 9 * 60 ||
-    minutesFromTime(appointment.end) > 17 * 60 + 30;
+    minutesFromTime(appointment.end) > 17 * 60;
 }
 
 function appointmentIsClosedDay(appointment: Appointment) {
@@ -4170,7 +5993,7 @@ function formatDuration(minutes: number) {
 
 function scheduleTimeOptions() {
   const options: string[] = [];
-  for (let minutes = 9 * 60; minutes <= 17 * 60 + 30; minutes += 15) {
+  for (let minutes = 9 * 60; minutes <= 17 * 60; minutes += 15) {
     const hours = Math.floor(minutes / 60);
     const remainder = minutes % 60;
     options.push(
@@ -4209,7 +6032,7 @@ function timelineWidth(
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return "Unknown";
   }
   return new Intl.DateTimeFormat("en-AU", {
     hour: "numeric",
@@ -4219,11 +6042,15 @@ function formatTime(value: string) {
 }
 
 function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
   return new Intl.DateTimeFormat("en-AU", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Australia/Melbourne",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function formatActiveTimerElapsed(startedAt: string, now: Date) {

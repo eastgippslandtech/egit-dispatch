@@ -1,6 +1,7 @@
 import type {
   DispatchRequest,
   Priority,
+  RequestSentiment,
   RequestStatus,
   SlaState,
 } from "@/server/dispatch/types";
@@ -11,7 +12,14 @@ import {
   type StaffProfile,
 } from "@/server/staff/profiles";
 
-import type { MspCentralRawRequest, MspCentralRawTechnician } from "./types";
+import { bookingTypeForRequest } from "@/server/dispatch/booking";
+import type {
+  MspCentralRawRequest,
+  MspCentralRawRequestNote,
+  MspCentralRawTechnician,
+  MspCentralRawWorklog,
+  MspCentralRequestUpdate,
+} from "./types";
 import { buildMspCentralRequestUrl } from "./url";
 
 type MapRequestOptions = {
@@ -52,27 +60,34 @@ export function mapMspCentralRequest(
   raw: MspCentralRawRequest,
   options: MapRequestOptions = {},
 ): DispatchRequest {
+  const now = options.now ?? new Date();
   const profiles = options.profiles ?? getInitialStaffProfiles();
   const match = findStaffForMspCentralTechnician(
     normalizeTechnician(raw.technician),
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
-  const dueAt = readString(raw.due_by_time) ?? new Date(0).toISOString();
-  const scheduledStart = readString(raw.scheduled_start_time);
-  const scheduledEnd = readString(raw.scheduled_end_time);
+  const dueAt = readDateTime(raw.due_by_time) ?? new Date(0).toISOString();
+  const scheduledStart = readDateTime(raw.scheduled_start_time);
+  const scheduledEnd = readDateTime(raw.scheduled_end_time);
   const customer =
     readString(raw.account?.name) ??
-    readString(raw.customer) ??
+    readPriorityStatusName(raw.customer) ??
     "Unknown customer";
-  const site = readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site";
+  const notes = htmlToPlainText(raw.description);
+  const inferredSiteTown = findKnownSiteTown([
+    readString(raw.subject),
+    notes,
+    ...readUdfTextValues(raw.udf_fields),
+  ]);
   const siteAddress =
     readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined;
   const siteArea = readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined;
   const siteName =
-    readString(raw.site?.name) ?? readString(raw.site_name) ?? undefined;
-  const siteTown = readString(raw.site?.city) ?? readString(raw.site_town) ?? undefined;
-  const notes = readString(raw.description);
+    readString(raw.site?.name) ?? readString(raw.site_name) ?? inferredSiteTown;
+  const siteTown =
+    readString(raw.site?.city) ?? readString(raw.site_town) ?? inferredSiteTown;
+  const site = siteName ?? siteAddress ?? siteTown ?? "Unknown site";
   const autoAssignment = match.profile
     ? undefined
     : autoAssignAdvancedWorksTechnician({
@@ -84,6 +99,7 @@ export function mapMspCentralRequest(
         siteTown,
         text: [readString(raw.subject), notes],
         technicianHasIdentity: hasTechnicianIdentity(raw.technician),
+        now,
       });
   const warnings = [
     ...assetWarnings(raw),
@@ -92,9 +108,9 @@ export function mapMspCentralRequest(
     scheduledStart && !scheduledEnd ? "Scheduled end time missing" : undefined,
   ].filter((warning): warning is string => Boolean(warning));
 
-  return {
+  const request: DispatchRequest = {
     id: readString(raw.id) ?? requestNumber,
-    ageHours: estimateAgeHours(readString(raw.created_time), options.now),
+    ageHours: estimateAgeHours(readDateTime(raw.created_time), now),
     assetNames: raw.assets
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
@@ -102,6 +118,7 @@ export function mapMspCentralRequest(
     category: readPriorityStatusName(raw.category),
     contact:
       readString(raw.requester?.email) ??
+      readString(raw.requester?.email_id) ??
       readString(raw.requester_email) ??
       "Unknown contact",
     customer,
@@ -112,7 +129,7 @@ export function mapMspCentralRequest(
     ),
     item: readPriorityStatusName(raw.item),
     notes,
-    onsite: Boolean(raw.is_onsite ?? raw.onsite),
+    onsite: optionalBoolean(raw.is_onsite ?? raw.onsite),
     priority: mapMspCentralPriority(readPriorityStatusName(raw.priority)),
     readyToBook: isReadyToBook(raw, scheduledStart),
     requester:
@@ -120,6 +137,11 @@ export function mapMspCentralRequest(
       readString(raw.requester_name) ??
       "Unknown requester",
     requestNumber,
+    sentiment: mapMspCentralSentiment(
+      readSentiment(raw.sentiment) ??
+        readSentiment(raw.sentiment_analysis) ??
+        readSentiment(raw.requester_sentiment),
+    ),
     scheduledEnd: scheduledEnd ?? undefined,
     scheduledStart: scheduledStart ?? undefined,
     site,
@@ -130,7 +152,7 @@ export function mapMspCentralRequest(
     slaState: mapMspCentralSlaState(
       readString(raw.sla?.status) ?? readString(raw.sla_status),
       dueAt,
-      options.now,
+      now,
     ),
     sourceSystem: options.sourceSystem ?? "msp-central-fixture",
     status: mapMspCentralStatus(readPriorityStatusName(raw.status), scheduledStart),
@@ -139,9 +161,21 @@ export function mapMspCentralRequest(
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,
-    updatedAt: readString(raw.updated_time),
+    updatedAt: readDateTime(raw.updated_time),
+    updatedByEmail:
+      readString(raw.updated_by?.email) ??
+      readString(raw.last_updated_by?.email),
     warnings,
   };
+
+  return {
+    ...request,
+    bookingType: bookingTypeForRequest(request),
+  };
+}
+
+function optionalBoolean(value: boolean | null | undefined) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function mapMspCentralRequests(
@@ -253,6 +287,7 @@ function autoAssignAdvancedWorksTechnician({
   siteTown,
   text,
   technicianHasIdentity,
+  now,
 }: {
   customer: string;
   site: string;
@@ -262,8 +297,13 @@ function autoAssignAdvancedWorksTechnician({
   siteTown?: string;
   text: Array<string | undefined>;
   technicianHasIdentity: boolean;
+  now: Date;
 }) {
-  if (technicianHasIdentity || !isAdvancedWorksCustomer(customer)) {
+  if (
+    technicianHasIdentity ||
+    !isAdvancedWorksCustomer(customer) ||
+    !isOutsideDispatchHours(now)
+  ) {
     return undefined;
   }
 
@@ -289,6 +329,129 @@ function autoAssignAdvancedWorksTechnician({
   };
 }
 
+export function mapMspCentralRequestNotes(
+  notes: MspCentralRawRequestNote[] = [],
+) {
+  const customerResponses: MspCentralRequestUpdate[] = [];
+  const internalNotes: MspCentralRequestUpdate[] = [];
+
+  notes.forEach((note, index) => {
+    const body = htmlToPlainText(note.description);
+    if (!body) return;
+
+    const update = {
+      author:
+        readString(note.created_by?.name) ??
+        readString(note.created_by?.email_id) ??
+        readString(note.created_by?.email) ??
+        "Unknown author",
+      body,
+      createdAt: readDateTime(note.created_time),
+      id: readString(note.id) ?? `request-note-${index}`,
+    };
+
+    if (note.created_by?.is_technician === false) {
+      customerResponses.push(update);
+    } else {
+      internalNotes.push(update);
+    }
+  });
+
+  return { customerResponses, internalNotes };
+}
+
+export function mapMspCentralRequestWorklogs(
+  worklogs: MspCentralRawWorklog[] = [],
+) {
+  return worklogs.map((worklog, index): MspCentralRequestUpdate => ({
+    author:
+      readString(worklog.owner?.name) ??
+      readString(worklog.owner?.email_id) ??
+      readString(worklog.created_by?.name) ??
+      readString(worklog.created_by?.email_id) ??
+      "Unknown technician",
+    body: htmlToPlainText(worklog.description) || "Work logged.",
+    createdAt:
+      readDateTime(worklog.recorded_time) ??
+      readDateTime(worklog.start_time) ??
+      undefined,
+    durationMinutes: readWorklogDurationMinutes(worklog),
+    id: readString(worklog.id) ?? `request-worklog-${index}`,
+  }));
+}
+
+function readWorklogDurationMinutes(worklog: MspCentralRawWorklog) {
+  const hours = Number(worklog.time_spent?.hours ?? 0);
+  const minutes = Number(worklog.time_spent?.minutes ?? 0);
+  const total = hours * 60 + minutes;
+
+  if (Number.isFinite(total) && total > 0) {
+    return Math.round(total);
+  }
+
+  const start = readDateTime(worklog.start_time);
+  const end = readDateTime(worklog.end_time);
+  if (!start || !end) {
+    return undefined;
+  }
+
+  const elapsed = (new Date(end).getTime() - new Date(start).getTime()) / 60_000;
+  return Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed) : undefined;
+}
+
+export function mapMspCentralSentiment(
+  value?: string,
+): RequestSentiment | undefined {
+  const normalized = value?.trim().toLowerCase();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (
+    normalized.includes("negative") ||
+    normalized.includes("unhappy") ||
+    normalized.includes("dissatisfied")
+  ) {
+    return "negative";
+  }
+
+  if (
+    normalized.includes("positive") ||
+    normalized.includes("happy") ||
+    normalized.includes("satisfied")
+  ) {
+    return "positive";
+  }
+
+  if (normalized.includes("neutral")) {
+    return "neutral";
+  }
+
+  return undefined;
+}
+
+export function isOutsideDispatchHours(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+  }).formatToParts(now);
+  const weekday = parts.find((part) => part.type === "weekday")?.value;
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  const weekdays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+  const minutes = hour * 60 + minute;
+
+  return !weekday ||
+    !weekdays.has(weekday) ||
+    !Number.isFinite(minutes) ||
+    minutes < 9 * 60 ||
+    minutes >= 17 * 60;
+}
+
 function isAdvancedWorksCustomer(customer: string) {
   const normalized = normalizeText(customer);
   return normalized.includes("advanced works") ||
@@ -297,12 +460,31 @@ function isAdvancedWorksCustomer(customer: string) {
 }
 
 function findSiteCoordinates(values: Array<string | undefined>) {
-  const haystack = normalizeText(values.filter(Boolean).join(" "));
-  const match = SITE_COORDINATES.find(([town]) => haystack.includes(town));
+  const town = findKnownSiteTown(values)?.toLowerCase();
+  const match = SITE_COORDINATES.find(([candidate]) => candidate === town);
 
   return match
     ? { latitude: match[1], longitude: match[2] }
     : undefined;
+}
+
+function findKnownSiteTown(values: Array<string | undefined>) {
+  const haystack = ` ${normalizeText(values.filter(Boolean).join(" "))} `;
+  const match = [...SITE_COORDINATES]
+    .sort(([left], [right]) => right.length - left.length)
+    .find(([town]) => haystack.includes(` ${town} `));
+
+  return match?.[0].replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readUdfTextValues(fields?: Record<string, unknown> | null) {
+  if (!fields) {
+    return [];
+  }
+
+  return Object.entries(fields)
+    .filter(([key]) => /address|location|site|suburb|town/i.test(key))
+    .map(([, value]) => readString(value));
 }
 
 function distanceKm(
@@ -355,6 +537,19 @@ function readPriorityStatusName(
   return typeof value === "string" ? value : readString(value?.name);
 }
 
+function readSentiment(
+  value?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null,
+) {
+  if (typeof value === "string") {
+    return readString(value);
+  }
+
+  return readString(value?.name) ?? readString(value?.value);
+}
+
 function normalizeTechnician(technician?: MspCentralRawTechnician | null) {
   return {
     email: readString(technician?.email),
@@ -376,6 +571,69 @@ function readString(value: unknown) {
     return undefined;
   }
 
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+export function htmlToPlainText(value?: string | null) {
+  const text = value?.trim();
+  if (!text) return undefined;
+
+  return text
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<\s*li(?:\s[^>]*)?>/gi, "- ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() || undefined;
+}
+
+function readDateTime(value: unknown) {
+  const candidates =
+    typeof value === "object" && value !== null
+      ? [
+          (value as { value?: unknown }).value,
+          (value as { display_value?: unknown }).display_value,
+        ]
+      : [value];
+
+  for (const candidate of candidates) {
+    const parsed = parseDateTimeCandidate(candidate);
+    if (parsed) return parsed;
+  }
+
+  return undefined;
+}
+
+function parseDateTimeCandidate(value: unknown) {
+  if (value === null || value === undefined || typeof value === "object") {
+    return undefined;
+  }
+
+  const text = String(value).trim();
+  if (!text) return undefined;
+
+  const numeric = Number(text);
+  const timestamp =
+    Number.isFinite(numeric) && /^\d+(?:\.\d+)?$/.test(text)
+      ? numeric < 100_000_000_000
+        ? numeric * 1000
+        : numeric
+      : Date.parse(text);
+  if (!Number.isFinite(timestamp)) return undefined;
+
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }

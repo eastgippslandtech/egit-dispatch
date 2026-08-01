@@ -9,6 +9,7 @@ export async function PUT(request: Request) {
     return mobileOk(
       await registerMobilePushToken({
         appVersion: body.appVersion,
+        auth,
         installationId: body.installationId,
         platform: body.platform,
         pushToken: body.pushToken,
@@ -16,10 +17,26 @@ export async function PUT(request: Request) {
       auth.staffId,
     );
   } catch (error) {
+    const status =
+      error instanceof SyntaxError
+        ? 400
+        : typeof error === "object" &&
+            error !== null &&
+            "status" in error &&
+            typeof error.status === "number"
+          ? error.status
+          : 500;
+    const code =
+      error instanceof SyntaxError
+        ? "BAD_REQUEST"
+        : status === 401
+          ? "UNAUTHORIZED"
+          : "INTERNAL_ERROR";
+
     return mobileError(
-      401,
-      "UNAUTHORIZED",
-      error instanceof Error ? error.message : "Mobile bearer token is invalid.",
+      status,
+      code,
+      error instanceof Error ? error.message : "Push registration failed.",
     );
   }
 }

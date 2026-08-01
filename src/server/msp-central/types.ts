@@ -6,15 +6,23 @@ export type MspCentralRawTechnician = {
   name?: string | null;
 };
 
+export type MspCentralTimestamp =
+  | string
+  | number
+  | {
+      display_value?: string | null;
+      value?: string | number | null;
+    };
+
 export type MspCentralRawRequest = {
   account?: { name?: string | null } | null;
   assets?: Array<{ name?: string | null }> | null;
   billable?: boolean | null;
   category?: string | { name?: string | null } | null;
-  created_time?: string | null;
-  customer?: string | null;
+  created_time?: MspCentralTimestamp | null;
+  customer?: string | { name?: string | null } | null;
   description?: string | null;
-  due_by_time?: string | null;
+  due_by_time?: MspCentralTimestamp | null;
   id?: string | number | null;
   is_billable?: boolean | null;
   is_onsite?: boolean | null;
@@ -22,11 +30,27 @@ export type MspCentralRawRequest = {
   onsite?: boolean | null;
   priority?: string | { name?: string | null } | null;
   request_number?: string | null;
-  requester?: { email?: string | null; name?: string | null } | null;
+  requester?: {
+    email?: string | null;
+    email_id?: string | null;
+    name?: string | null;
+  } | null;
   requester_email?: string | null;
   requester_name?: string | null;
-  scheduled_end_time?: string | null;
-  scheduled_start_time?: string | null;
+  scheduled_end_time?: MspCentralTimestamp | null;
+  scheduled_start_time?: MspCentralTimestamp | null;
+  sentiment?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
+  sentiment_analysis?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
+  requester_sentiment?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null;
   site?: {
     address?: string | null;
     area?: string | null;
@@ -44,10 +68,71 @@ export type MspCentralRawRequest = {
   subject?: string | null;
   technician?: MspCentralRawTechnician | null;
   udf_fields?: Record<string, unknown> | null;
-  updated_time?: string | null;
+  updated_time?: MspCentralTimestamp | null;
+  updated_by?: { email?: string | null; name?: string | null } | null;
+  last_updated_by?: { email?: string | null; name?: string | null } | null;
+};
+
+export type MspCentralRawRequestNote = {
+  created_by?: {
+    email?: string | null;
+    email_id?: string | null;
+    is_technician?: boolean | null;
+    name?: string | null;
+  } | null;
+  created_time?: MspCentralTimestamp | null;
+  description?: string | null;
+  id?: string | number | null;
+  show_to_requester?: boolean | null;
+};
+
+export type MspCentralRequestNoteListResponse = {
+  request_notes?: MspCentralRawRequestNote[];
+};
+
+export type MspCentralRawWorklog = {
+  created_by?: { email_id?: string | null; name?: string | null } | null;
+  description?: string | null;
+  end_time?: MspCentralTimestamp | null;
+  id?: string | number | null;
+  owner?: { email_id?: string | null; name?: string | null } | null;
+  recorded_time?: MspCentralTimestamp | null;
+  start_time?: MspCentralTimestamp | null;
+  time_spent?: {
+    hours?: string | number | null;
+    minutes?: string | number | null;
+    value?: string | number | null;
+  } | null;
+};
+
+export type MspCentralRequestWorklogListResponse = {
+  worklogs?: MspCentralRawWorklog[];
+};
+
+export type MspCentralRequestUpdate = {
+  author: string;
+  body: string;
+  createdAt?: string;
+  durationMinutes?: number;
+  id: string;
+};
+
+export type MspCentralRequestContext = {
+  customerResponses: MspCentralRequestUpdate[];
+  internalNotes: MspCentralRequestUpdate[];
+  notesWarning?: string;
+  request: DispatchRequest;
+  worklogs: MspCentralRequestUpdate[];
+  worklogsWarning?: string;
 };
 
 export type MspCentralRequestListResponse = {
+  list_info?: {
+    has_more_rows?: boolean | string | null;
+    row_count?: number | string | null;
+    start_index?: number | string | null;
+    total_count?: number | string | null;
+  } | null;
   requests?: MspCentralRawRequest[];
 };
 
@@ -66,11 +151,39 @@ export type MspCentralListRequestsParams = {
 };
 
 export type MspCentralClient = {
+  addRequestWorklog?(input: {
+    description: string;
+    durationMinutes: number;
+    endedAt: string;
+    requestId: string;
+    startedAt: string;
+  }): Promise<void>;
+  assignRequest(input: {
+    requestId: string;
+    technicianName: string;
+  }): Promise<void>;
+  clearRequestSchedule(input: { requestId: string }): Promise<void>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
+  getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
   listCustomers(): Promise<Array<{ id: string; name: string }>>;
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;
   listSites(): Promise<Array<{ id: string; name: string }>>;
   listTechnicians(): Promise<Technician[]>;
+  mergeRequests(input: {
+    childRequestId: string;
+    parentRequestId: string;
+  }): Promise<void>;
   refreshAccessToken(): Promise<string>;
+  updateRequestSchedule(input: {
+    requestId: string;
+    scheduledEnd: string;
+    scheduledStart: string;
+    technicianEmail?: string;
+    technicianName?: string;
+  }): Promise<void>;
+  updateRequestStatus?(input: {
+    requestId: string;
+    status: string;
+  }): Promise<void>;
 };

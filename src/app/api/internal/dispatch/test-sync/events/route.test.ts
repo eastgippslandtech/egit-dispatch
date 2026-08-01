@@ -8,7 +8,8 @@ import {
 } from "@/server/dispatch/test-sync";
 import { DELETE, GET, POST } from "./route";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -45,8 +46,25 @@ describe("dispatch test sync event API", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects a wallboard-only session", async () => {
+    getCommandCentreAccessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/dispatch/test-sync/events", {
+        body: "{}",
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
   it("records dispatcher schedule events", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });
@@ -97,6 +115,7 @@ describe("dispatch test sync event API", () => {
 
   it("lists current test sync events for debugging", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });
@@ -110,6 +129,7 @@ describe("dispatch test sync event API", () => {
 
   it("clears test sync events", async () => {
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       status: "approved",
     });

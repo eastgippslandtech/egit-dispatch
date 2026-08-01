@@ -100,6 +100,15 @@ const requests: DispatchRequest[] = [
     billable: index % 4 !== 3,
     readyToBook: index !== 14,
     slaState: seed[6] as SlaState,
+    updateInfo:
+      index === 2
+        ? {
+            at: "2026-07-08T10:45:00+10:00",
+            detail: "Customer confirmed the POS dropouts are still happening.",
+            source: "msp-central" as const,
+            summary: "Notes added",
+          }
+        : undefined,
     warnings: [seed[7], index % 2 === 0 ? "Ready to book" : "Needs review"],
   })),
   {
@@ -120,11 +129,17 @@ const requests: DispatchRequest[] = [
     technicianId: "tech-matt",
     scheduledStart: "2026-07-08T09:30:00+10:00",
     scheduledEnd: "2026-07-08T10:45:00+10:00",
-    dueAt: "2026-07-08T17:30:00+10:00",
+    dueAt: "2026-07-08T17:00:00+10:00",
     ageHours: 31,
     billable: true,
     readyToBook: false,
     slaState: "normal",
+    updateInfo: {
+      at: "2026-07-08T09:05:00+10:00",
+      detail: "Technician added a Work Log from the mobile app.",
+      source: "technician-app",
+      summary: "Work Log added",
+    },
     warnings: ["Outlook linked"],
   },
   {
@@ -266,6 +281,23 @@ const appointments: Appointment[] = [
   { id: "appt-9", date: "2026-07-06", technicianId: "tech-matt", title: "Monday Outlook hold", customer: "Internal EGIT", start: "14:00", end: "15:00", status: "busy", source: "outlook" },
   { id: "appt-10", date: "2026-07-12", technicianId: "tech-jervy", title: "Sunday client travel prep", customer: "Decor Floors", start: "10:30", end: "11:30", status: "tentative", source: "outlook" },
 ];
+
+export function getEmptyCommandCentreData(): DispatchDesignMockData {
+  const data: DispatchDesignMockData = {
+    selectedDateLabel: "Today",
+    timezone: "Australia/Melbourne",
+    technicians,
+    requests: [],
+    appointments: [],
+    healthItems: [],
+    selectedRequestId: "",
+  };
+
+  return {
+    ...data,
+    healthItems: buildDispatchHealthItems(data),
+  };
+}
 
 export function getDispatchDesignMockData(): DispatchDesignMockData {
   const contextAppointments = appointments.map((appointment) =>

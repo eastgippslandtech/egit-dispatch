@@ -8,12 +8,14 @@ import {
   completeMobileJob,
   listMobileJobs,
   getMobileJob,
+  registerMobilePushToken,
   rileyMobileAuth,
   saveMobileWorklog,
   startMobileTimer,
   stopMobileTimer,
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
+import type { Appointment } from "@/server/dispatch/types";
 
 vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
   const actual =
@@ -94,6 +96,37 @@ const dbJob: DatabaseJobRow = {
   updatedAt: "2026-07-14T01:20:00.000Z",
 };
 
+const outlookAppointment: Appointment = {
+  bookingType: "Remote",
+  bodyPreview: "Weekly Command Centre operations review.",
+  calendarOwnerEmail: "riley@egit.com.au",
+  customer: "Microsoft Teams Meeting",
+  date: "2026-07-14",
+  end: "15:00",
+  id: "outlook-tech-riley-event-outlook-1",
+  outlookEventId: "event-outlook-1",
+  outlookWebLink: "https://outlook.office.com/calendar/item/event-outlook-1",
+  readOnly: true,
+  source: "outlook",
+  start: "14:00",
+  status: "busy",
+  technicianId: "tech-riley",
+  title: "Command Centre training",
+};
+
+function createOutlookCalendar(
+  appointments: Appointment[] = [outlookAppointment],
+) {
+  return {
+    async findAppointment() {
+      return appointments[0] ?? null;
+    },
+    async listAppointments() {
+      return appointments;
+    },
+  };
+}
+
 function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase {
   return {
     async findStaffByZohoEmail() {
@@ -141,6 +174,27 @@ describe("mobile API service", () => {
     ).toBe(true);
   });
 
+  it("stores the Expo push token against the authenticated technician", async () => {
+    const registerDevice = vi.fn(async () => undefined);
+
+    await registerMobilePushToken({
+      appVersion: "1.0.0",
+      auth: rileyMobileAuth,
+      installationId: "riley-iphone",
+      platform: "ios",
+      pushToken: "ExponentPushToken[riley]",
+      repository: { registerDevice },
+    });
+
+    expect(registerDevice).toHaveBeenCalledWith({
+      appVersion: "1.0.0",
+      installationId: "riley-iphone",
+      platform: "ios",
+      pushToken: "ExponentPushToken[riley]",
+      staffEmail: "riley@egit.com.au",
+    });
+  });
+
   it("rejects a write to an Outlook-only event", async () => {
     await expect(
       saveMobileWorklog({
@@ -180,6 +234,75 @@ describe("mobile API service", () => {
       "Imported request snapshot.",
     ]);
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
+  });
+
+  it("adds Outlook-only calendar bookings to the technician schedule", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [];
+        },
+      }),
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toContainEqual(
+      expect.objectContaining({
+        bookingType: "Remote",
+        id: "outlook-tech-riley-event-outlook-1",
+        outlookEventId: "event-outlook-1",
+        source: "outlook",
+        title: "Command Centre training",
+        technician: expect.objectContaining({
+          email: "riley@egit.com.au",
+        }),
+        permissions: expect.objectContaining({
+          canStartTimer: false,
+          canWriteWorklog: false,
+        }),
+      }),
+    );
+  });
+
+  it("uses real Outlook bookings instead of samples when the database is unavailable", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: null,
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
+    });
+  });
+
+  it("does not duplicate an Outlook event already linked to a Command Centre job", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [{ ...dbJob, outlookEventId: "event-outlook-1" }];
+        },
+      }),
+      from: "2026-07-14",
+      outlookCalendar: createOutlookCalendar(),
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: dbJobId,
+      outlookEventId: "event-outlook-1",
+      source: "msp_central",
+    });
   });
 
   it("adds dispatcher test-sync schedules to the technician mobile job list", async () => {
@@ -362,6 +485,50 @@ describe("mobile API service", () => {
     });
   });
 
+  it("returns an Outlook-only booking detail as read-only", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async findJobForStaff() {
+          return null;
+        },
+      }),
+      jobId: "outlook-tech-riley-event-outlook-1",
+      outlookCalendar: createOutlookCalendar(),
+    });
+
+    expect(response.job).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
+      permissions: {
+        canAddPart: false,
+        canAttachEvidence: false,
+        canComplete: false,
+        canSignOff: false,
+        canStartTimer: false,
+        canUpdateStatus: false,
+        canWriteWorklog: false,
+        readOnlyReason: "Outlook calendar events are read-only.",
+      },
+    });
+  });
+
+  it("opens an Outlook-only booking when the database is unavailable", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: null,
+      jobId: "outlook-tech-riley-event-outlook-1",
+      outlookCalendar: createOutlookCalendar(),
+    });
+
+    expect(response.job).toMatchObject({
+      id: "outlook-tech-riley-event-outlook-1",
+      source: "outlook",
+      title: "Command Centre training",
+    });
+  });
+
   it("stores native app worklog summaries in the Command Centre database", async () => {
     const saved = vi.fn(async () => ({
       recordedAt: "2026-07-14T02:00:00.000Z",
@@ -374,6 +541,7 @@ describe("mobile API service", () => {
       command: {
         baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         clientMutationId: "note-1",
+        disposition: "return_to_queue",
         durationMinutes: 30,
         endedAt: "2026-07-14T02:00:00.000Z",
         billable: true,
@@ -404,6 +572,27 @@ describe("mobile API service", () => {
       resourceId: "log-mobile-note-1",
       status: "pending",
     });
+  });
+
+  it("rejects a scheduled mobile Work Log without an outcome as bad input", async () => {
+    await expect(
+      saveMobileWorklog({
+        auth: rileyMobileAuth,
+        command: {
+          baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+          clientMutationId: "note-missing-outcome",
+          durationMinutes: 30,
+          endedAt: "2026-07-14T02:00:00.000Z",
+          installationId: "phone-1",
+          occurredAt: "2026-07-14T02:00:00.000Z",
+          startedAt: "2026-07-14T01:30:00.000Z",
+          summary: "Checked the service.",
+          visibility: "external",
+        },
+        database: createDatabase(),
+        jobId: "link-100900",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
   });
 
   it("records native save-and-complete as a Command Centre completion sync intent", async () => {

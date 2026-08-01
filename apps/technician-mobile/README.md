@@ -72,5 +72,6 @@ Current handoff status: both preview commands are blocked on this Mac until `eas
 - Zoho mobile auth is authorization-code + PKCE; no Zoho client secret is stored in the native app.
 - Command Centre sessions are stored through SecureStore.
 - SQLite stores cached jobs, timers, staged evidence metadata, drafts, and mutation queue state, not bearer or refresh tokens.
-- Push tokens are registered only after explicit user opt-in and are not echoed in API responses.
+- The first approved Zoho session asks for notification permission and registers the phone immediately when approved. Denied permissions remain retryable from Profile.
+- Push tokens are never echoed in API responses.
 - ETA uses foreground location only after the user taps Calculate ETA.

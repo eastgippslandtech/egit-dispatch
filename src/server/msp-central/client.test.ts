@@ -474,6 +474,7 @@ describe("MSP Central live client", () => {
       scheduledEnd: "2026-07-24T11:00:00+10:00",
       scheduledStart: "2026-07-24T10:00:00+10:00",
       technicianEmail: "mattd@egit.com.au",
+      technicianId: "msp-tech-matt",
       technicianName: "Matt",
     });
 
@@ -497,7 +498,7 @@ describe("MSP Central live client", () => {
         scheduled_start_time: {
           value: String(new Date("2026-07-24T10:00:00+10:00").getTime()),
         },
-        technician: { email_id: "mattd@egit.com.au" },
+        technician: { id: "msp-tech-matt" },
       },
     });
 
@@ -509,6 +510,48 @@ describe("MSP Central live client", () => {
         scheduled_start_time: null,
       },
     });
+  });
+
+  it("includes MSP Central validation details in failed write errors", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          response_status: {
+            messages: [{ message: "Invalid technician reference" }],
+            status: "failed",
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(
+      client.updateRequestSchedule({
+        requestId: "123",
+        scheduledEnd: "2026-07-24T11:00:00+10:00",
+        scheduledStart: "2026-07-24T10:00:00+10:00",
+        technicianId: "invalid-technician",
+      }),
+    ).rejects.toThrow(
+      "MSP Central API request failed with status 400: Invalid technician reference.",
+    );
   });
 
   it("loads every request page reported by MSP Central", async () => {

@@ -267,6 +267,27 @@ describe("MSP Central request mappers", () => {
     ]);
   });
 
+  it("preserves the canonical MSP Central technician identity", () => {
+    const technicians = mapMspCentralTechnicians([
+      {
+        email_id: "riley@egit.com.au",
+        id: "msp-technician-riley",
+        name: "Riley Pearson",
+      },
+    ]);
+
+    expect(technicians).toEqual([
+      expect.objectContaining({
+        displayName: "Riley",
+        id: "tech-riley",
+        mspCentralEmail: "riley@egit.com.au",
+        mspCentralTechnicianId: "msp-technician-riley",
+        mspCentralTechnicianName: "Riley Pearson",
+        sdpTechnicianName: "Riley Pearson",
+      }),
+    ]);
+  });
+
   it("does not treat a missing onsite flag as remote", () => {
     const unknown = mapMspCentralRequest({
       description: "Technician required at the customer office.",

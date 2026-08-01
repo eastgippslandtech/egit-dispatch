@@ -1278,6 +1278,10 @@ export function CommandCentrePrototype({
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
+            technicianMspCentralId: technicianMspCentralId(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
             userPrincipalName: technicianOutlookIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1407,6 +1411,10 @@ export function CommandCentrePrototype({
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
+            technicianMspCentralId: technicianMspCentralId(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
             userPrincipalName: technicianOutlookIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1528,6 +1536,10 @@ export function CommandCentrePrototype({
           selectedAppointment.technicianId,
         ),
         technicianEmail: technicianMspCentralIdentity(
+          dashboard.technicians,
+          selectedAppointment.technicianId,
+        ),
+        technicianMspCentralId: technicianMspCentralId(
           dashboard.technicians,
           selectedAppointment.technicianId,
         ),
@@ -2012,6 +2024,7 @@ async function publishLiveSchedule(event: {
   subject: string;
   technicianName: string;
   technicianEmail?: string;
+  technicianMspCentralId?: string;
   userPrincipalName: string;
 }): Promise<LiveScheduleResult> {
   const response = await fetch("/api/internal/dispatch/live-schedule", {
@@ -2136,6 +2149,14 @@ function technicianMspCentralIdentity(
   const technician = technicians.find((candidate) => candidate.id === technicianId);
 
   return technician?.mspCentralEmail ?? technician?.zohoEmail;
+}
+
+function technicianMspCentralId(
+  technicians: Technician[],
+  technicianId: string,
+) {
+  return technicians.find((candidate) => candidate.id === technicianId)
+    ?.mspCentralTechnicianId ?? undefined;
 }
 
 function MergeRequestModal({

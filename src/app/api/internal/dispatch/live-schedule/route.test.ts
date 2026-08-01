@@ -87,6 +87,7 @@ describe("live dispatch schedule route", () => {
           subject: "Printer offline",
           technicianName: "Matt",
           technicianEmail: "mattd@egit.com.au",
+          technicianMspCentralId: "msp-tech-matt",
           userPrincipalName: "mattd@egit.com.au",
         }),
         method: "POST",
@@ -111,6 +112,7 @@ describe("live dispatch schedule route", () => {
       scheduledEnd: "2026-07-24T11:00:00+10:00",
       scheduledStart: "2026-07-24T10:00:00+10:00",
       technicianEmail: "mattd@egit.com.au",
+      technicianId: "msp-tech-matt",
       technicianName: "Matt",
     });
     expect(getRequest.mock.invocationCallOrder[0]).toBeLessThan(

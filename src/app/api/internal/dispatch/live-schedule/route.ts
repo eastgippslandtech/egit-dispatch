@@ -22,6 +22,7 @@ type LiveScheduleCommand = {
   subject?: string;
   technicianName?: string;
   technicianEmail?: string;
+  technicianMspCentralId?: string;
   userPrincipalName?: string;
 };
 
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
       scheduledEnd: `${command.date}T${command.end}:00${melbourneOffset(command.date)}`,
       scheduledStart: `${command.date}T${command.start}:00${melbourneOffset(command.date)}`,
       technicianEmail: command.technicianEmail,
+      technicianId: command.technicianMspCentralId,
       technicianName: command.technicianName,
     });
 
@@ -123,6 +125,7 @@ function validateCommand(command: LiveScheduleCommand) {
     subject: command.subject as string,
     technicianName: clean(command.technicianName),
     technicianEmail: clean(command.technicianEmail),
+    technicianMspCentralId: clean(command.technicianMspCentralId),
     userPrincipalName: command.userPrincipalName as string,
   };
 }

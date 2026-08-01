@@ -389,8 +389,10 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       const request = {
         scheduled_end_time: { value: toEpochMilliseconds(input.scheduledEnd) },
         scheduled_start_time: { value: toEpochMilliseconds(input.scheduledStart) },
-        ...(input.technicianEmail
-          ? { technician: { email_id: input.technicianEmail } }
+        ...(input.technicianId
+          ? { technician: { id: input.technicianId } }
+          : input.technicianEmail
+            ? { technician: { email_id: input.technicianEmail } }
           : input.technicianName
             ? { technician: { name: input.technicianName } }
             : {}),
@@ -512,8 +514,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     });
 
     if (!response.ok) {
+      const detail = await readMspCentralErrorDetail(response);
       throw new MspCentralConfigurationError(
-        `MSP Central API request failed with status ${response.status}.`,
+        detail
+          ? `MSP Central API request failed with status ${response.status}: ${detail}.`
+          : `MSP Central API request failed with status ${response.status}.`,
       );
     }
 
@@ -526,6 +531,54 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return payload;
   }
+}
+
+async function readMspCentralErrorDetail(response: Response) {
+  if (typeof response.json !== "function") {
+    return undefined;
+  }
+
+  const payload = (await response.json().catch(() => undefined)) as
+    | Record<string, unknown>
+    | undefined;
+  const responseStatus = payload?.response_status;
+  const statuses = Array.isArray(responseStatus)
+    ? responseStatus
+    : responseStatus && typeof responseStatus === "object"
+      ? [responseStatus]
+      : [];
+
+  for (const status of statuses) {
+    if (!status || typeof status !== "object") continue;
+    const record = status as Record<string, unknown>;
+    const messages = Array.isArray(record.messages) ? record.messages : [];
+
+    for (const message of messages) {
+      if (!message || typeof message !== "object") continue;
+      const text = (message as Record<string, unknown>).message;
+      if (typeof text === "string" && text.trim()) {
+        return text.trim().replace(/[.]+$/, "").slice(0, 300);
+      }
+    }
+
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
+  }
+
+  const error = payload?.error;
+  if (typeof error === "string" && error.trim()) {
+    return error.trim().replace(/[.]+$/, "").slice(0, 300);
+  }
+
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
+  }
+
+  return undefined;
 }
 
 function toEpochMilliseconds(value: string) {

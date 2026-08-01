@@ -2,6 +2,7 @@ import type { DispatchRequest, Technician } from "@/server/dispatch/types";
 
 export type MspCentralRawTechnician = {
   email?: string | null;
+  email_id?: string | null;
   id?: string | number | null;
   name?: string | null;
 };
@@ -180,6 +181,7 @@ export type MspCentralClient = {
     scheduledEnd: string;
     scheduledStart: string;
     technicianEmail?: string;
+    technicianId?: string;
     technicianName?: string;
   }): Promise<void>;
   updateRequestStatus?(input: {

@@ -1,4 +1,5 @@
 import type { MobileJob } from "../../contracts/mobile";
+import { roundWorklogMinutes } from "../timer/timer-service";
 
 export function getMobileChargeableTime(job: MobileJob) {
   const start = new Date(job.startAt).getTime();
@@ -18,7 +19,7 @@ export function getMobileChargeableTime(job: MobileJob) {
 
   return {
     jobMinutes,
-    totalMinutes: jobMinutes + travelMinutes,
+    totalMinutes: roundWorklogMinutes(jobMinutes + travelMinutes),
     travelMinutes,
   };
 }

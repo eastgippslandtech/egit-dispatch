@@ -60,6 +60,7 @@ import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-sto
 import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -627,7 +628,7 @@ function buildMobileDispositionCommand({
   command: MobileWorklogCommand;
   job: DatabaseJobRow;
 }) {
-  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const durationMinutes = roundWorklogMinutes(command.durationMinutes ?? 1);
   const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
   const startedAt =
     command.startedAt ??
@@ -766,7 +767,7 @@ async function writeMobileWorklogToMsp({
     return;
   }
 
-  const durationMinutes = Math.max(1, Math.round(command.durationMinutes ?? 1));
+  const durationMinutes = roundWorklogMinutes(command.durationMinutes ?? 1);
   const endedAt = command.endedAt ?? command.occurredAt ?? new Date().toISOString();
   const startedAt =
     command.startedAt ??

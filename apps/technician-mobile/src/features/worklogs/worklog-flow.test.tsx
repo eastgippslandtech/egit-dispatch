@@ -67,7 +67,7 @@ describe("worklog service", () => {
     expect(submitted).toHaveBeenCalledWith(
       expect.objectContaining({
         billable: false,
-        durationMinutes: 35,
+        durationMinutes: 45,
         disposition: "complete",
         clientMutationId: "worklog-firewall-riley-2",
         jobId: "firewall-riley",

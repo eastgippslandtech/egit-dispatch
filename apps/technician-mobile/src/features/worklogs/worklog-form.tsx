@@ -107,6 +107,7 @@ export function WorklogForm({
         style={styles.singleInput}
         value={durationMinutes}
       />
+      <Text style={styles.message}>Rounded up to the next 15 minutes.</Text>
       <Text style={styles.label}>Work type</Text>
       <View style={styles.row}>
         {(["billable", "non_billable", "internal"] as const).map((option) => (

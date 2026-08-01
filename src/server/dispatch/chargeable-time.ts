@@ -1,5 +1,6 @@
 import type { Appointment, BookingType } from "./types";
 import { minutesFromTime } from "./scheduling";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 export type ChargeableTimeBreakdown = {
   jobMinutes: number;
@@ -33,7 +34,7 @@ export function getChargeableTicketTime({
 
   return {
     jobMinutes,
-    totalMinutes: jobMinutes + travelMinutes,
+    totalMinutes: roundWorklogMinutes(jobMinutes + travelMinutes),
     travelMinutes,
   };
 }

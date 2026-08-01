@@ -25,7 +25,7 @@ describe("mobile chargeable time", () => {
 
     expect(result).toEqual({
       jobMinutes: 60,
-      totalMinutes: 95,
+      totalMinutes: 105,
       travelMinutes: 35,
     });
   });

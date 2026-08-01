@@ -39,6 +39,7 @@ import type {
   WorklogTransfer,
   WorklogType,
 } from "@/server/worklogs/disposition";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 import type {
   Appointment,
@@ -586,7 +587,7 @@ export function CommandCentrePrototype({
       setToast("Work Log notes are required.");
       return;
     }
-    const durationMinutes = Math.round(Number(minutes));
+    const durationMinutes = roundWorklogMinutes(Number(minutes));
     if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
       setToast("Work Log time must be greater than zero.");
       return;
@@ -3341,6 +3342,9 @@ function WorkLogModal({
                 value={minutes}
                 onChange={(event) => setMinutes(event.target.value)}
               />
+              <span className="mt-1 block text-xs font-normal text-slate-400">
+                Rounded up to the next 15 minutes.
+              </span>
             </label>
             <label className="block text-sm font-semibold text-slate-200">
               Work type

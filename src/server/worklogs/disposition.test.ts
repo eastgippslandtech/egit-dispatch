@@ -15,6 +15,21 @@ const baseCommand = {
 };
 
 describe("worklog disposition validation", () => {
+  it.each([
+    [1, 15],
+    [15, 15],
+    [16, 30],
+    [95, 105],
+  ])("rounds %i minutes up to %i minutes", (input, expected) => {
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        durationMinutes: input,
+      }).durationMinutes,
+    ).toBe(expected);
+  });
+
   it("rejects a scheduled Work Log without an outcome", () => {
     expect(() => validateWorklogDispositionCommand(baseCommand)).toThrow(
       "Choose what happens to this scheduled job",

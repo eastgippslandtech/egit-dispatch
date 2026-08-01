@@ -29,6 +29,7 @@ import type {
   MspCentralRequestWorklogListResponse,
   MspCentralTechnicianListResponse,
 } from "./types";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 const MSP_REQUEST_TIMEOUT_MS = 10_000;
 const MSP_REQUEST_PAGE_SIZE = 100;
@@ -161,7 +162,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   return {
     async addRequestWorklog(input) {
       assertConfigured();
-      const durationMinutes = Math.max(1, Math.round(input.durationMinutes));
+      const durationMinutes = roundWorklogMinutes(input.durationMinutes);
       const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/worklogs`,
         {

@@ -1,4 +1,5 @@
 import type { BookingType } from "@/server/dispatch/types";
+import { roundWorklogMinutes } from "./time";
 
 export const worklogDispositions = [
   "complete",
@@ -65,7 +66,7 @@ export function validateWorklogDispositionCommand(
     currentBooking: input.currentBooking,
     description: clean(input.description),
     disposition: validDisposition(input.disposition),
-    durationMinutes: Math.round(Number(input.durationMinutes)),
+    durationMinutes: roundWorklogMinutes(Number(input.durationMinutes)),
     endedAt: clean(input.endedAt),
     idempotencyKey: clean(input.idempotencyKey),
     requestId: clean(input.requestId),

@@ -799,7 +799,7 @@ describe("MSP Central live client", () => {
         description: "Resolved printer fault.",
         is_billable: true,
         owner: { id: "msp-tech-simeon" },
-        time_spent: { hours: "1", minutes: "35" },
+        time_spent: { hours: "1", minutes: "45" },
       },
     });
   });

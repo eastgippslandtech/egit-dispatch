@@ -90,10 +90,30 @@ export type MspCentralRequestNoteListResponse = {
   request_notes?: MspCentralRawRequestNote[];
 };
 
+export type MspCentralRawWorklog = {
+  created_by?: { email_id?: string | null; name?: string | null } | null;
+  description?: string | null;
+  end_time?: MspCentralTimestamp | null;
+  id?: string | number | null;
+  owner?: { email_id?: string | null; name?: string | null } | null;
+  recorded_time?: MspCentralTimestamp | null;
+  start_time?: MspCentralTimestamp | null;
+  time_spent?: {
+    hours?: string | number | null;
+    minutes?: string | number | null;
+    value?: string | number | null;
+  } | null;
+};
+
+export type MspCentralRequestWorklogListResponse = {
+  worklogs?: MspCentralRawWorklog[];
+};
+
 export type MspCentralRequestUpdate = {
   author: string;
   body: string;
   createdAt?: string;
+  durationMinutes?: number;
   id: string;
 };
 
@@ -102,6 +122,8 @@ export type MspCentralRequestContext = {
   internalNotes: MspCentralRequestUpdate[];
   notesWarning?: string;
   request: DispatchRequest;
+  worklogs: MspCentralRequestUpdate[];
+  worklogsWarning?: string;
 };
 
 export type MspCentralRequestListResponse = {

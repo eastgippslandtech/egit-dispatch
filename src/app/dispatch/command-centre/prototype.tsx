@@ -2698,18 +2698,26 @@ function WorkLogModal({
             </p>
           ) : null}
           {requestContext ? (
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="mt-4 grid gap-4">
               <TicketUpdateList
-                emptyLabel="No customer responses are recorded."
-                title="Customer responses"
-                updates={requestContext.customerResponses}
+                emptyLabel="No previous work logs are recorded."
+                title="Previous work logs"
+                updates={requestContext.worklogs ?? []}
+                warning={requestContext.worklogsWarning}
               />
-              <TicketUpdateList
-                emptyLabel="No technician or internal notes are recorded."
-                title="Internal notes"
-                updates={requestContext.internalNotes}
-                warning={requestContext.notesWarning}
-              />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TicketUpdateList
+                  emptyLabel="No customer responses are recorded."
+                  title="Customer responses"
+                  updates={requestContext.customerResponses}
+                />
+                <TicketUpdateList
+                  emptyLabel="No technician or internal notes are recorded."
+                  title="Internal notes"
+                  updates={requestContext.internalNotes}
+                  warning={requestContext.notesWarning}
+                />
+              </div>
             </div>
           ) : null}
         </section>
@@ -3353,7 +3361,12 @@ function TicketUpdateList({
             >
               <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
                 <span className="font-semibold text-slate-200">{update.author}</span>
-                {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
+                <span className="flex flex-wrap items-center gap-2">
+                  {update.durationMinutes ? (
+                    <span>{formatWorklogDuration(update.durationMinutes)}</span>
+                  ) : null}
+                  {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
+                </span>
               </div>
               <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-100">
                 {update.body}
@@ -3364,6 +3377,17 @@ function TicketUpdateList({
       )}
     </section>
   );
+}
+
+function formatWorklogDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours === 0) {
+    return `${remainingMinutes}m`;
+  }
+
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function TimelineBoard({

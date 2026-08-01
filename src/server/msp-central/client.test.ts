@@ -174,6 +174,21 @@ describe("MSP Central live client", () => {
             },
           ],
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          worklogs: [
+            {
+              description:
+                "Legacy ConnectWise worklog: diagnosed the mail profile and rebuilt Outlook.",
+              id: "legacy-worklog-1",
+              owner: { name: "Riley Pearson" },
+              recorded_time: { value: "1704067200000" },
+              time_spent: { hours: "1", minutes: "15" },
+            },
+          ],
+        }),
       });
     vi.stubGlobal("fetch", fetchMock);
     const client = createMspCentralClient(
@@ -195,6 +210,11 @@ describe("MSP Central live client", () => {
       expect.stringContaining("/requests/123/notes"),
       expect.objectContaining({ method: "GET" }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining("/requests/123/worklogs"),
+      expect.objectContaining({ method: "GET" }),
+    );
     expect(context.request).toMatchObject({
       customer: "Client Company",
       notes: "Current detailed job description.",
@@ -209,6 +229,14 @@ describe("MSP Central live client", () => {
       expect.objectContaining({
         author: "Simeon",
         body: "Replacement part ordered.",
+      }),
+    ]);
+    expect(context.worklogs).toEqual([
+      expect.objectContaining({
+        author: "Riley Pearson",
+        body:
+          "Legacy ConnectWise worklog: diagnosed the mail profile and rebuilt Outlook.",
+        durationMinutes: 75,
       }),
     ]);
   });

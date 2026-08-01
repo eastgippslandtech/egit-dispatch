@@ -17,6 +17,7 @@ import type {
   MspCentralRawRequest,
   MspCentralRawRequestNote,
   MspCentralRawTechnician,
+  MspCentralRawWorklog,
   MspCentralRequestUpdate,
 } from "./types";
 import { buildMspCentralRequestUrl } from "./url";
@@ -357,6 +358,45 @@ export function mapMspCentralRequestNotes(
   });
 
   return { customerResponses, internalNotes };
+}
+
+export function mapMspCentralRequestWorklogs(
+  worklogs: MspCentralRawWorklog[] = [],
+) {
+  return worklogs.map((worklog, index): MspCentralRequestUpdate => ({
+    author:
+      readString(worklog.owner?.name) ??
+      readString(worklog.owner?.email_id) ??
+      readString(worklog.created_by?.name) ??
+      readString(worklog.created_by?.email_id) ??
+      "Unknown technician",
+    body: htmlToPlainText(worklog.description) || "Work logged.",
+    createdAt:
+      readDateTime(worklog.recorded_time) ??
+      readDateTime(worklog.start_time) ??
+      undefined,
+    durationMinutes: readWorklogDurationMinutes(worklog),
+    id: readString(worklog.id) ?? `request-worklog-${index}`,
+  }));
+}
+
+function readWorklogDurationMinutes(worklog: MspCentralRawWorklog) {
+  const hours = Number(worklog.time_spent?.hours ?? 0);
+  const minutes = Number(worklog.time_spent?.minutes ?? 0);
+  const total = hours * 60 + minutes;
+
+  if (Number.isFinite(total) && total > 0) {
+    return Math.round(total);
+  }
+
+  const start = readDateTime(worklog.start_time);
+  const end = readDateTime(worklog.end_time);
+  if (!start || !end) {
+    return undefined;
+  }
+
+  const elapsed = (new Date(end).getTime() - new Date(start).getTime()) / 60_000;
+  return Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed) : undefined;
 }
 
 export function mapMspCentralSentiment(

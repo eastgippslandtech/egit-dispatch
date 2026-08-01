@@ -32,6 +32,7 @@ describe("MSP Central request context route", () => {
       customerResponses: [],
       internalNotes: [],
       request: { id: "123", notes: "Current job description." },
+      worklogs: [],
     };
     createMspCentralClientMock.mockReturnValue({
       getRequestContext: vi.fn(async () => context),

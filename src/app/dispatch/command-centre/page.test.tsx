@@ -442,6 +442,15 @@ test("loads the latest job description and customer responses into a live Work L
             id: "note-1",
           },
         ],
+        worklogs: [
+          {
+            author: "Riley Pearson",
+            body: "Rebuilt the legacy Outlook profile and tested mail flow.",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            durationMinutes: 75,
+            id: "legacy-worklog-1",
+          },
+        ],
         request: {
           ...selectedRequest,
           notes: "The Zebra label printer is offline after a power outage.",
@@ -474,6 +483,13 @@ test("loads the latest job description and customer responses into a live Work L
   expect(
     within(dialog).getByText("Confirm access before dispatch."),
   ).toBeInTheDocument();
+  expect(within(dialog).getByText("Previous work logs")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText(
+      "Rebuilt the legacy Outlook profile and tested mail flow.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByText("1h 15m")).toBeInTheDocument();
 });
 
 test("saves Work Log locally and save-and-complete marks the request resolved", async () => {

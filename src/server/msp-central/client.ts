@@ -8,6 +8,7 @@ import {
 } from "./fixtures";
 import {
   mapMspCentralRequestNotes,
+  mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
   mapMspCentralTechnicians,
 } from "./mappers";
@@ -25,6 +26,7 @@ import type {
   MspCentralRequestDetailResponse,
   MspCentralRequestListResponse,
   MspCentralRequestNoteListResponse,
+  MspCentralRequestWorklogListResponse,
   MspCentralTechnicianListResponse,
 } from "./types";
 
@@ -79,6 +81,7 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
         customerResponses: [],
         internalNotes: [],
         request,
+        worklogs: [],
       };
     },
     async getTechnician(technicianId) {
@@ -227,38 +230,59 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         sourceSystem: "msp-central",
       })[0];
 
-      try {
-        const notesUrl = new URL(
-          `${apiRoot}/requests/${encodeURIComponent(requestId)}/notes`,
-        );
-        notesUrl.searchParams.set(
-          "input_data",
-          JSON.stringify({
-            list_info: {
-              row_count: 100,
-              sort_field: "created_time",
-              sort_order: "desc",
-              start_index: 1,
-            },
-          }),
-        );
-        const notesPayload = await getJson<MspCentralRequestNoteListResponse>(
-          notesUrl.toString(),
-        );
+      const listInput = JSON.stringify({
+        list_info: {
+          row_count: 100,
+          sort_field: "created_time",
+          sort_order: "desc",
+          start_index: 1,
+        },
+      });
+      const notesUrl = new URL(
+        `${apiRoot}/requests/${encodeURIComponent(requestId)}/notes`,
+      );
+      notesUrl.searchParams.set("input_data", listInput);
+      const worklogsUrl = new URL(
+        `${apiRoot}/requests/${encodeURIComponent(requestId)}/worklogs`,
+      );
+      worklogsUrl.searchParams.set("input_data", listInput);
 
-        return {
-          ...mapMspCentralRequestNotes(notesPayload.request_notes),
-          request,
-        };
-      } catch (error) {
-        console.error("MSP Central request notes read failed", safeError(error));
-        return {
-          customerResponses: [],
-          internalNotes: [],
-          notesWarning: "Latest ticket notes could not be loaded.",
-          request,
-        };
+      const [notesResult, worklogsResult] = await Promise.allSettled([
+        getJson<MspCentralRequestNoteListResponse>(notesUrl.toString()),
+        getJson<MspCentralRequestWorklogListResponse>(worklogsUrl.toString()),
+      ]);
+
+      if (notesResult.status === "rejected") {
+        console.error(
+          "MSP Central request notes read failed",
+          safeError(notesResult.reason),
+        );
       }
+      if (worklogsResult.status === "rejected") {
+        console.error(
+          "MSP Central request worklogs read failed",
+          safeError(worklogsResult.reason),
+        );
+      }
+
+      return {
+        ...(notesResult.status === "fulfilled"
+          ? mapMspCentralRequestNotes(notesResult.value.request_notes)
+          : { customerResponses: [], internalNotes: [] }),
+        notesWarning:
+          notesResult.status === "rejected"
+            ? "Latest ticket notes could not be loaded."
+            : undefined,
+        request,
+        worklogs:
+          worklogsResult.status === "fulfilled"
+            ? mapMspCentralRequestWorklogs(worklogsResult.value.worklogs)
+            : [],
+        worklogsWarning:
+          worklogsResult.status === "rejected"
+            ? "Previous work logs could not be loaded."
+            : undefined,
+      };
     },
     async getTechnician(technicianId) {
       return (await this.listTechnicians()).find(

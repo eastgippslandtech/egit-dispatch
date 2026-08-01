@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -17,6 +18,7 @@ import {
   bookingCardPriorityClass,
   requestNotesSummary,
   ScheduleConfirmModal,
+  toastAutoDismissMs,
 } from "./prototype";
 
 const routerRefreshMock = vi.fn();
@@ -172,6 +174,17 @@ test("shows immediate proof that schedule confirmation was accepted", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
   expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("keeps error notices visible longer than success notices", () => {
+  expect(
+    toastAutoDismissMs(
+      "REQ-100284 scheduled. Syncing with MSP Central and Outlook.",
+    ),
+  ).toBe(3_500);
+  expect(
+    toastAutoDismissMs("Live schedule did not save: MSP Central unavailable."),
+  ).toBe(8_000);
 });
 
 test("redirects a wallboard-only session to the wallboard", async () => {
@@ -569,6 +582,12 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_500);
+  });
+  expect(
+    screen.queryByText("Work Log saved and ticket resolved locally for test sync."),
+  ).not.toBeInTheDocument();
 });
 
 test("shows the required conditional fields for book forward and transfer", async () => {

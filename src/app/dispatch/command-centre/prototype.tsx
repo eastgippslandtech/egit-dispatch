@@ -157,6 +157,17 @@ const BOOKING_PRIORITY_CARD_CLASSES: Record<DispatchRequest["priority"], string>
   Low: "border-sky-300/65 bg-sky-500/28 text-sky-50 shadow-sky-950/25",
 };
 
+const SUCCESS_TOAST_DURATION_MS = 3_500;
+const ATTENTION_TOAST_DURATION_MS = 8_000;
+const ATTENTION_TOAST_PATTERN =
+  /\b(?:could not|did not|error|failed|requires?|unavailable)\b/i;
+
+export function toastAutoDismissMs(message: string) {
+  return ATTENTION_TOAST_PATTERN.test(message)
+    ? ATTENTION_TOAST_DURATION_MS
+    : SUCCESS_TOAST_DURATION_MS;
+}
+
 export function bookingCardPriorityClass(
   priority?: DispatchRequest["priority"] | null,
 ) {
@@ -269,6 +280,18 @@ export function CommandCentrePrototype({
   const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
   const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
   const [toast, setToast] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => setToast(undefined),
+      toastAutoDismissMs(toast),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
 
   useEffect(() => {
     if (!data.calendarError?.includes("MSP Central is temporarily unavailable")) {

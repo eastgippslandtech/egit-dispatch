@@ -53,13 +53,18 @@ describe("Graph event mapper", () => {
   });
 
   it("maps linked Outlook events into DispatchAppointment shape", () => {
-    const appointment = mapGraphEventToAppointment(event(), technician);
+    const appointment = mapGraphEventToAppointment(
+      event(),
+      technician,
+      "https://mspcentral.example/requests/{request}",
+    );
 
     expect(appointment).toMatchObject({
       calendarOwnerEmail: "simeon@egit.com.au",
       customer: "OneHarvest server room",
       date: "2026-07-08",
       end: "10:30",
+      helpdeskUrl: "https://mspcentral.example/requests/100211",
       id: "outlook-tech-simeon-event-1",
       outlookEventId: "event-1",
       outlookLinkedRequestNumber: "100211",

@@ -5277,7 +5277,7 @@ function DetailDrawer({
   const eyebrow = isOutlookOnly
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
-  const helpdeskUrl = request?.helpdeskUrl;
+  const helpdeskUrl = request?.helpdeskUrl ?? appointment?.helpdeskUrl;
 
   return (
     <aside

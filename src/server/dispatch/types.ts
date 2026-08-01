@@ -101,6 +101,7 @@ export type Appointment = {
   id: string;
   date?: string;
   requestId?: string;
+  helpdeskUrl?: string;
   technicianId: string;
   title: string;
   customer: string;

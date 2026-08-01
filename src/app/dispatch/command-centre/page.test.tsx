@@ -455,6 +455,43 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
   );
 });
 
+test("keeps the Helpdesk link available for a completed request calendar booking", async () => {
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValue({
+    ...data,
+    appointments: [
+      {
+        customer: "East Gippsland IT",
+        date: "2026-07-08",
+        end: "12:45",
+        helpdeskUrl: "https://mspcentral.example/requests/6768000001414219",
+        id: "completed-request-booking",
+        outlookLinkedRequestNumber: "6768000001414219",
+        requestId: "6768000001414219",
+        source: "outlook",
+        start: "11:30",
+        status: "busy",
+        technicianId: "tech-simeon",
+        title: "test",
+      },
+    ],
+    requests: [],
+    selectedRequestId: "",
+  });
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: /test East Gippsland IT/ }));
+
+  expect(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("link", {
+      name: "Open in Helpdesk",
+    }),
+  ).toHaveAttribute(
+    "href",
+    "https://mspcentral.example/requests/6768000001414219",
+  );
+});
+
 test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {
   render(await CommandCentrePage());
 

@@ -92,7 +92,13 @@ export async function readTechnicianCalendarAppointments({
           technician.outlookUserPrincipalName ?? technician.outlookEmail,
       });
 
-      return events.map((event) => mapGraphEventToAppointment(event, technician));
+      return events.map((event) =>
+        mapGraphEventToAppointment(
+          event,
+          technician,
+          config.mspCentral.requestWebBaseUrl,
+        ),
+      );
     }),
   );
 

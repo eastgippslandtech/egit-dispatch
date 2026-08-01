@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 
 import { getSharedPostgresClient } from "@/server/database/client";
+import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
 
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
@@ -378,6 +379,9 @@ function mapAppointment(
       "Unknown customer",
     date: formatMelbourneDate(start),
     end: formatMelbourneTime(end),
+    helpdeskUrl:
+      pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ??
+      buildMspCentralRequestUrl(row.sdpRequestNumber),
     outlookEventId: row.outlookEventId ?? undefined,
     readOnly: true,
     requestId: row.sdpRequestId,

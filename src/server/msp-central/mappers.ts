@@ -63,8 +63,9 @@ export function mapMspCentralRequest(
 ): DispatchRequest {
   const now = options.now ?? new Date();
   const profiles = options.profiles ?? getInitialStaffProfiles();
+  const technicianIdentity = normalizeTechnician(raw.technician);
   const match = findStaffForMspCentralTechnician(
-    normalizeTechnician(raw.technician),
+    technicianIdentity,
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
@@ -161,6 +162,9 @@ export function mapMspCentralRequest(
     subject:
       cleanRequestTitle(readString(raw.subject), requestNumber) ||
       "Untitled MSP Central request",
+    mspCentralTechnicianEmail: technicianIdentity.email ?? undefined,
+    mspCentralTechnicianId: technicianIdentity.id ?? undefined,
+    mspCentralTechnicianName: technicianIdentity.name ?? undefined,
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,
@@ -397,6 +401,10 @@ export function mapMspCentralRequestWorklogs(
       undefined,
     durationMinutes: readWorklogDurationMinutes(worklog),
     id: readString(worklog.id) ?? `request-worklog-${index}`,
+    isBillable:
+      typeof worklog.is_billable === "boolean"
+        ? worklog.is_billable
+        : undefined,
   }));
 }
 

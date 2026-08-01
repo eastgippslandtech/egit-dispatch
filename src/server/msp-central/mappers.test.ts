@@ -5,6 +5,7 @@ import { getInitialStaffProfiles } from "@/server/staff/profiles";
 import {
   mapMspCentralPriority,
   mapMspCentralRequest,
+  mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
   mapMspCentralSentiment,
   mapMspCentralSlaState,
@@ -54,6 +55,9 @@ describe("MSP Central request mappers", () => {
     expect(request).toMatchObject({
       customer: "Fixture Customer",
       helpdeskUrl: "https://helpdesk.example/requests/REQ-MSP-1",
+      mspCentralTechnicianEmail: "mattd@egit.com.au",
+      mspCentralTechnicianId: "msp-tech-matt",
+      mspCentralTechnicianName: "Matt",
       notes: "Printer queue is stuck after driver update.",
       priority: "High",
       readyToBook: true,
@@ -231,6 +235,28 @@ describe("MSP Central request mappers", () => {
         { now },
       ).sentiment,
     ).toBe("negative");
+  });
+
+  it("preserves the MSP billable flag on Work Log readback", () => {
+    expect(
+      mapMspCentralRequestWorklogs([
+        {
+          description: "Billable test",
+          id: "worklog-1",
+          is_billable: true,
+          time_spent: { hours: "0", minutes: "15" },
+        },
+        {
+          description: "Non-billable test",
+          id: "worklog-2",
+          is_billable: false,
+          time_spent: { hours: "0", minutes: "15" },
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: "worklog-1", isBillable: true }),
+      expect.objectContaining({ id: "worklog-2", isBillable: false }),
+    ]);
   });
 
   it("prefers MSP technician ID and warns on display-name-only matches", () => {

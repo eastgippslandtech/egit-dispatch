@@ -171,14 +171,13 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
                 description: input.description,
                 end_time: { value: new Date(input.endedAt).getTime() },
                 include_nonoperational_hours: true,
+                is_billable: input.worklogType === "billable",
+                mark_first_response: false,
                 owner: { id: input.ownerId },
                 start_time: { value: new Date(input.startedAt).getTime() },
                 time_spent: {
                   hours: String(Math.floor(durationMinutes / 60)),
                   minutes: String(durationMinutes % 60),
-                },
-                worklog_type: {
-                  name: mspCentralWorklogTypeName(input.worklogType),
                 },
               },
             }),
@@ -200,7 +199,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         {
           body: new URLSearchParams({
             input_data: JSON.stringify({
-              request: { technician: { name: input.technicianName } },
+              request: {
+                technician: input.technicianEmail
+                  ? { email_id: input.technicianEmail }
+                  : { name: input.technicianName },
+              },
             }),
           }),
           method: "PUT",
@@ -537,13 +540,15 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 }
 
 async function readMspCentralErrorDetail(response: Response) {
-  if (typeof response.json !== "function") {
-    return undefined;
+  let payload: Record<string, unknown> | undefined;
+  if (typeof response.text === "function") {
+    const body = await response.text().catch(() => "");
+    payload = safeJsonRecord(body);
+  } else if (typeof response.json === "function") {
+    payload = (await response.json().catch(() => undefined)) as
+      | Record<string, unknown>
+      | undefined;
   }
-
-  const payload = (await response.json().catch(() => undefined)) as
-    | Record<string, unknown>
-    | undefined;
   const responseStatus = payload?.response_status;
   const statuses = Array.isArray(responseStatus)
     ? responseStatus
@@ -581,6 +586,41 @@ async function readMspCentralErrorDetail(response: Response) {
     }
   }
 
+  return findMspCentralErrorMessage(payload);
+}
+
+function safeJsonRecord(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findMspCentralErrorMessage(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = findMspCentralErrorMessage(item);
+      if (message) return message;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "error_message", "display_message"]) {
+    const message = record[key];
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().replace(/[.]+$/, "").slice(0, 300);
+    }
+  }
+  for (const child of Object.values(record)) {
+    const message = findMspCentralErrorMessage(child);
+    if (message) return message;
+  }
   return undefined;
 }
 
@@ -609,14 +649,6 @@ function mspCentralActionSucceeded(payload: MspCentralActionResponse) {
   return statuses.some(
     (status) => status.status?.trim().toLowerCase() === "success",
   );
-}
-
-function mspCentralWorklogTypeName(
-  worklogType: "billable" | "non_billable" | "internal",
-) {
-  if (worklogType === "non_billable") return "Non-billable";
-  if (worklogType === "internal") return "Internal";
-  return "Billable";
 }
 
 async function refreshAccessToken(config: DispatchConfig) {

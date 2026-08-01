@@ -18,17 +18,29 @@ describe("MSP Central Work Log owner resolution", () => {
     expect(listTechnicians).not.toHaveBeenCalled();
   });
 
+  it("uses the canonical EGIT staff profile before the restricted technician directory", async () => {
+    const listTechnicians = vi.fn();
+
+    await expect(
+      resolveMspCentralWorklogOwner({
+        email: "simeon@egit.com.au",
+        mspClient: { listTechnicians } as unknown as MspCentralClient,
+      }),
+    ).resolves.toEqual({ id: "6768000000303165" });
+    expect(listTechnicians).not.toHaveBeenCalled();
+  });
+
   it("resolves the signed-in EGIT email against live MSP technicians", async () => {
     const listTechnicians = vi.fn().mockResolvedValue([
       {
-        mspCentralEmail: "simeon@egit.com.au",
+        mspCentralEmail: "external-technician@example.com",
         mspCentralTechnicianId: "msp-tech-simeon",
       },
     ]);
 
     await expect(
       resolveMspCentralWorklogOwner({
-        email: "SIMEON@egit.com.au",
+        email: "external-technician@example.com",
         mspClient: { listTechnicians } as unknown as MspCentralClient,
       }),
     ).resolves.toEqual({ id: "msp-tech-simeon" });

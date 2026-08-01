@@ -103,7 +103,9 @@ describe("Work Log disposition runtime", () => {
 
     expect(dependencies.mspClient.updateRequestSchedule).toHaveBeenCalledOnce();
     expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledOnce();
-    expect(dependencies.graphClient.createEvent).toHaveBeenCalledOnce();
+    expect(dependencies.graphClient.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "Printer offline" }),
+    );
     expect(dependencies.outcomeStore.bookForward).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: "event-2", requestId: "request-1" }),
     );
@@ -126,6 +128,7 @@ describe("Work Log disposition runtime", () => {
 
     expect(dependencies.mspClient.assignRequest).toHaveBeenCalledWith({
       requestId: "request-1",
+      technicianEmail: "simeon@egit.com.au",
       technicianName: "Simeon",
     });
     expect(dependencies.mspClient.updateRequestStatus).toHaveBeenCalledWith({

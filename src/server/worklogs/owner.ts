@@ -1,4 +1,5 @@
 import type { MspCentralClient } from "@/server/msp-central/types";
+import { findStaffForZohoLogin } from "@/server/staff/profiles";
 
 export async function resolveMspCentralWorklogOwner({
   email,
@@ -19,6 +20,12 @@ export async function resolveMspCentralWorklogOwner({
     throw new Error(
       "MSP Central technician owner could not be resolved for this account.",
     );
+  }
+
+  const profileId = findStaffForZohoLogin(normalizedEmail)
+    ?.mspCentralTechnicianId?.trim();
+  if (profileId) {
+    return { id: profileId };
   }
 
   const technicians = await mspClient.listTechnicians();

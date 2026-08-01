@@ -49,6 +49,37 @@ describe("staff identity mapping", () => {
     });
   });
 
+  it("keeps the canonical MSP technician IDs for every authorised staff member", () => {
+    expect(
+      getInitialStaffProfiles().map((profile) => ({
+        email: profile.mspCentralEmail,
+        id: profile.mspCentralTechnicianId,
+        name: profile.mspCentralTechnicianName,
+      })),
+    ).toEqual([
+      {
+        email: "simeon@egit.com.au",
+        id: "6768000000303165",
+        name: "Simeon",
+      },
+      {
+        email: "mattd@egit.com.au",
+        id: "6768000000313963",
+        name: "Matt Doyle",
+      },
+      {
+        email: "jervy@egit.com.au",
+        id: "6768000000319012",
+        name: "Jervy",
+      },
+      {
+        email: "riley@egit.com.au",
+        id: "6768000000314751",
+        name: "Riley",
+      },
+    ]);
+  });
+
   it("matches MSP Central technicians by technician id first", () => {
     const [profile] = getInitialStaffProfiles();
     const result = findStaffForMspCentralTechnician(

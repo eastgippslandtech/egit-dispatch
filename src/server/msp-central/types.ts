@@ -97,6 +97,7 @@ export type MspCentralRawWorklog = {
   description?: string | null;
   end_time?: MspCentralTimestamp | null;
   id?: string | number | null;
+  is_billable?: boolean | null;
   owner?: { email_id?: string | null; name?: string | null } | null;
   recorded_time?: MspCentralTimestamp | null;
   start_time?: MspCentralTimestamp | null;
@@ -117,6 +118,7 @@ export type MspCentralRequestUpdate = {
   createdAt?: string;
   durationMinutes?: number;
   id: string;
+  isBillable?: boolean;
 };
 
 export type MspCentralRequestContext = {
@@ -164,6 +166,7 @@ export type MspCentralClient = {
   }): Promise<void>;
   assignRequest(input: {
     requestId: string;
+    technicianEmail?: string;
     technicianName: string;
   }): Promise<void>;
   clearRequestSchedule(input: { requestId: string }): Promise<void>;

@@ -549,6 +549,61 @@ describe("MSP Central live client", () => {
     );
   });
 
+  it("includes nested MSP Central field validation details from text responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () =>
+          JSON.stringify({
+            response_status: {
+              messages: [
+                {
+                  fields: [
+                    {
+                      field: "worklog_type",
+                      message: "The Work Log type is invalid",
+                    },
+                  ],
+                },
+              ],
+              status: "failed",
+            },
+          }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(
+      client.addRequestWorklog?.({
+        description: "Test Work Log.",
+        durationMinutes: 1,
+        endedAt: "2026-08-01T10:01:00+10:00",
+        ownerId: "msp-tech-simeon",
+        requestId: "123",
+        startedAt: "2026-08-01T10:00:00+10:00",
+        worklogType: "billable",
+      }),
+    ).rejects.toThrow(
+      "MSP Central API request failed with status 400: The Work Log type is invalid.",
+    );
+  });
+
   it("does not send schedule fields that are absent from the active request template", async () => {
     const fetchMock = vi
       .fn()
@@ -742,18 +797,18 @@ describe("MSP Central live client", () => {
     expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
       worklog: {
         description: "Resolved printer fault.",
+        is_billable: true,
         owner: { id: "msp-tech-simeon" },
         time_spent: { hours: "1", minutes: "35" },
-        worklog_type: { name: "Billable" },
       },
     });
   });
 
   it.each([
-    ["billable", "Billable"],
-    ["non_billable", "Non-billable"],
-    ["internal", "Internal"],
-  ] as const)("maps %s Work Logs to the configured MSP type", async (worklogType, expectedName) => {
+    ["billable", true],
+    ["non_billable", false],
+    ["internal", false],
+  ] as const)("maps %s Work Logs to the MSP billable flag", async (worklogType, expectedBillable) => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -790,10 +845,13 @@ describe("MSP Central live client", () => {
     const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
     expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
       worklog: {
+        is_billable: expectedBillable,
         owner: { id: "msp-tech-simeon" },
-        worklog_type: { name: expectedName },
       },
     });
+    expect(
+      JSON.parse(body.get("input_data") ?? "{}").worklog.worklog_type,
+    ).toBeUndefined();
   });
 
   it("assigns an MSP Central request to a technician", async () => {
@@ -830,6 +888,42 @@ describe("MSP Central live client", () => {
       request: { technician: { name: "Jervy" } },
     });
     expect(fetchMock.mock.calls[1][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("prefers the MSP technician email when assigning a request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.assignRequest({
+      requestId: "123",
+      technicianEmail: "mattd@egit.com.au",
+      technicianName: "Matt",
+    });
+
+    const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
+      request: { technician: { email_id: "mattd@egit.com.au" } },
+    });
   });
 
   it("merges a duplicate child request into the surviving parent request", async () => {

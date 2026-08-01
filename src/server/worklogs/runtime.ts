@@ -1,4 +1,5 @@
 import type { MicrosoftGraphEvent } from "@/server/graph/types";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 
 import type { WorklogDispositionCommand } from "./disposition";
 
@@ -18,6 +19,7 @@ type RuntimeMspClient = {
   }) => Promise<void>;
   assignRequest: (input: {
     requestId: string;
+    technicianEmail?: string;
     technicianName: string;
   }) => Promise<void>;
   clearRequestSchedule: (input: { requestId: string }) => Promise<void>;
@@ -141,6 +143,7 @@ export function createWorklogDispositionRuntime({
       if (command.disposition === "transfer_escalate" && command.transfer) {
         await mspClient.assignRequest({
           requestId: command.requestId,
+          technicianEmail: command.transfer.targetEmail,
           technicianName:
             command.transfer.targetTechnicianName ??
             command.transfer.targetEmail ??
@@ -185,7 +188,9 @@ export function createWorklogDispositionRuntime({
           end: `${booking.date}T${booking.end}:00`,
           location: booking.location,
           start: `${booking.date}T${booking.start}:00`,
-          subject: `${booking.requestNumber} ${booking.subject}`.trim(),
+          subject:
+            cleanRequestTitle(booking.subject, booking.requestNumber) ||
+            booking.subject,
           transactionId: command.idempotencyKey,
           userPrincipalName: booking.userPrincipalName,
         };

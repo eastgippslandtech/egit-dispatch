@@ -137,6 +137,40 @@ describe("dispatch test sync overlays", () => {
     );
   });
 
+  it("keeps a live scheduled booking visible and flags background sync failures", () => {
+    const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
+      normaliseDispatchTestSyncEvent({
+        appointmentId: "appt-live",
+        createdAt: "2026-07-08T00:00:00.000Z",
+        date: "2026-07-08",
+        end: "10:30",
+        eventType: "scheduled",
+        payload: {
+          liveSync: {
+            error: "MSP Central status update failed",
+            status: "failed",
+          },
+        },
+        requestId: "req-1",
+        start: "09:30",
+        technicianId: "matt",
+      }),
+    ]);
+
+    expect(dashboard.requests[0]).toMatchObject({
+      scheduledStart: "2026-07-08T09:30:00+10:00",
+      status: "Scheduled",
+    });
+    expect(dashboard.requests[0].warnings).toContain(
+      "Live sync failed: MSP Central status update failed",
+    );
+    expect(
+      dashboard.appointments.find((appointment) => appointment.requestId === "req-1"),
+    ).toMatchObject({
+      syncIssue: "time-mismatch",
+    });
+  });
+
   it("moves an existing appointment between technicians", () => {
     const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
       normaliseDispatchTestSyncEvent({

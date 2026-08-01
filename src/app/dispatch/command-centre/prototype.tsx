@@ -112,6 +112,7 @@ type DragPayload =
 
 type LiveScheduleResult = {
   id?: string;
+  queued?: boolean;
   webLink?: string;
 };
 
@@ -1261,15 +1262,18 @@ export function CommandCentrePrototype({
       try {
         if (liveSchedule) {
           liveEvent = await publishLiveSchedule({
+            appointmentId,
             bookingType,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
             location: request.siteAddress ?? request.site,
+            priority: request.priority,
             requestId: request.id,
             requestNumber: request.requestNumber,
             start: pendingSchedule.start,
             subject: request.subject,
+            technicianId: pendingSchedule.technicianId,
             technicianName: technicianLabel(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1282,6 +1286,7 @@ export function CommandCentrePrototype({
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
+            travel: pendingSchedule.travel,
             userPrincipalName: technicianOutlookIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1372,7 +1377,9 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? `${request.requestNumber} scheduled in MSP Central and Outlook.`
+          ? liveEvent?.queued
+            ? `${request.requestNumber} scheduled. Syncing with MSP Central and Outlook.`
+            : `${request.requestNumber} scheduled in MSP Central and Outlook.`
           : `${request.requestNumber} scheduled in mock mode.`,
       );
     } else {
@@ -1393,16 +1400,20 @@ export function CommandCentrePrototype({
       try {
         if (liveSchedule && request) {
           liveEvent = await publishLiveSchedule({
+            appointmentId: pendingSchedule.appointmentId,
             bookingType,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
             eventId: currentAppointment?.outlookEventId,
             location: request.siteAddress ?? request.site,
+            priority: request.priority,
             requestId: request.id,
             requestNumber: request.requestNumber,
             start: pendingSchedule.start,
             subject: request.subject,
+            scheduleAction: "rescheduled",
+            technicianId: pendingSchedule.technicianId,
             technicianName: technicianLabel(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1415,6 +1426,7 @@ export function CommandCentrePrototype({
               dashboard.technicians,
               pendingSchedule.technicianId,
             ),
+            travel: pendingSchedule.travel,
             userPrincipalName: technicianOutlookIdentity(
               dashboard.technicians,
               pendingSchedule.technicianId,
@@ -1501,7 +1513,9 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? "Appointment moved in MSP Central and Outlook."
+          ? liveEvent?.queued
+            ? "Appointment moved. Syncing with MSP Central and Outlook."
+            : "Appointment moved in MSP Central and Outlook."
           : "Appointment moved in mock mode.",
       );
     }
@@ -1520,6 +1534,7 @@ export function CommandCentrePrototype({
 
     try {
       const liveEvent = await publishLiveSchedule({
+        appointmentId: selectedAppointment.id,
         bookingType:
           selectedAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
         customer: selectedRequest.customer,
@@ -1527,10 +1542,13 @@ export function CommandCentrePrototype({
         end: selectedAppointment.end,
         eventId: selectedAppointment.outlookEventId,
         location: selectedRequest.siteAddress ?? selectedRequest.site,
+        priority: selectedRequest.priority,
         requestId: selectedRequest.id,
         requestNumber: selectedRequest.requestNumber,
         start: selectedAppointment.start,
         subject: selectedRequest.subject,
+        scheduleAction: "rescheduled",
+        technicianId: selectedAppointment.technicianId,
         technicianName: technicianLabel(
           dashboard.technicians,
           selectedAppointment.technicianId,
@@ -2012,19 +2030,24 @@ async function publishDispatchTestSyncEvent(
 }
 
 async function publishLiveSchedule(event: {
+  appointmentId: string;
   bookingType?: BookingType;
   customer: string;
   date: string;
   end: string;
   eventId?: string;
   location: string;
+  priority?: DispatchRequest["priority"];
   requestId: string;
   requestNumber: string;
   start: string;
   subject: string;
+  scheduleAction?: "scheduled" | "rescheduled";
+  technicianId: string;
   technicianName: string;
   technicianEmail?: string;
   technicianMspCentralId?: string;
+  travel?: TravelEstimate;
   userPrincipalName: string;
 }): Promise<LiveScheduleResult> {
   const response = await fetch("/api/internal/dispatch/live-schedule", {
@@ -2035,14 +2058,17 @@ async function publishLiveSchedule(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; event?: LiveScheduleResult }
+    | { error?: string; event?: LiveScheduleResult; queued?: boolean }
     | null;
 
   if (!response.ok) {
     throw new Error(body?.error ?? "Live schedule write failed.");
   }
 
-  return body?.event ?? {};
+  return {
+    ...body?.event,
+    queued: body?.queued,
+  };
 }
 
 async function publishMspCentralRequestMerge(event: {

@@ -42,6 +42,12 @@ export type DispatchTestSyncEvent = {
   priority?: Priority;
   notes?: string;
   payload?: {
+    liveSync?: {
+      error?: string;
+      outlookEventId?: string;
+      outlookWebLink?: string;
+      status: "failed" | "pending" | "synced";
+    };
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   };
@@ -197,6 +203,15 @@ export function applyDispatchTestSyncEvents(
     const scheduledEnd = mockIsoTime(event.date, event.end);
 
     if (request) {
+      const liveSync = event.payload?.liveSync;
+      const liveSyncWarnings =
+        liveSync?.status === "failed"
+          ? [`Live sync failed: ${liveSync.error ?? "Background sync failed"}`]
+          : liveSync?.status === "pending"
+            ? ["Live sync pending"]
+            : liveSync?.status === "synced"
+              ? []
+              : ["Test sync"];
       request.status = "Scheduled";
       request.technicianId = event.technicianId;
       request.scheduledStart = scheduledStart;
@@ -211,7 +226,7 @@ export function applyDispatchTestSyncEvents(
         source: "test-sync",
         summary: event.eventType === "rescheduled" ? "Schedule changed" : "Scheduled",
       };
-      request.warnings = mergeWarnings(request.warnings, ["Test sync"]);
+      request.warnings = mergeWarnings(request.warnings, liveSyncWarnings);
     }
 
     if (appointmentIndex >= 0) {
@@ -227,8 +242,20 @@ export function applyDispatchTestSyncEvents(
               event.bookingType ?? appointments[appointmentIndex].bookingType,
             bodyPreview: appendTestNote(
               appointments[appointmentIndex].bodyPreview,
-              "Updated by dispatcher test sync",
+              event.payload?.liveSync
+                ? "Updated by Command Centre"
+                : "Updated by dispatcher test sync",
             ),
+            outlookEventId:
+              event.payload?.liveSync?.outlookEventId ??
+              appointments[appointmentIndex].outlookEventId,
+            outlookWebLink:
+              event.payload?.liveSync?.outlookWebLink ??
+              appointments[appointmentIndex].outlookWebLink,
+            syncIssue:
+              event.payload?.liveSync?.status === "failed"
+                ? "time-mismatch"
+                : appointments[appointmentIndex].syncIssue,
           },
           event.payload?.travel,
         ),
@@ -254,7 +281,15 @@ export function applyDispatchTestSyncEvents(
             end: event.end,
             status: "confirmed",
             source: "linked",
-            bodyPreview: "Created by dispatcher test sync.",
+            bodyPreview: event.payload?.liveSync
+              ? "Scheduled by Command Centre."
+              : "Created by dispatcher test sync.",
+            outlookEventId: event.payload?.liveSync?.outlookEventId,
+            outlookWebLink: event.payload?.liveSync?.outlookWebLink,
+            syncIssue:
+              event.payload?.liveSync?.status === "failed"
+                ? "time-mismatch"
+                : undefined,
           },
           event.payload?.travel,
         ),

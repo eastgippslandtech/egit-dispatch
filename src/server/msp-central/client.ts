@@ -387,8 +387,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     async updateRequestSchedule(input) {
       assertConfigured();
       const request = {
-        scheduled_end_time: { value: toEpochMilliseconds(input.scheduledEnd) },
-        scheduled_start_time: { value: toEpochMilliseconds(input.scheduledStart) },
+        status: { name: "Scheduled" },
         ...(input.technicianId
           ? { technician: { id: input.technicianId } }
           : input.technicianEmail
@@ -579,18 +578,6 @@ async function readMspCentralErrorDetail(response: Response) {
   }
 
   return undefined;
-}
-
-function toEpochMilliseconds(value: string) {
-  const milliseconds = new Date(value).getTime();
-
-  if (!Number.isFinite(milliseconds)) {
-    throw new MspCentralConfigurationError(
-      `Invalid MSP Central schedule timestamp: ${value}`,
-    );
-  }
-
-  return String(milliseconds);
 }
 
 function mspHasMoreRows(value: boolean | string | null | undefined) {

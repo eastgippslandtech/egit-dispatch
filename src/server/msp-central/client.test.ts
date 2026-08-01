@@ -440,7 +440,7 @@ describe("MSP Central live client", () => {
     );
   });
 
-  it("updates live request schedule fields with MSP Central input_data", async () => {
+  it("updates the live request technician and Scheduled status", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -492,12 +492,7 @@ describe("MSP Central live client", () => {
     const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
     expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
       request: {
-        scheduled_end_time: {
-          value: String(new Date("2026-07-24T11:00:00+10:00").getTime()),
-        },
-        scheduled_start_time: {
-          value: String(new Date("2026-07-24T10:00:00+10:00").getTime()),
-        },
+        status: { name: "Scheduled" },
         technician: { id: "msp-tech-matt" },
       },
     });
@@ -552,6 +547,47 @@ describe("MSP Central live client", () => {
     ).rejects.toThrow(
       "MSP Central API request failed with status 400: Invalid technician reference.",
     );
+  });
+
+  it("does not send schedule fields that are absent from the active request template", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.updateRequestSchedule({
+      requestId: "123",
+      scheduledEnd: "2026-07-24T11:00:00+10:00",
+      scheduledStart: "2026-07-24T10:00:00+10:00",
+      technicianId: "msp-tech-matt",
+    });
+
+    const requestBody = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(requestBody.get("input_data") ?? "{}")).toEqual({
+      request: {
+        status: { name: "Scheduled" },
+        technician: { id: "msp-tech-matt" },
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("loads every request page reported by MSP Central", async () => {

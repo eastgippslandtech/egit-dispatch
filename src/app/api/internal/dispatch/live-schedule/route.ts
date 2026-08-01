@@ -5,6 +5,7 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
+import { getConfiguredDispatchLinkStore } from "@/server/dispatch/link-store";
 import {
   recordDispatchTestSyncEvent,
   type DispatchTestSyncEventInput,
@@ -97,6 +98,7 @@ async function runBackgroundScheduleSync(
     timezone: config.microsoft.timezone,
   });
   const mspClient = createMspCentralClient(config);
+  const linkStore = getConfiguredDispatchLinkStore(config.databaseUrl);
   const graphInput = {
     bodyPreview: [
       `Request: ${command.requestNumber}`,
@@ -137,6 +139,34 @@ async function runBackgroundScheduleSync(
       ? `Outlook: ${errorMessage(graphResult.reason)}`
       : undefined,
   ].filter((message): message is string => Boolean(message));
+  const persistedOutlookEventId = graphEvent?.id ?? command.eventId;
+
+  if (linkStore) {
+    try {
+      await linkStore.save({
+        action: "live_schedule",
+        bookingType: command.bookingType,
+        customer: command.customer,
+        outlookCalendarEmail: command.userPrincipalName,
+        outlookEventId: persistedOutlookEventId,
+        priority: command.priority,
+        requestId: command.requestId,
+        requestNumber: command.requestNumber,
+        scheduledEnd: `${command.date}T${command.end}:00${melbourneOffset(command.date)}`,
+        scheduledStart: `${command.date}T${command.start}:00${melbourneOffset(command.date)}`,
+        siteAddress: command.location,
+        siteName: command.location,
+        subject: command.subject,
+        syncError: errors.join(" ") || undefined,
+        syncStatus: scheduleSyncStatus({ graphResult, mspResult }),
+        technicianEmail: command.technicianEmail,
+        technicianId: command.technicianId,
+        technicianMspCentralId: command.technicianMspCentralId,
+      });
+    } catch (error) {
+      errors.push(`Command Centre: ${errorMessage(error)}`);
+    }
+  }
   const liveSync: LiveSyncState =
     errors.length > 0
       ? {
@@ -169,6 +199,25 @@ async function runBackgroundScheduleSync(
       requestId: command.requestId,
     });
   }
+}
+
+function scheduleSyncStatus({
+  graphResult,
+  mspResult,
+}: {
+  graphResult: PromiseSettledResult<unknown>;
+  mspResult: PromiseSettledResult<unknown>;
+}) {
+  if (graphResult.status === "fulfilled" && mspResult.status === "fulfilled") {
+    return "linked" as const;
+  }
+  if (mspResult.status === "fulfilled") {
+    return "sdp_only" as const;
+  }
+  if (graphResult.status === "fulfilled") {
+    return "needs_review" as const;
+  }
+  return "failed" as const;
 }
 
 function localScheduleEvent(

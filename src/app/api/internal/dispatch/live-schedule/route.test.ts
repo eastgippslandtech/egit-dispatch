@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
 import { recordDispatchTestSyncEvent } from "@/server/dispatch/test-sync";
+import { getConfiguredDispatchLinkStore } from "@/server/dispatch/link-store";
 import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
 
@@ -31,6 +32,10 @@ vi.mock("@/server/dispatch/test-sync", () => ({
   recordDispatchTestSyncEvent: vi.fn(),
 }));
 
+vi.mock("@/server/dispatch/link-store", () => ({
+  getConfiguredDispatchLinkStore: vi.fn(),
+}));
+
 vi.mock("@/server/msp-central/client", () => ({
   createMspCentralClient: vi.fn(),
 }));
@@ -39,11 +44,15 @@ const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 const recordDispatchTestSyncEventMock = vi.mocked(recordDispatchTestSyncEvent);
 const createGraphClientMock = vi.mocked(createGraphClient);
 const createMspCentralClientMock = vi.mocked(createMspCentralClient);
+const getConfiguredDispatchLinkStoreMock = vi.mocked(
+  getConfiguredDispatchLinkStore,
+);
 
 describe("live dispatch schedule route", () => {
   beforeEach(() => {
     afterTasks.length = 0;
     vi.clearAllMocks();
+    getConfiguredDispatchLinkStoreMock.mockReturnValue(null);
     recordDispatchTestSyncEventMock.mockImplementation(async (event) => ({
       ...event,
       createdAt: "2026-07-24T00:00:00.000Z",
@@ -74,6 +83,8 @@ describe("live dispatch schedule route", () => {
       webLink: "https://outlook/event-1",
     });
     const updateRequestSchedule = vi.fn().mockResolvedValue(undefined);
+    const saveLink = vi.fn().mockResolvedValue(undefined);
+    getConfiguredDispatchLinkStoreMock.mockReturnValue({ save: saveLink });
     getCommandCentreAccessMock.mockResolvedValue({
       accessLevel: "staff",
       email: "simeon@egit.com.au",
@@ -178,6 +189,18 @@ describe("live dispatch schedule route", () => {
         }),
       }),
       "simeon@egit.com.au",
+    );
+    expect(saveLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookingType: "Onsite",
+        outlookEventId: "event-1",
+        requestId: "123",
+        requestNumber: "REQ-123",
+        scheduledEnd: "2026-07-24T11:00:00+10:00",
+        scheduledStart: "2026-07-24T10:00:00+10:00",
+        syncStatus: "linked",
+        technicianEmail: "mattd@egit.com.au",
+      }),
     );
   });
 

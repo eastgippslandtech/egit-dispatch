@@ -56,9 +56,20 @@ const sessionRefreshMock = vi.hoisted(() => ({
 
 vi.mock("../auth/session-refresh", () => sessionRefreshMock);
 
+const secureStoreMock = vi.hoisted(() => ({
+  values: new Map<string, string>(),
+  getItemAsync: vi.fn(async (key: string) => secureStoreMock.values.get(key) ?? null),
+  setItemAsync: vi.fn(async (key: string, value: string) => {
+    secureStoreMock.values.set(key, value);
+  }),
+}));
+
+vi.mock("expo-secure-store", () => secureStoreMock);
+
 vi.mock("react-native", () => ({
   Image: "Image",
   Pressable: "Pressable",
+  ScrollView: "ScrollView",
   StatusBar: "StatusBar",
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
@@ -320,6 +331,14 @@ function renderProfileSettings(session: TechnicianSession) {
   return rendered;
 }
 
+async function renderProfileSettingsAsync(session: TechnicianSession) {
+  const rendered = renderProfileSettings(session);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return rendered;
+}
+
 async function renderTechnicianRouterAsync(
   session: TechnicianSession,
   signInWithZoho = approvedRileyZohoSignIn,
@@ -432,6 +451,7 @@ function changeText(rendered: ReactTestRenderer, name: string, value: string) {
 
 describe("technician navigation", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     sessionStoreMock.clearMobileSession.mockReset();
     sessionStoreMock.restoreMobileSession.mockReset();
     sessionStoreMock.saveMobileSession.mockReset();
@@ -440,6 +460,9 @@ describe("technician navigation", () => {
     sessionRefreshMock.refreshMobileSession.mockImplementation((session) =>
       Promise.resolve(session),
     );
+    secureStoreMock.values.clear();
+    secureStoreMock.getItemAsync.mockClear();
+    secureStoreMock.setItemAsync.mockClear();
   });
 
   it("shows the native Zoho sign-in command when signed out", () => {
@@ -521,6 +544,24 @@ describe("technician navigation", () => {
     expect(navigationHarness.routerPush).toHaveBeenCalledWith("/(tabs)/sync");
   });
 
+  it("keeps profile settings scrollable with evenly spaced actions", () => {
+    const profile = renderProfileSettings(approvedRileySession);
+
+    const scrollContent = profile.root.findByProps({
+      testID: "profile-settings-scroll",
+    });
+    const actionGroup = profile.root.findByProps({
+      testID: "profile-settings-actions",
+    });
+
+    expect(scrollContent.props.contentInsetAdjustmentBehavior).toBe("automatic");
+    expect(scrollContent.props.contentContainerStyle).toMatchObject({
+      gap: 20,
+      paddingBottom: expect.any(Number),
+    });
+    expect(actionGroup.props.style).toMatchObject({ gap: 12 });
+  });
+
   it("starts a 30 minute lunch from profile settings", async () => {
     const liveRileySession: TechnicianSession = {
       ...approvedRileySession,
@@ -561,6 +602,58 @@ describe("technician navigation", () => {
       expect(textValues(profile.root)).toContain("Lunch started: 30 minutes");
     } finally {
       fetchMock.mockRestore();
+    }
+  });
+
+  it("only allows lunch once per local day", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T02:00:00.000Z"));
+    const liveRileySession: TechnicianSession = {
+      ...approvedRileySession,
+      mobileSession: {
+        accessToken: "access-riley",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        refreshToken: "refresh-riley",
+        staffEmail: riley.email,
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            override: {
+              endsAt: "2026-07-30T02:30:00.000Z",
+              id: "lunch",
+              status: "lunch",
+            },
+          },
+          meta: { requestId: "mobile-test", serverTime: "2026-07-30T02:00:00.000Z" },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    try {
+      const profile = await renderProfileSettingsAsync(liveRileySession);
+      await pressButtonAsync(profile, "Start lunch");
+
+      expect(buttonsNamed(profile.root, "Start lunch")[0].props.disabled).toBe(true);
+      expect(textValues(profile.root)).toContain("Lunch started: 30 minutes");
+
+      const sameDayProfile = await renderProfileSettingsAsync(liveRileySession);
+      expect(
+        buttonsNamed(sameDayProfile.root, "Start lunch")[0].props.disabled,
+      ).toBe(true);
+      expect(textValues(sameDayProfile.root)).toContain("Lunch already taken today");
+
+      vi.setSystemTime(new Date("2026-07-31T02:00:00.000Z"));
+      const nextDayProfile = await renderProfileSettingsAsync(liveRileySession);
+      expect(
+        buttonsNamed(nextDayProfile.root, "Start lunch")[0].props.disabled,
+      ).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
     }
   });
 

@@ -118,6 +118,7 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
 
   expect(screen.getByText("Confirm live schedule")).toBeInTheDocument();
   expect(screen.getByText("MSP Central + Outlook")).toBeInTheDocument();
+  expect(screen.getByRole("dialog")).toHaveClass("max-w-3xl");
   expect(screen.getByText("Includes 15 minutes for onsite notes.")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "15 minutes" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "45 minutes" })).toBeInTheDocument();

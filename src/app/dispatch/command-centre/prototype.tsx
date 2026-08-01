@@ -2500,10 +2500,10 @@ export function ScheduleConfirmModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 sm:p-6">
       <section
         aria-modal="true"
-        className="w-full max-w-lg rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
         role="dialog"
       >
         <div className="flex items-start justify-between gap-4">
@@ -2520,47 +2520,47 @@ export function ScheduleConfirmModal({
           </span>
         </div>
 
-        <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
-          <div className="font-mono text-xs text-cc-orange">
-            {request?.requestNumber ?? "Outlook-only"}
-          </div>
-          <div className="mt-1 text-base font-semibold">
-            {request?.subject ?? "Calendar appointment"}
-          </div>
-          {request ? (
-            <div className="mt-1 text-sm text-slate-300">
-              {request.customer} / {request.site}
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+            <div className="font-mono text-xs text-cc-orange">
+              {request?.requestNumber ?? "Outlook-only"}
             </div>
-          ) : null}
-        </div>
-
-        {pending.kind === "appointment" ? (
-          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <ScheduleSummary
-              label="Current"
-              technician={oldTechnician ?? "Unassigned"}
-              date={formatSelectedDateLabel(pending.oldDate)}
-              time={`${pending.oldStart}-${pending.oldEnd}`}
-            />
-            <ScheduleSummary
-              label="New"
-              technician={technician}
-              date={formatSelectedDateLabel(pending.date)}
-              time={`${pending.start}-${pending.end}`}
-            />
+            <div className="mt-1 text-base font-semibold">
+              {request?.subject ?? "Calendar appointment"}
+            </div>
+            {request ? (
+              <div className="mt-1 text-sm text-slate-300">
+                {request.customer} / {request.site}
+              </div>
+            ) : null}
           </div>
-        ) : (
-          <div className="mt-4">
+
+          {pending.kind === "appointment" ? (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <ScheduleSummary
+                label="Current"
+                technician={oldTechnician ?? "Unassigned"}
+                date={formatSelectedDateLabel(pending.oldDate)}
+                time={`${pending.oldStart}-${pending.oldEnd}`}
+              />
+              <ScheduleSummary
+                label="New"
+                technician={technician}
+                date={formatSelectedDateLabel(pending.date)}
+                time={`${pending.start}-${pending.end}`}
+              />
+            </div>
+          ) : (
             <ScheduleSummary
               label="New booking"
               technician={technician}
               date={formatSelectedDateLabel(pending.date)}
               time={`${pending.start}-${pending.end}`}
             />
-          </div>
-        )}
+          )}
+        </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <label className="block text-sm font-semibold text-slate-200">
             Technician
             <select
@@ -2635,7 +2635,7 @@ export function ScheduleConfirmModal({
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               Travel
             </div>
-            <div className="mt-3 grid gap-2 text-xs">
+            <div className="mt-3 grid gap-x-8 gap-y-2 text-xs sm:grid-cols-2">
               <DetailInline label="From" value={pending.travel.officeOriginAddress} />
               <DetailInline
                 label="To"

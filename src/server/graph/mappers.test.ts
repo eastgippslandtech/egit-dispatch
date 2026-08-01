@@ -69,7 +69,7 @@ describe("Graph event mapper", () => {
       start: "09:30",
       status: "busy",
       technicianId: "tech-simeon",
-      title: "REQ-100211 File server disk expansion",
+      title: "File server disk expansion",
     });
   });
 

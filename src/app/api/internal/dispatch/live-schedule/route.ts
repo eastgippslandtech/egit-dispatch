@@ -6,6 +6,7 @@ import {
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
 import { getConfiguredDispatchLinkStore } from "@/server/dispatch/link-store";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import {
   recordDispatchTestSyncEvent,
   type DispatchTestSyncEventInput,
@@ -111,7 +112,9 @@ async function runBackgroundScheduleSync(
     end: `${command.date}T${command.end}:00`,
     location: command.location,
     start: `${command.date}T${command.start}:00`,
-    subject: `${command.requestNumber} ${command.subject}`.trim(),
+    subject:
+      cleanRequestTitle(command.subject, command.requestNumber) ||
+      "Command Centre booking",
     userPrincipalName: command.userPrincipalName,
   };
   const [mspResult, graphResult] = await Promise.allSettled([

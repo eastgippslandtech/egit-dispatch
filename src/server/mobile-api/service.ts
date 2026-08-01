@@ -24,6 +24,7 @@ import {
   type DispatchLinkStore,
 } from "@/server/dispatch/link-store";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import {
   applyDispatchTestSyncEvents,
   listDispatchTestSyncEvents,
@@ -1223,12 +1224,15 @@ function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
     outlookWebLink: null,
     version: `db-${row.id}-${toIsoString(row.updatedAt)}`,
     title:
-      pickString(summaries, [
-        "subject",
-        "title",
-        "requestSubject",
-        "ticketSubject",
-      ]) ?? `Request ${row.sdpRequestNumber}`,
+      cleanRequestTitle(
+        pickString(summaries, [
+          "subject",
+          "title",
+          "requestSubject",
+          "ticketSubject",
+        ]),
+        row.sdpRequestNumber,
+      ) || `Request ${row.sdpRequestNumber}`,
     description:
       pickString(summaries, [
         "description",

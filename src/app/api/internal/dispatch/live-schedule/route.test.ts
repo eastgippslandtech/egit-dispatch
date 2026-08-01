@@ -166,7 +166,7 @@ describe("live dispatch schedule route", () => {
       end: "2026-07-24T11:00:00",
       location: "Bairnsdale office",
       start: "2026-07-24T10:00:00",
-      subject: "REQ-123 Printer offline",
+      subject: "Printer offline",
       userPrincipalName: "mattd@egit.com.au",
     });
     expect(updateRequestSchedule).toHaveBeenCalledWith({

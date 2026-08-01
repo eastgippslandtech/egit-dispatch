@@ -13,6 +13,7 @@ import {
 } from "@/server/staff/profiles";
 
 import { bookingTypeForRequest } from "@/server/dispatch/booking";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type {
   MspCentralRawRequest,
   MspCentralRawRequestNote,
@@ -157,7 +158,9 @@ export function mapMspCentralRequest(
     sourceSystem: options.sourceSystem ?? "msp-central-fixture",
     status: mapMspCentralStatus(readPriorityStatusName(raw.status), scheduledStart),
     subcategory: readPriorityStatusName(raw.subcategory),
-    subject: readString(raw.subject) ?? "Untitled MSP Central request",
+    subject:
+      cleanRequestTitle(readString(raw.subject), requestNumber) ||
+      "Untitled MSP Central request",
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
       : autoAssignment?.technicianId,

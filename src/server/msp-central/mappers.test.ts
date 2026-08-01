@@ -143,6 +143,20 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("keeps the MSP Central identifier out of the request title", () => {
+    const request = mapMspCentralRequest(
+      {
+        id: "6768000001414219",
+        request_number: "6768000001414219",
+        subject: "6768000001414219 Printer offline",
+      },
+      { now },
+    );
+
+    expect(request.requestNumber).toBe("6768000001414219");
+    expect(request.subject).toBe("Printer offline");
+  });
+
   it("maps nested MSP customer details and cleans HTML descriptions", () => {
     const request = mapMspCentralRequest(
       {

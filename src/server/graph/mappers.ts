@@ -3,6 +3,7 @@ import type {
   BookingType,
   Technician,
 } from "@/server/dispatch/types";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type { MicrosoftGraphEvent } from "./types";
 
 const REQUEST_NUMBER_PATTERN =
@@ -58,7 +59,7 @@ export function mapGraphEventToAppointment(
       )
       ? "Personal"
       : "Private appointment"
-    : event.subject?.trim();
+    : cleanRequestTitle(event.subject, requestNumber);
 
   return {
     bookingType,

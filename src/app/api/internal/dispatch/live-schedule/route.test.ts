@@ -204,6 +204,169 @@ describe("live dispatch schedule route", () => {
     );
   });
 
+  it("assigns MSP Central to the lead and creates Outlook bookings for every crew member", async () => {
+    const createEvent = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "event-lead",
+        webLink: "https://outlook/event-lead",
+      })
+      .mockResolvedValueOnce({
+        id: "event-crew",
+        webLink: "https://outlook/event-crew",
+      });
+    const updateRequestSchedule = vi.fn().mockResolvedValue(undefined);
+    const deleteEvent = vi.fn().mockResolvedValue(undefined);
+    const saveLink = vi.fn().mockResolvedValue(undefined);
+    getConfiguredDispatchLinkStoreMock.mockReturnValue({ save: saveLink });
+    getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
+      email: "simeon@egit.com.au",
+      name: "Simeon",
+      status: "approved",
+    });
+    createGraphClientMock.mockReturnValue({
+      acquireToken: vi.fn(),
+      createEvent,
+      deleteEvent,
+      getEvent: vi.fn(),
+      listCalendarView: vi.fn(),
+      updateEvent: vi.fn(),
+    });
+    createMspCentralClientMock.mockReturnValue({
+      assignRequest: vi.fn(),
+      clearRequestSchedule: vi.fn(),
+      getRequest: vi.fn(),
+      getRequestContext: vi.fn(),
+      getTechnician: vi.fn(),
+      listCustomers: vi.fn(),
+      listRequests: vi.fn(),
+      listSites: vi.fn(),
+      listTechnicians: vi.fn(),
+      mergeRequests: vi.fn(),
+      refreshAccessToken: vi.fn(),
+      updateRequestSchedule,
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule", {
+        body: JSON.stringify({
+          appointmentId: "pending-live-team-123",
+          bookingType: "Onsite",
+          crew: [
+            {
+              technicianEmail: "jervy@egit.com.au",
+              technicianId: "tech-jervy",
+              technicianName: "Jervy",
+              userPrincipalName: "jervy@egit.com.au",
+            },
+          ],
+          customer: "Example Co",
+          date: "2026-07-24",
+          end: "11:00",
+          location: "Bairnsdale office",
+          previousAssignments: [
+            {
+              eventId: "event-riley-old",
+              technicianId: "tech-riley",
+              userPrincipalName: "riley@egit.com.au",
+            },
+          ],
+          requestId: "123",
+          requestNumber: "REQ-123",
+          start: "10:00",
+          subject: "Printer offline",
+          technicianId: "tech-matt",
+          technicianName: "Matt Doyle",
+          technicianEmail: "mattd@egit.com.au",
+          technicianMspCentralId: "msp-tech-matt",
+          userPrincipalName: "mattd@egit.com.au",
+        }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(afterTasks).toHaveLength(1);
+    await afterTasks[0]();
+
+    expect(updateRequestSchedule).toHaveBeenCalledTimes(1);
+    expect(updateRequestSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "123",
+        technicianEmail: "mattd@egit.com.au",
+        technicianId: "msp-tech-matt",
+      }),
+    );
+    expect(createEvent).toHaveBeenCalledTimes(2);
+    expect(createEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userPrincipalName: "mattd@egit.com.au" }),
+    );
+    expect(deleteEvent).toHaveBeenCalledWith({
+      eventId: "event-riley-old",
+      userPrincipalName: "riley@egit.com.au",
+    });
+    expect(createEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userPrincipalName: "jervy@egit.com.au" }),
+    );
+    expect(saveLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        crew: [
+          expect.objectContaining({
+            outlookCalendarEmail: "jervy@egit.com.au",
+            outlookEventId: "event-crew",
+            technicianEmail: "jervy@egit.com.au",
+            technicianId: "tech-jervy",
+          }),
+        ],
+        outlookEventId: "event-lead",
+        technicianEmail: "mattd@egit.com.au",
+      }),
+    );
+  });
+
+  it("rejects duplicate lead and crew technicians", async () => {
+    getCommandCentreAccessMock.mockResolvedValue({
+      accessLevel: "staff",
+      email: "simeon@egit.com.au",
+      name: "Simeon",
+      status: "approved",
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule", {
+        body: JSON.stringify({
+          appointmentId: "pending-live-team-duplicate",
+          crew: [
+            {
+              technicianId: "tech-matt",
+              technicianName: "Matt Doyle",
+              userPrincipalName: "mattd@egit.com.au",
+            },
+          ],
+          date: "2026-07-24",
+          end: "11:00",
+          requestId: "123",
+          requestNumber: "REQ-123",
+          start: "10:00",
+          subject: "Printer offline",
+          technicianId: "tech-matt",
+          technicianName: "Matt Doyle",
+          userPrincipalName: "mattd@egit.com.au",
+        }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "A technician can only be selected once.",
+    });
+    expect(afterTasks).toHaveLength(0);
+  });
+
   it("does not queue a schedule without local appointment identity", async () => {
     const createEvent = vi.fn();
     getCommandCentreAccessMock.mockResolvedValue({

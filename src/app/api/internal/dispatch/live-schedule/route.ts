@@ -22,12 +22,14 @@ import { createMspCentralClient } from "@/server/msp-central/client";
 type LiveScheduleCommand = {
   appointmentId?: string;
   bookingType?: BookingType;
+  crew?: LiveScheduleCrewMember[];
   customer?: string;
   date?: string;
   end?: string;
   eventId?: string;
   location?: string;
   priority?: Priority;
+  previousAssignments?: LiveSchedulePreviousAssignment[];
   requestId?: string;
   requestNumber?: string;
   scheduleAction?: "scheduled" | "rescheduled";
@@ -38,6 +40,20 @@ type LiveScheduleCommand = {
   technicianEmail?: string;
   technicianMspCentralId?: string;
   travel?: TravelEstimate;
+  userPrincipalName?: string;
+};
+
+type LiveScheduleCrewMember = {
+  eventId?: string;
+  technicianEmail?: string;
+  technicianId?: string;
+  technicianName?: string;
+  userPrincipalName?: string;
+};
+
+type LiveSchedulePreviousAssignment = {
+  eventId?: string;
+  technicianId?: string;
   userPrincipalName?: string;
 };
 
@@ -117,7 +133,16 @@ async function runBackgroundScheduleSync(
       "Command Centre booking",
     userPrincipalName: command.userPrincipalName,
   };
-  const [mspResult, graphResult] = await Promise.allSettled([
+  const graphInputs = [
+    {
+      eventId: command.eventId,
+      technicianEmail: command.technicianEmail,
+      technicianId: command.technicianId,
+      userPrincipalName: command.userPrincipalName,
+    },
+    ...command.crew,
+  ];
+  const [mspResult, ...graphResults] = await Promise.allSettled([
     mspClient.updateRequestSchedule({
       requestId: command.requestId,
       scheduledEnd: `${command.date}T${command.end}:00${melbourneOffset(command.date)}`,
@@ -126,21 +151,54 @@ async function runBackgroundScheduleSync(
       technicianId: command.technicianMspCentralId,
       technicianName: command.technicianName,
     }),
-    command.eventId
-      ? graphClient.updateEvent({
-          ...graphInput,
-          eventId: command.eventId,
-        })
-      : graphClient.createEvent(graphInput),
+    ...graphInputs.map((assignment) => {
+      const assignmentInput = {
+        ...graphInput,
+        userPrincipalName: assignment.userPrincipalName,
+      };
+      return assignment.eventId
+        ? graphClient.updateEvent({
+            ...assignmentInput,
+            eventId: assignment.eventId,
+          })
+        : graphClient.createEvent(assignmentInput);
+    }),
   ]);
-  const graphEvent = graphResult.status === "fulfilled" ? graphResult.value : undefined;
+  const leadGraphResult = graphResults[0];
+  const graphEvent =
+    leadGraphResult?.status === "fulfilled" ? leadGraphResult.value : undefined;
+  const crewGraphResults = graphResults.slice(1);
+  const selectedTechnicianIds = new Set(
+    graphInputs.map((assignment) => assignment.technicianId),
+  );
+  const removedAssignments = command.previousAssignments.filter(
+    (assignment) => !selectedTechnicianIds.has(assignment.technicianId),
+  );
+  const removedResults = await Promise.allSettled(
+    removedAssignments.map((assignment) =>
+      graphClient.deleteEvent({
+        eventId: assignment.eventId,
+        userPrincipalName: assignment.userPrincipalName,
+      }),
+    ),
+  );
   const errors = [
     mspResult.status === "rejected"
       ? `MSP Central: ${errorMessage(mspResult.reason)}`
       : undefined,
-    graphResult.status === "rejected"
-      ? `Outlook: ${errorMessage(graphResult.reason)}`
+    leadGraphResult?.status === "rejected"
+      ? `Outlook (${command.technicianName ?? "lead"}): ${errorMessage(leadGraphResult.reason)}`
       : undefined,
+    ...crewGraphResults.map((result, index) =>
+      result.status === "rejected"
+        ? `Outlook (${command.crew[index]?.technicianName ?? "crew"}): ${errorMessage(result.reason)}`
+        : undefined,
+    ),
+    ...removedResults.map((result, index) =>
+      result.status === "rejected"
+        ? `Outlook cleanup (${removedAssignments[index]?.userPrincipalName}): ${errorMessage(result.reason)}`
+        : undefined,
+    ),
   ].filter((message): message is string => Boolean(message));
   const persistedOutlookEventId = graphEvent?.id ?? command.eventId;
 
@@ -149,6 +207,20 @@ async function runBackgroundScheduleSync(
       await linkStore.save({
         action: "live_schedule",
         bookingType: command.bookingType,
+        crew: command.crew.map((member, index) => {
+          const result = crewGraphResults[index];
+          const event = result?.status === "fulfilled" ? result.value : undefined;
+          return {
+            outlookCalendarEmail: member.userPrincipalName,
+            outlookEventId: event?.id ?? member.eventId,
+            syncError:
+              result?.status === "rejected" ? errorMessage(result.reason) : undefined,
+            syncStatus:
+              result?.status === "fulfilled" ? ("linked" as const) : ("failed" as const),
+            technicianEmail: member.technicianEmail,
+            technicianId: member.technicianId,
+          };
+        }),
         customer: command.customer,
         outlookCalendarEmail: command.userPrincipalName,
         outlookEventId: persistedOutlookEventId,
@@ -161,7 +233,7 @@ async function runBackgroundScheduleSync(
         siteName: command.location,
         subject: command.subject,
         syncError: errors.join(" ") || undefined,
-        syncStatus: scheduleSyncStatus({ graphResult, mspResult }),
+        syncStatus: scheduleSyncStatus({ graphResults, mspResult }),
         technicianEmail: command.technicianEmail,
         technicianId: command.technicianId,
         technicianMspCentralId: command.technicianMspCentralId,
@@ -205,19 +277,22 @@ async function runBackgroundScheduleSync(
 }
 
 function scheduleSyncStatus({
-  graphResult,
+  graphResults,
   mspResult,
 }: {
-  graphResult: PromiseSettledResult<unknown>;
+  graphResults: PromiseSettledResult<unknown>[];
   mspResult: PromiseSettledResult<unknown>;
 }) {
-  if (graphResult.status === "fulfilled" && mspResult.status === "fulfilled") {
+  const graphSucceeded = graphResults.every(
+    (result) => result.status === "fulfilled",
+  );
+  if (graphSucceeded && mspResult.status === "fulfilled") {
     return "linked" as const;
   }
   if (mspResult.status === "fulfilled") {
     return "sdp_only" as const;
   }
-  if (graphResult.status === "fulfilled") {
+  if (graphSucceeded) {
     return "needs_review" as const;
   }
   return "failed" as const;
@@ -263,15 +338,63 @@ function validateCommand(command: LiveScheduleCommand) {
     throw new Error(`Missing live schedule fields: ${missing.join(", ")}`);
   }
 
+  const crew = (command.crew ?? []).map((member) => ({
+    eventId: clean(member.eventId),
+    technicianEmail: clean(member.technicianEmail),
+    technicianId: clean(member.technicianId),
+    technicianName: clean(member.technicianName),
+    userPrincipalName: clean(member.userPrincipalName),
+  }));
+  const previousAssignments = (command.previousAssignments ?? [])
+    .map((assignment) => ({
+      eventId: clean(assignment.eventId),
+      technicianId: clean(assignment.technicianId),
+      userPrincipalName: clean(assignment.userPrincipalName),
+    }))
+    .filter(
+      (assignment): assignment is {
+        eventId: string;
+        technicianId: string;
+        userPrincipalName: string;
+      } =>
+        Boolean(
+          assignment.eventId &&
+            assignment.technicianId &&
+            assignment.userPrincipalName,
+        ),
+    );
+  if (
+    crew.some(
+      (member) => !member.technicianId || !member.userPrincipalName,
+    )
+  ) {
+    throw new Error("Every crew member requires a technician and Outlook calendar.");
+  }
+  const selectedTechnicianIds = [
+    command.technicianId,
+    ...crew.map((member) => member.technicianId),
+  ];
+  if (new Set(selectedTechnicianIds).size !== selectedTechnicianIds.length) {
+    throw new Error("A technician can only be selected once.");
+  }
+
   return {
     appointmentId: command.appointmentId as string,
     bookingType: validBookingType(command.bookingType),
+    crew: crew as Array<{
+      eventId?: string;
+      technicianEmail?: string;
+      technicianId: string;
+      technicianName?: string;
+      userPrincipalName: string;
+    }>,
     customer: clean(command.customer),
     date: command.date as string,
     end: command.end as string,
     eventId: clean(command.eventId),
     location: clean(command.location),
     priority: validPriority(command.priority),
+    previousAssignments,
     requestId: command.requestId as string,
     requestNumber: command.requestNumber as string,
     scheduleAction:

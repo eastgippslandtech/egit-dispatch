@@ -198,6 +198,7 @@ type DropPreview = {
 type PendingSchedule =
   | {
       bookingType: BookingType;
+      crewTechnicianIds?: string[];
       durationMinutes: number;
       kind: "request";
       date: string;
@@ -211,6 +212,7 @@ type PendingSchedule =
   | {
       appointmentId: string;
       bookingType: BookingType;
+      crewTechnicianIds?: string[];
       durationMinutes: number;
       kind: "appointment";
       date: string;
@@ -911,6 +913,7 @@ export function CommandCentrePrototype({
 
       return {
         bookingType,
+        crewTechnicianIds: [],
         durationMinutes,
         kind: "request",
         date,
@@ -972,6 +975,15 @@ export function CommandCentrePrototype({
     return {
       appointmentId: appointment.id,
       bookingType,
+      crewTechnicianIds: request
+        ? dashboard.appointments
+            .filter(
+              (candidate) =>
+                candidate.requestId === request.id &&
+                candidate.technicianId !== technicianId,
+            )
+            .map((candidate) => candidate.technicianId)
+        : [],
       durationMinutes,
       kind: "appointment",
       date,
@@ -1181,10 +1193,36 @@ export function CommandCentrePrototype({
 
       return {
         ...current,
+        crewTechnicianIds: Array.from(
+          new Set([
+            ...(current.crewTechnicianIds ?? []).filter(
+              (candidate) => candidate !== technicianId,
+            ),
+            ...(current.technicianId !== technicianId
+              ? [current.technicianId]
+              : []),
+          ]),
+        ),
         technicianId,
         travel,
         warnings,
       };
+    });
+  }
+
+  function updatePendingCrew(technicianId: string, selected: boolean) {
+    setPendingSchedule((current) => {
+      if (!current || technicianId === current.technicianId) {
+        return current;
+      }
+
+      const crewTechnicianIds = selected
+        ? Array.from(new Set([...(current.crewTechnicianIds ?? []), technicianId]))
+        : (current.crewTechnicianIds ?? []).filter(
+            (candidate) => candidate !== technicianId,
+          );
+
+      return { ...current, crewTechnicianIds };
     });
   }
 
@@ -1284,12 +1322,27 @@ export function CommandCentrePrototype({
         ? `pending-live-${request.id}-${Date.now()}`
         : `mock-${request.id}-${Date.now()}`;
       const bookingType = pendingSchedule.bookingType;
+      const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
+        (technicianId) => ({
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+          technicianId,
+          technicianName: technicianLabel(dashboard.technicians, technicianId),
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+        }),
+      );
 
       try {
         if (liveSchedule) {
           liveEvent = await publishLiveSchedule({
             appointmentId,
             bookingType,
+            crew,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
@@ -1319,20 +1372,26 @@ export function CommandCentrePrototype({
             ),
           });
         } else {
-          await publishDispatchTestSyncEvent({
-            appointmentId,
-            bookingType,
-            date: pendingSchedule.date,
-            end: pendingSchedule.end,
-            eventType: "scheduled",
-            priority: request.priority,
-            requestId: request.id,
-            start: pendingSchedule.start,
-            technicianId: pendingSchedule.technicianId,
-            payload: {
-              travel: pendingSchedule.travel,
-            },
-          });
+          await Promise.all(
+            [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
+              (technicianId, index) =>
+                publishDispatchTestSyncEvent({
+                  appointmentId:
+                    index === 0 ? appointmentId : `${appointmentId}-crew-${technicianId}`,
+                  bookingType,
+                  date: pendingSchedule.date,
+                  end: pendingSchedule.end,
+                  eventType: "scheduled",
+                  priority: request.priority,
+                  requestId: request.id,
+                  start: pendingSchedule.start,
+                  technicianId,
+                  payload: {
+                    travel: buildTravel(request, technicianId, bookingType),
+                  },
+                }),
+            ),
+          );
         }
       } catch (error) {
         setToast(
@@ -1344,7 +1403,7 @@ export function CommandCentrePrototype({
       const finalAppointmentId = liveEvent?.id
         ? `outlook-${pendingSchedule.technicianId}-${liveEvent.id}`
         : appointmentId;
-      const appointments = scheduleRequest({
+      let appointments = scheduleRequest({
         appointmentId: finalAppointmentId,
         appointments: dashboard.appointments,
         bookingType,
@@ -1355,6 +1414,19 @@ export function CommandCentrePrototype({
         technicianId: pendingSchedule.technicianId,
         travel: pendingSchedule.travel,
       });
+      for (const member of crew) {
+        appointments = scheduleRequest({
+          appointmentId: `${appointmentId}-crew-${member.technicianId}`,
+          appointments,
+          bookingType,
+          date: pendingSchedule.date,
+          durationMinutes: pendingSchedule.durationMinutes,
+          request,
+          start: pendingSchedule.start,
+          technicianId: member.technicianId,
+          travel: buildTravel(request, member.technicianId, bookingType),
+        });
+      }
 
       setDashboard((current) => ({
         ...current,
@@ -1422,18 +1494,58 @@ export function CommandCentrePrototype({
       const liveSchedule =
         Boolean(request) && canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
+      const currentTeamAppointments = request
+        ? dashboard.appointments.filter(
+            (appointment) => appointment.requestId === request.id,
+          )
+        : currentAppointment
+          ? [currentAppointment]
+          : [];
+      const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
+        (technicianId) => ({
+          eventId: currentTeamAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          )?.outlookEventId,
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+          technicianId,
+          technicianName: technicianLabel(dashboard.technicians, technicianId),
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+        }),
+      );
+      const previousAssignments = currentTeamAppointments
+        .filter(
+          (appointment) =>
+            appointment.outlookEventId && appointment.calendarOwnerEmail,
+        )
+        .map((appointment) => ({
+          eventId: appointment.outlookEventId as string,
+          technicianId: appointment.technicianId,
+          userPrincipalName: appointment.calendarOwnerEmail as string,
+        }));
+      const leadAppointment = currentTeamAppointments.find(
+        (appointment) =>
+          appointment.technicianId === pendingSchedule.technicianId,
+      );
 
       try {
         if (liveSchedule && request) {
           liveEvent = await publishLiveSchedule({
             appointmentId: pendingSchedule.appointmentId,
             bookingType,
+            crew,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
-            eventId: currentAppointment?.outlookEventId,
+            eventId: leadAppointment?.outlookEventId,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
+            previousAssignments,
             requestId: request.id,
             requestNumber: request.requestNumber,
             start: pendingSchedule.start,
@@ -1459,20 +1571,28 @@ export function CommandCentrePrototype({
             ),
           });
         } else {
-          await publishDispatchTestSyncEvent({
-            appointmentId: pendingSchedule.appointmentId,
-            bookingType,
-            date: pendingSchedule.date,
-            end: pendingSchedule.end,
-            eventType: "rescheduled",
-            priority: request?.priority,
-            requestId: currentAppointment?.requestId,
-            start: pendingSchedule.start,
-            technicianId: pendingSchedule.technicianId,
-            payload: {
-              travel: pendingSchedule.travel,
-            },
-          });
+          await Promise.all(
+            [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
+              (technicianId, index) =>
+                publishDispatchTestSyncEvent({
+                  appointmentId:
+                    index === 0
+                      ? pendingSchedule.appointmentId
+                      : `${pendingSchedule.appointmentId}-crew-${technicianId}`,
+                  bookingType,
+                  date: pendingSchedule.date,
+                  end: pendingSchedule.end,
+                  eventType: "rescheduled",
+                  priority: request?.priority,
+                  requestId: currentAppointment?.requestId,
+                  start: pendingSchedule.start,
+                  technicianId,
+                  payload: {
+                    travel: buildTravel(request, technicianId, bookingType),
+                  },
+                }),
+            ),
+          );
         }
       } catch (error) {
         setToast(
@@ -1481,28 +1601,64 @@ export function CommandCentrePrototype({
         return;
       }
 
-      const movedAppointments = moveAppointment({
-        appointmentId: pendingSchedule.appointmentId,
-        appointments: dashboard.appointments,
-        bookingType,
-        date: pendingSchedule.date,
-        durationMinutes:
-          minutesFromTime(pendingSchedule.end) -
-          minutesFromTime(pendingSchedule.start),
-        noteTimeMinutes: bookingTiming(
-          pendingSchedule.durationMinutes,
+      let movedAppointments = request
+        ? dashboard.appointments.filter(
+            (appointment) => appointment.requestId !== request.id,
+          )
+        : dashboard.appointments;
+      const selectedTechnicianIds = [
+        pendingSchedule.technicianId,
+        ...crew.map((member) => member.technicianId),
+      ];
+      if (request) {
+        for (const [index, technicianId] of selectedTechnicianIds.entries()) {
+          const existing = currentTeamAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          );
+          movedAppointments = scheduleRequest({
+            appointmentId:
+              existing?.id ??
+              `${pendingSchedule.appointmentId}-${index === 0 ? "lead" : "crew"}-${technicianId}`,
+            appointments: movedAppointments,
+            bookingType,
+            date: pendingSchedule.date,
+            durationMinutes: pendingSchedule.durationMinutes,
+            request,
+            start: pendingSchedule.start,
+            technicianId,
+            travel: buildTravel(request, technicianId, bookingType),
+          });
+        }
+      } else {
+        movedAppointments = moveAppointment({
+          appointmentId: pendingSchedule.appointmentId,
+          appointments: dashboard.appointments,
           bookingType,
-        ).noteTimeMinutes,
-        start: pendingSchedule.start,
-        technicianId: pendingSchedule.technicianId,
-        travel: pendingSchedule.travel,
-        workDurationMinutes: pendingSchedule.durationMinutes,
-      });
+          date: pendingSchedule.date,
+          durationMinutes:
+            minutesFromTime(pendingSchedule.end) -
+            minutesFromTime(pendingSchedule.start),
+          noteTimeMinutes: bookingTiming(
+            pendingSchedule.durationMinutes,
+            bookingType,
+          ).noteTimeMinutes,
+          start: pendingSchedule.start,
+          technicianId: pendingSchedule.technicianId,
+          travel: pendingSchedule.travel,
+          workDurationMinutes: pendingSchedule.durationMinutes,
+        });
+      }
+      const selectedLeadAppointmentId =
+        movedAppointments.find(
+          (appointment) =>
+            appointment.requestId === request?.id &&
+            appointment.technicianId === pendingSchedule.technicianId,
+        )?.id ?? pendingSchedule.appointmentId;
 
       setDashboard((current) => ({
         ...current,
         appointments: movedAppointments.map((appointment) =>
-          appointment.id === pendingSchedule.appointmentId
+          appointment.id === selectedLeadAppointmentId
             ? {
                 ...appointment,
                 outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
@@ -1535,7 +1691,7 @@ export function CommandCentrePrototype({
       }));
       setSelection({
         kind: "appointment",
-        appointmentId: pendingSchedule.appointmentId,
+        appointmentId: selectedLeadAppointmentId,
       });
       setToast(
         liveSchedule
@@ -1559,48 +1715,100 @@ export function CommandCentrePrototype({
     }
 
     try {
+      const teamAppointments = dashboard.appointments.filter(
+        (appointment) => appointment.requestId === selectedRequest.id,
+      );
+      const leadTechnicianId = teamAppointments.some(
+        (appointment) =>
+          appointment.technicianId === selectedRequest.technicianId,
+      )
+        ? selectedRequest.technicianId!
+        : selectedAppointment.technicianId;
+      const leadAppointment =
+        teamAppointments.find(
+          (appointment) => appointment.technicianId === leadTechnicianId,
+        ) ?? selectedAppointment;
+      const crewAppointments = teamAppointments.filter(
+        (appointment) => appointment.technicianId !== leadTechnicianId,
+      );
       const liveEvent = await publishLiveSchedule({
-        appointmentId: selectedAppointment.id,
+        appointmentId: leadAppointment.id,
         bookingType:
-          selectedAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+          leadAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+        crew: crewAppointments.map((appointment) => ({
+          eventId: appointment.outlookEventId,
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+          technicianId: appointment.technicianId,
+          technicianName: technicianLabel(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+        })),
         customer: selectedRequest.customer,
-        date: selectedAppointment.date ?? selectedDateKey,
-        end: selectedAppointment.end,
-        eventId: selectedAppointment.outlookEventId,
+        date: leadAppointment.date ?? selectedDateKey,
+        end: leadAppointment.end,
+        eventId: leadAppointment.outlookEventId,
         location: selectedRequest.siteAddress ?? selectedRequest.site,
+        previousAssignments: teamAppointments.flatMap((appointment) =>
+          appointment.outlookEventId
+            ? [
+                {
+                  eventId: appointment.outlookEventId,
+                  technicianId: appointment.technicianId,
+                  userPrincipalName: technicianOutlookIdentity(
+                    dashboard.technicians,
+                    appointment.technicianId,
+                  ),
+                },
+              ]
+            : [],
+        ),
         priority: selectedRequest.priority,
         requestId: selectedRequest.id,
         requestNumber: selectedRequest.requestNumber,
-        start: selectedAppointment.start,
+        start: leadAppointment.start,
         subject: selectedRequest.subject,
         scheduleAction: "rescheduled",
-        technicianId: selectedAppointment.technicianId,
+        technicianId: leadTechnicianId,
         technicianName: technicianLabel(
           dashboard.technicians,
-          selectedAppointment.technicianId,
+          leadTechnicianId,
         ),
         technicianEmail: technicianMspCentralIdentity(
           dashboard.technicians,
-          selectedAppointment.technicianId,
+          leadTechnicianId,
         ),
         technicianMspCentralId: technicianMspCentralId(
           dashboard.technicians,
-          selectedAppointment.technicianId,
+          leadTechnicianId,
         ),
         userPrincipalName: technicianOutlookIdentity(
           dashboard.technicians,
-          selectedAppointment.technicianId,
+          leadTechnicianId,
         ),
       });
 
       setDashboard((current) => ({
         ...current,
         appointments: current.appointments.map((appointment) =>
-          appointment.id === selectedAppointment.id
+          appointment.requestId === selectedRequest.id
             ? {
                 ...appointment,
-                outlookEventId: liveEvent.id ?? appointment.outlookEventId,
-                outlookWebLink: liveEvent.webLink ?? appointment.outlookWebLink,
+                outlookEventId:
+                  appointment.technicianId === leadTechnicianId
+                    ? (liveEvent.id ?? appointment.outlookEventId)
+                    : appointment.outlookEventId,
+                outlookWebLink:
+                  appointment.technicianId === leadTechnicianId
+                    ? (liveEvent.webLink ?? appointment.outlookWebLink)
+                    : appointment.outlookWebLink,
                 readOnly: false,
                 status: "confirmed",
               }
@@ -1978,6 +2186,7 @@ export function CommandCentrePrototype({
             technicians={dashboard.technicians}
             onCancel={() => setPendingSchedule(undefined)}
             onConfirm={confirmPendingSchedule}
+            onCrewChange={updatePendingCrew}
             onBookingTypeChange={updatePendingBookingType}
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
@@ -2058,12 +2267,24 @@ async function publishDispatchTestSyncEvent(
 async function publishLiveSchedule(event: {
   appointmentId: string;
   bookingType?: BookingType;
+  crew?: Array<{
+    eventId?: string;
+    technicianEmail?: string;
+    technicianId: string;
+    technicianName: string;
+    userPrincipalName: string;
+  }>;
   customer: string;
   date: string;
   end: string;
   eventId?: string;
   location: string;
   priority?: DispatchRequest["priority"];
+  previousAssignments?: Array<{
+    eventId: string;
+    technicianId: string;
+    userPrincipalName: string;
+  }>;
   requestId: string;
   requestNumber: string;
   start: string;
@@ -2477,6 +2698,7 @@ export function ScheduleConfirmModal({
   onCancel,
   onBookingTypeChange,
   onConfirm,
+  onCrewChange,
   onDurationChange,
   onStartChange,
   onTechnicianChange,
@@ -2488,6 +2710,7 @@ export function ScheduleConfirmModal({
   onCancel: () => void;
   onBookingTypeChange: (bookingType: BookingType) => void;
   onConfirm: () => Promise<void> | void;
+  onCrewChange?: (technicianId: string, selected: boolean) => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
   onTechnicianChange: (technicianId: string) => void;
@@ -2588,8 +2811,9 @@ export function ScheduleConfirmModal({
 
         <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <label className="block text-sm font-semibold text-slate-200">
-            Technician
+            Lead technician
             <select
+              aria-label="Lead technician"
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
               disabled={saving}
               value={pending.technicianId}
@@ -2649,6 +2873,39 @@ export function ScheduleConfirmModal({
             </select>
           </label>
         </div>
+
+        <fieldset className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3">
+          <legend className="px-1 text-sm font-semibold text-slate-200">
+            Additional crew
+          </legend>
+          <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {technicians
+              .filter((candidate) => candidate.id !== pending.technicianId)
+              .map((candidate) => (
+                <label
+                  className="flex cursor-pointer items-center gap-2 rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-200"
+                  key={candidate.id}
+                >
+                  <input
+                    checked={(pending.crewTechnicianIds ?? []).includes(
+                      candidate.id,
+                    )}
+                    className="h-4 w-4 accent-[var(--cc-orange)]"
+                    disabled={saving}
+                    type="checkbox"
+                    onChange={(event) =>
+                      onCrewChange?.(candidate.id, event.target.checked)
+                    }
+                  />
+                  {candidate.displayName}
+                </label>
+              ))}
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            The lead owns the MSP Central request. Every selected technician gets
+            the booking in Outlook, Command Centre, and the phone app.
+          </p>
+        </fieldset>
 
         {pending.bookingType === "Onsite" ? (
           <p className="mt-2 text-xs text-slate-400">

@@ -236,17 +236,40 @@ function selectJobRows(
   },
 ) {
   return sql<DatabaseJobRow[]>`
+    with assignments as (
+      select
+        dl.id as assignment_id,
+        dl.id as dispatch_link_id,
+        dl.technician_id as assignment_technician_id,
+        dl.outlook_event_id,
+        dl.outlook_calendar_email,
+        dl.last_sync_status,
+        dl.last_sync_error
+      from public.dispatch_links dl
+
+      union all
+
+      select
+        crew.id as assignment_id,
+        crew.dispatch_link_id,
+        crew.technician_id as assignment_technician_id,
+        crew.outlook_event_id,
+        crew.outlook_calendar_email,
+        crew.last_sync_status,
+        crew.last_sync_error
+      from public.dispatch_link_crew crew
+    )
     select
-      dl.id::text as "id",
+      assignments.assignment_id::text as "id",
       dl.sdp_request_id as "sdpRequestId",
       dl.sdp_request_number as "sdpRequestNumber",
-      dl.outlook_event_id as "outlookEventId",
-      dl.outlook_calendar_email as "outlookCalendarEmail",
-      dl.technician_id::text as "technicianId",
+      assignments.outlook_event_id as "outlookEventId",
+      assignments.outlook_calendar_email as "outlookCalendarEmail",
+      assignments.assignment_technician_id::text as "technicianId",
       dl.scheduled_start as "scheduledStart",
       dl.scheduled_end as "scheduledEnd",
-      dl.last_sync_status::text as "lastSyncStatus",
-      dl.last_sync_error as "lastSyncError",
+      assignments.last_sync_status::text as "lastSyncStatus",
+      assignments.last_sync_error as "lastSyncError",
       dl.created_at as "createdAt",
       dl.updated_at as "updatedAt",
       jsonb_build_object(
@@ -263,8 +286,10 @@ function selectJobRows(
         'dispatchEnabled', sp.dispatch_enabled
       ) as "staff",
       coalesce(logs.notes, '[]'::jsonb) as "notes"
-    from public.dispatch_links dl
-    left join public.technicians t on t.id = dl.technician_id
+    from assignments
+    join public.dispatch_links dl on dl.id = assignments.dispatch_link_id
+    left join public.technicians t
+      on t.id = assignments.assignment_technician_id
     join public.staff_profiles sp on sp.id = ${staffId}::uuid
       and (
         t.id is not null

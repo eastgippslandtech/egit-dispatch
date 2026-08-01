@@ -13,6 +13,7 @@ export type DispatchLinkSyncStatus =
 export type DispatchLinkInput = {
   action: "live_schedule" | "outlook_reconciled";
   bookingType?: BookingType;
+  crew?: DispatchCrewLinkInput[];
   contactEmail?: string;
   contactName?: string;
   contactPhone?: string;
@@ -34,6 +35,15 @@ export type DispatchLinkInput = {
   technicianEmail?: string;
   technicianId?: string;
   technicianMspCentralId?: string;
+};
+
+export type DispatchCrewLinkInput = {
+  outlookCalendarEmail: string;
+  outlookEventId?: string;
+  syncError?: string;
+  syncStatus: DispatchLinkSyncStatus;
+  technicianEmail?: string;
+  technicianId: string;
 };
 
 export interface DispatchLinkStore {
@@ -59,31 +69,22 @@ export function createPostgresDispatchLinkStore({
 } = {}): DispatchLinkStore {
   return {
     async save(input) {
-      const technicians = await sql<Array<{ id: string }>>`
-        select t.id::text as "id"
-        from public.technicians t
-        left join public.staff_profiles sp
-          on lower(sp.outlook_email) = lower(t.outlook_email)
-          or (
-            sp.msp_central_technician_id is not null
-            and t.sdp_technician_id is not null
-            and sp.msp_central_technician_id = t.sdp_technician_id
-          )
-        where
-          t.id::text = ${input.technicianId ?? ""}
-          or sp.id::text = ${input.technicianId ?? ""}
-          or lower(t.outlook_email) = lower(${input.technicianEmail ?? ""})
-          or lower(sp.zoho_email) = lower(${input.technicianEmail ?? ""})
-          or lower(sp.msp_central_email) = lower(${input.technicianEmail ?? ""})
-          or t.sdp_technician_id = ${input.technicianMspCentralId ?? ""}
-        limit 1
-      `;
-      const technicianId = technicians[0]?.id;
-      if (!technicianId) {
-        throw new Error("The scheduled technician is not mapped in Command Centre.");
-      }
+      const technicianId = await resolveTechnicianId(sql, {
+        email: input.technicianEmail,
+        mspCentralId: input.technicianMspCentralId,
+        technicianId: input.technicianId,
+      });
+      const crew = await Promise.all(
+        (input.crew ?? []).map(async (member) => ({
+          ...member,
+          databaseTechnicianId: await resolveTechnicianId(sql, {
+            email: member.technicianEmail,
+            technicianId: member.technicianId,
+          }),
+        })),
+      );
 
-      await sql`
+      const links = await sql<Array<{ id: string }>>`
         insert into public.dispatch_links (
           sdp_request_id,
           sdp_request_number,
@@ -118,7 +119,39 @@ export function createPostgresDispatchLinkStore({
           last_sync_status = excluded.last_sync_status,
           last_sync_error = excluded.last_sync_error,
           updated_at = now()
+        returning id::text as "id"
       `;
+      const dispatchLinkId = links[0]?.id;
+      if (!dispatchLinkId) {
+        throw new Error("The scheduled request link could not be stored.");
+      }
+
+      await sql`
+        delete from public.dispatch_link_crew
+        where dispatch_link_id = ${dispatchLinkId}::uuid
+      `;
+      for (const member of crew) {
+        await sql`
+          insert into public.dispatch_link_crew (
+            dispatch_link_id,
+            technician_id,
+            outlook_event_id,
+            outlook_calendar_email,
+            last_sync_status,
+            last_sync_error,
+            updated_at
+          )
+          values (
+            ${dispatchLinkId}::uuid,
+            ${member.databaseTechnicianId}::uuid,
+            ${member.outlookEventId ?? null},
+            ${member.outlookCalendarEmail},
+            ${member.syncStatus}::public.dispatch_sync_status,
+            ${member.syncError ?? null},
+            now()
+          )
+        `;
+      }
 
       await sql`
         insert into public.dispatch_sync_logs (
@@ -142,6 +175,7 @@ export function createPostgresDispatchLinkStore({
             contactEmail: input.contactEmail,
             contactName: input.contactName,
             contactPhone: input.contactPhone,
+            crewTechnicianIds: crew.map((member) => member.databaseTechnicianId),
             customerName: input.customer,
             description: input.description,
             priority: input.priority,
@@ -156,6 +190,40 @@ export function createPostgresDispatchLinkStore({
       `;
     },
   };
+}
+
+async function resolveTechnicianId(
+  sql: postgres.Sql,
+  input: {
+    email?: string;
+    mspCentralId?: string;
+    technicianId?: string;
+  },
+) {
+  const technicians = await sql<Array<{ id: string }>>`
+        select t.id::text as "id"
+        from public.technicians t
+        left join public.staff_profiles sp
+          on lower(sp.outlook_email) = lower(t.outlook_email)
+          or (
+            sp.msp_central_technician_id is not null
+            and t.sdp_technician_id is not null
+            and sp.msp_central_technician_id = t.sdp_technician_id
+          )
+        where
+          t.id::text = ${input.technicianId ?? ""}
+          or sp.id::text = ${input.technicianId ?? ""}
+          or lower(t.outlook_email) = lower(${input.email ?? ""})
+          or lower(sp.zoho_email) = lower(${input.email ?? ""})
+          or lower(sp.msp_central_email) = lower(${input.email ?? ""})
+          or t.sdp_technician_id = ${input.mspCentralId ?? ""}
+        limit 1
+      `;
+  const technicianId = technicians[0]?.id;
+  if (!technicianId) {
+    throw new Error("The scheduled technician is not mapped in Command Centre.");
+  }
+  return technicianId;
 }
 
 function getSql(databaseUrl?: string) {

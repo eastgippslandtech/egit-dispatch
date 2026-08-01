@@ -57,6 +57,13 @@ export function createPostgresWorklogOutcomeStore({
           updated_at = now()
       `;
 
+      await sql`
+        delete from public.dispatch_link_crew
+        where dispatch_link_id = (
+          select id from public.dispatch_links where sdp_request_id = ${input.requestId}
+        )
+      `;
+
       await recordOutcome(sql, {
         action: "worklog_book_forward",
         eventId: input.eventId,
@@ -83,6 +90,13 @@ export function createPostgresWorklogOutcomeStore({
           technician_id::text as "technicianId"
       `;
 
+      await sql`
+        delete from public.dispatch_link_crew
+        where dispatch_link_id = (
+          select id from public.dispatch_links where sdp_request_id = ${input.requestId}
+        )
+      `;
+
       await recordOutcome(sql, {
         action: "worklog_schedule_cleared",
         eventId: rows[0]?.eventId ?? undefined,
@@ -90,6 +104,30 @@ export function createPostgresWorklogOutcomeStore({
         requestId: input.requestId,
         technicianId: rows[0]?.technicianId ?? undefined,
       });
+    },
+
+    async listCalendarAssignments(input) {
+      return sql<Array<{ eventId: string; userPrincipalName: string }>>`
+        select
+          dl.outlook_event_id as "eventId",
+          dl.outlook_calendar_email as "userPrincipalName"
+        from public.dispatch_links dl
+        where
+          dl.sdp_request_id = ${input.requestId}
+          and dl.outlook_event_id is not null
+          and dl.outlook_calendar_email is not null
+
+        union all
+
+        select
+          dlc.outlook_event_id as "eventId",
+          dlc.outlook_calendar_email as "userPrincipalName"
+        from public.dispatch_link_crew dlc
+        inner join public.dispatch_links dl on dl.id = dlc.dispatch_link_id
+        where
+          dl.sdp_request_id = ${input.requestId}
+          and dlc.outlook_event_id is not null
+      `;
     },
 
     async transfer(input) {
@@ -110,6 +148,13 @@ export function createPostgresWorklogOutcomeStore({
           last_sync_error = null,
           updated_at = now()
         where sdp_request_id = ${input.requestId}
+      `;
+
+      await sql`
+        delete from public.dispatch_link_crew
+        where dispatch_link_id = (
+          select id from public.dispatch_links where sdp_request_id = ${input.requestId}
+        )
       `;
 
       await recordOutcome(sql, {

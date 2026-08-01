@@ -136,6 +136,50 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
   expect(onBookingTypeChange).toHaveBeenCalledWith("Remote");
 });
 
+test("live scheduling supports a lead technician and additional crew", () => {
+  const data = getDispatchDesignMockData();
+  const onCrewChange = vi.fn();
+
+  render(
+    <ScheduleConfirmModal
+      liveSchedule
+      pending={{
+        bookingType: "Remote",
+        crewTechnicianIds: [data.technicians[1].id],
+        date: "2026-08-04",
+        durationMinutes: 60,
+        end: "11:00",
+        kind: "request",
+        requestId: data.requests[0].id,
+        start: "10:00",
+        technicianId: data.technicians[0].id,
+        warnings: [],
+      }}
+      request={data.requests[0]}
+      technicians={data.technicians}
+      onBookingTypeChange={vi.fn()}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn()}
+      onCrewChange={onCrewChange}
+      onDurationChange={vi.fn()}
+      onStartChange={vi.fn()}
+      onTechnicianChange={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByLabelText("Lead technician")).toHaveValue(
+    data.technicians[0].id,
+  );
+  expect(
+    screen.getByRole("checkbox", { name: data.technicians[1].displayName }),
+  ).toBeChecked();
+
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: data.technicians[2].displayName }),
+  );
+  expect(onCrewChange).toHaveBeenCalledWith(data.technicians[2].id, true);
+});
+
 test("shows immediate proof that schedule confirmation was accepted", () => {
   const data = getDispatchDesignMockData();
   const onConfirm = vi.fn(() => new Promise<void>(() => undefined));

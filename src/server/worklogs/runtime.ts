@@ -72,6 +72,12 @@ export interface WorklogOutcomeStore {
     requestId: string;
     status: "sdp_only" | "linked";
   }): Promise<void>;
+  listCalendarAssignments(input: { requestId: string }): Promise<
+    Array<{
+      eventId: string;
+      userPrincipalName: string;
+    }>
+  >;
   transfer(input: {
     reason: string;
     requestId: string;
@@ -116,7 +122,7 @@ export function createWorklogDispositionRuntime({
           requestId: command.requestId,
           status: "Resolved",
         });
-        await removeCurrentCalendarEvent(command, graphClient);
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
           status: "sdp_only",
@@ -132,7 +138,7 @@ export function createWorklogDispositionRuntime({
           requestId: command.requestId,
           status: "Open",
         });
-        await removeCurrentCalendarEvent(command, graphClient);
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
           status: "sdp_only",
@@ -156,7 +162,7 @@ export function createWorklogDispositionRuntime({
           requestId: command.requestId,
           status: "Open",
         });
-        await removeCurrentCalendarEvent(command, graphClient);
+        await removeCalendarAssignments(command, graphClient, outcomeStore);
         await outcomeStore.transfer({
           reason: command.transfer.reason,
           requestId: command.requestId,
@@ -206,8 +212,12 @@ export function createWorklogDispositionRuntime({
             eventId: current.eventId,
             transactionId: undefined,
           });
+          await removeCalendarAssignments(command, graphClient, outcomeStore, {
+            eventId: current.eventId,
+            userPrincipalName: current.userPrincipalName,
+          });
         } else {
-          await removeCurrentCalendarEvent(command, graphClient);
+          await removeCalendarAssignments(command, graphClient, outcomeStore);
           event = await graphClient.createEvent(graphInput);
         }
 
@@ -226,16 +236,44 @@ export function createWorklogDispositionRuntime({
   };
 }
 
-async function removeCurrentCalendarEvent(
+async function removeCalendarAssignments(
   command: WorklogDispositionCommand,
   graphClient: RuntimeGraphClient,
+  outcomeStore: WorklogOutcomeStore,
+  preserve?: { eventId: string; userPrincipalName: string },
 ) {
-  const current = command.currentBooking;
-  if (!current?.eventId || !current.userPrincipalName) return;
-  await graphClient.deleteEvent({
-    eventId: current.eventId,
-    userPrincipalName: current.userPrincipalName,
+  const storedAssignments = await outcomeStore.listCalendarAssignments({
+    requestId: command.requestId,
   });
+  const current = command.currentBooking;
+  const assignments = [
+    ...storedAssignments,
+    ...(current?.eventId && current.userPrincipalName
+      ? [
+          {
+            eventId: current.eventId,
+            userPrincipalName: current.userPrincipalName,
+          },
+        ]
+      : []),
+  ].filter(
+    (assignment, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.eventId === assignment.eventId &&
+          candidate.userPrincipalName === assignment.userPrincipalName,
+      ) === index,
+  );
+
+  await Promise.all(
+    assignments
+      .filter(
+        (assignment) =>
+          assignment.eventId !== preserve?.eventId ||
+          assignment.userPrincipalName !== preserve.userPrincipalName,
+      )
+      .map((assignment) => graphClient.deleteEvent(assignment)),
+  );
 }
 
 function withMelbourneOffset(date: string, time: string) {

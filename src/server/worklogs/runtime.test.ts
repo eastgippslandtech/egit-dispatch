@@ -42,6 +42,40 @@ describe("Work Log disposition runtime", () => {
     });
   });
 
+  it("removes every lead and crew calendar booking when a request leaves the schedule", async () => {
+    const dependencies = createDependencies();
+    dependencies.outcomeStore.listCalendarAssignments.mockResolvedValue([
+      {
+        eventId: "event-lead",
+        userPrincipalName: "mattd@egit.com.au",
+      },
+      {
+        eventId: "event-crew",
+        userPrincipalName: "jervy@egit.com.au",
+      },
+    ]);
+    const runtime = createWorklogDispositionRuntime(dependencies);
+
+    await runtime.applyDisposition({
+      ...base,
+      currentBooking: {
+        ...base.currentBooking!,
+        eventId: "event-crew",
+      },
+      disposition: "complete",
+    });
+
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledTimes(2);
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledWith({
+      eventId: "event-lead",
+      userPrincipalName: "mattd@egit.com.au",
+    });
+    expect(dependencies.graphClient.deleteEvent).toHaveBeenCalledWith({
+      eventId: "event-crew",
+      userPrincipalName: "jervy@egit.com.au",
+    });
+  });
+
   it("saves a typed Work Log with its mandatory MSP owner", async () => {
     const dependencies = createDependencies();
     const runtime = createWorklogDispositionRuntime(dependencies);
@@ -158,6 +192,7 @@ function createDependencies() {
     outcomeStore: {
       bookForward: vi.fn(),
       clearSchedule: vi.fn(),
+      listCalendarAssignments: vi.fn().mockResolvedValue([]),
       transfer: vi.fn(),
     },
     worklogOwner: {

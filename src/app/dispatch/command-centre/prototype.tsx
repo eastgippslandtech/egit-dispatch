@@ -2616,14 +2616,15 @@ function WorkLogModal({
   const billable = workType === "billable";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
       <section
         aria-labelledby="work-log-title"
         aria-modal="true"
-        className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        className="flex h-[96vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-lg border border-cc-orange/20 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        data-layout="full-screen-split"
         role="dialog"
       >
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
               {liveWriteback ? "MSP Central" : "Mock/test-sync only"}
@@ -2642,7 +2643,12 @@ function WorkLogModal({
           </button>
         </div>
 
-        <section className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+        <section
+          aria-label="Ticket information"
+          className="min-h-0 overflow-y-auto p-4 sm:p-5"
+        >
+        <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
           <h3 className="text-sm font-semibold text-slate-50">
             Latest job information
           </h3>
@@ -2721,8 +2727,13 @@ function WorkLogModal({
             </div>
           ) : null}
         </section>
+        </section>
 
-        <div className="mt-5 grid gap-4">
+        <section
+          aria-label="Work Log entry"
+          className="min-h-0 overflow-y-auto border-t border-white/10 bg-black/10 p-4 lg:border-l lg:border-t-0 sm:p-5"
+        >
+        <div className="grid gap-4">
           <label className="block text-sm font-semibold text-slate-200">
             Work Log notes
             <textarea
@@ -2836,6 +2847,8 @@ function WorkLogModal({
           >
             Save and complete ticket
           </button>
+        </div>
+        </section>
         </div>
       </section>
     </div>

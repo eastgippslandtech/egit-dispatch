@@ -356,6 +356,9 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   fireEvent.click(within(drawer).getByRole("button", { name: "Work Log" }));
 
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(dialog).toHaveAttribute("data-layout", "full-screen-split");
+  expect(within(dialog).getByRole("region", { name: "Ticket information" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("region", { name: "Work Log entry" })).toBeInTheDocument();
   expect(within(dialog).getByRole("heading", { name: "Work Log" })).toBeInTheDocument();
   expect(within(dialog).getByText("Latest job information")).toBeInTheDocument();
   expect(within(dialog).getByText("Request number")).toBeInTheDocument();

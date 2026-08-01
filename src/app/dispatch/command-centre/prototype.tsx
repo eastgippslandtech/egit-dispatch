@@ -2461,7 +2461,7 @@ export function ScheduleConfirmModal({
   liveSchedule: boolean;
   onCancel: () => void;
   onBookingTypeChange: (bookingType: BookingType) => void;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void> | void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
   onTechnicianChange: (technicianId: string) => void;
@@ -2469,6 +2469,7 @@ export function ScheduleConfirmModal({
   request?: DispatchRequest;
   technicians: Technician[];
 }) {
+  const [saving, setSaving] = useState(false);
   const technician = technicianLabel(technicians, pending.technicianId);
   const oldTechnician =
     pending.kind === "appointment"
@@ -2486,6 +2487,17 @@ export function ScheduleConfirmModal({
     travelBackToOfficeMinutes: pending.travel?.travelBackToOfficeMinutes,
     travelToSiteMinutes: pending.travel?.travelToSiteMinutes,
   });
+
+  async function confirmSchedule() {
+    if (saving) return;
+
+    setSaving(true);
+    try {
+      await onConfirm();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
@@ -2553,6 +2565,7 @@ export function ScheduleConfirmModal({
             Technician
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.technicianId}
               onChange={(event) => onTechnicianChange(event.target.value)}
             >
@@ -2567,6 +2580,7 @@ export function ScheduleConfirmModal({
             Start time
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.start}
               onChange={(event) => onStartChange(event.target.value)}
             >
@@ -2581,6 +2595,7 @@ export function ScheduleConfirmModal({
             Job duration
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.durationMinutes}
               onChange={(event) => onDurationChange(Number(event.target.value))}
             >
@@ -2596,6 +2611,7 @@ export function ScheduleConfirmModal({
             <select
               aria-label="Booking type"
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.bookingType}
               onChange={(event) =>
                 onBookingTypeChange(event.target.value as BookingType)
@@ -2670,20 +2686,41 @@ export function ScheduleConfirmModal({
           </div>
         )}
 
+        {saving ? (
+          <div
+            className="mt-4 flex items-center gap-2 rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-orange-100"
+            role="status"
+          >
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Saving booking and starting background sync
+          </div>
+        ) : null}
+
         <div className="mt-5 flex justify-end gap-2">
           <button
-            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-wait disabled:opacity-50"
+            disabled={saving}
             type="button"
             onClick={onCancel}
           >
             Cancel
           </button>
           <button
-            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1"
+            className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-wait disabled:opacity-70"
+            disabled={saving}
             type="button"
-            onClick={onConfirm}
+            onClick={confirmSchedule}
           >
-            {liveSchedule ? "Confirm schedule" : "Confirm mock schedule"}
+            {saving ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Scheduling...
+              </>
+            ) : liveSchedule ? (
+              "Confirm schedule"
+            ) : (
+              "Confirm mock schedule"
+            )}
           </button>
         </div>
       </section>

@@ -133,6 +133,46 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
   expect(onBookingTypeChange).toHaveBeenCalledWith("Remote");
 });
 
+test("shows immediate proof that schedule confirmation was accepted", () => {
+  const data = getDispatchDesignMockData();
+  const onConfirm = vi.fn(() => new Promise<void>(() => undefined));
+
+  render(
+    <ScheduleConfirmModal
+      liveSchedule
+      pending={{
+        bookingType: "Remote",
+        date: "2026-08-04",
+        durationMinutes: 15,
+        end: "10:15",
+        kind: "request",
+        requestId: data.requests[0].id,
+        start: "10:00",
+        technicianId: data.technicians[0].id,
+        warnings: [],
+      }}
+      request={data.requests[0]}
+      technicians={data.technicians}
+      onBookingTypeChange={vi.fn()}
+      onCancel={vi.fn()}
+      onConfirm={onConfirm}
+      onDurationChange={vi.fn()}
+      onStartChange={vi.fn()}
+      onTechnicianChange={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+
+  expect(onConfirm).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Scheduling..." })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Saving booking and starting background sync",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
+  expect(onConfirm).toHaveBeenCalledOnce();
+});
+
 test("redirects a wallboard-only session to the wallboard", async () => {
   getCommandCentreAccessMock.mockResolvedValue({
     name: "Command Centre Wallboard",

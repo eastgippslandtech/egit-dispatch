@@ -2,13 +2,19 @@ import type { MicrosoftGraphEvent } from "@/server/graph/types";
 
 import type { WorklogDispositionCommand } from "./disposition";
 
+type WorklogOwner = {
+  id: string;
+};
+
 type RuntimeMspClient = {
   addRequestWorklog?: (input: {
     description: string;
     durationMinutes: number;
     endedAt: string;
+    ownerId: string;
     requestId: string;
     startedAt: string;
+    worklogType: WorklogDispositionCommand["workType"];
   }) => Promise<void>;
   assignRequest: (input: {
     requestId: string;
@@ -76,10 +82,12 @@ export function createWorklogDispositionRuntime({
   graphClient,
   mspClient,
   outcomeStore,
+  worklogOwner,
 }: {
   graphClient: RuntimeGraphClient;
   mspClient: RuntimeMspClient;
   outcomeStore: WorklogOutcomeStore;
+  worklogOwner: WorklogOwner;
 }) {
   return {
     async saveWorklog(command: WorklogDispositionCommand) {
@@ -90,8 +98,10 @@ export function createWorklogDispositionRuntime({
         description: command.description,
         durationMinutes: command.durationMinutes,
         endedAt: command.endedAt,
+        ownerId: worklogOwner.id,
         requestId: command.requestId,
         startedAt: command.startedAt,
+        worklogType: command.workType,
       });
     },
 
@@ -104,7 +114,6 @@ export function createWorklogDispositionRuntime({
           requestId: command.requestId,
           status: "Resolved",
         });
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
         await removeCurrentCalendarEvent(command, graphClient);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
@@ -114,7 +123,13 @@ export function createWorklogDispositionRuntime({
       }
 
       if (command.disposition === "return_to_queue") {
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
+        if (!mspClient.updateRequestStatus) {
+          throw new Error("MSP Central status writeback is unavailable.");
+        }
+        await mspClient.updateRequestStatus({
+          requestId: command.requestId,
+          status: "Open",
+        });
         await removeCurrentCalendarEvent(command, graphClient);
         await outcomeStore.clearSchedule({
           requestId: command.requestId,
@@ -131,7 +146,13 @@ export function createWorklogDispositionRuntime({
             command.transfer.targetEmail ??
             command.transfer.targetTechnicianId,
         });
-        await mspClient.clearRequestSchedule({ requestId: command.requestId });
+        if (!mspClient.updateRequestStatus) {
+          throw new Error("MSP Central status writeback is unavailable.");
+        }
+        await mspClient.updateRequestStatus({
+          requestId: command.requestId,
+          status: "Open",
+        });
         await removeCurrentCalendarEvent(command, graphClient);
         await outcomeStore.transfer({
           reason: command.transfer.reason,

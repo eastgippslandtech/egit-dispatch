@@ -171,10 +171,14 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
                 description: input.description,
                 end_time: { value: new Date(input.endedAt).getTime() },
                 include_nonoperational_hours: true,
+                owner: { id: input.ownerId },
                 start_time: { value: new Date(input.startedAt).getTime() },
                 time_spent: {
                   hours: String(Math.floor(durationMinutes / 60)),
                   minutes: String(durationMinutes % 60),
+                },
+                worklog_type: {
+                  name: mspCentralWorklogTypeName(input.worklogType),
                 },
               },
             }),
@@ -605,6 +609,14 @@ function mspCentralActionSucceeded(payload: MspCentralActionResponse) {
   return statuses.some(
     (status) => status.status?.trim().toLowerCase() === "success",
   );
+}
+
+function mspCentralWorklogTypeName(
+  worklogType: "billable" | "non_billable" | "internal",
+) {
+  if (worklogType === "non_billable") return "Non-billable";
+  if (worklogType === "internal") return "Internal";
+  return "Billable";
 }
 
 async function refreshAccessToken(config: DispatchConfig) {

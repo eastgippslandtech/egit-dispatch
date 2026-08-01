@@ -50,6 +50,7 @@ import { createMspCentralClient } from "@/server/msp-central/client";
 import type { MspCentralClient } from "@/server/msp-central/types";
 import { createGraphClient } from "@/server/graph/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
@@ -247,6 +248,8 @@ export async function saveMobileWorklog({
     const dispositionResult = await processMobileDisposition({
       command: dispositionCommand,
       mspClient,
+      ownerEmail: staff.mspCentralEmail || auth.email,
+      ownerTechnicianId: staff.mspCentralTechnicianId,
     });
 
     const saved = await database.saveWorklog({
@@ -371,6 +374,8 @@ export async function completeMobileJob({
       body,
       command,
       mspClient,
+      ownerEmail: staff.mspCentralEmail || auth.email,
+      ownerTechnicianId: staff.mspCentralTechnicianId,
       requestId: job.sdpRequestId,
     });
     if (mspClient?.updateRequestStatus) {
@@ -525,6 +530,14 @@ function buildMobileDispositionCommand({
     scheduled: Boolean(job.scheduledStart && job.scheduledEnd),
     startedAt,
     transfer: command.transfer,
+    visibility: command.visibility,
+    workType:
+      command.workType ??
+      (command.visibility === "internal"
+        ? "internal"
+        : command.billable === false
+          ? "non_billable"
+          : "billable"),
   });
 }
 
@@ -544,9 +557,13 @@ function validateMobileDisposition(
 async function processMobileDisposition({
   command,
   mspClient,
+  ownerEmail,
+  ownerTechnicianId,
 }: {
   command: ReturnType<typeof buildMobileDispositionCommand>;
   mspClient: MspCentralClient | null;
+  ownerEmail?: string | null;
+  ownerTechnicianId?: string | null;
 }) {
   const config = readDispatchConfig();
   if (!mspClient || !config.databaseUrl) {
@@ -559,20 +576,29 @@ async function processMobileDisposition({
         endedAt: command.endedAt,
         installationId: "mobile",
         startedAt: command.startedAt,
-        visibility: "external",
+        visibility: command.visibility,
+        workType: command.workType,
       },
       mspClient,
+      ownerEmail,
+      ownerTechnicianId,
       requestId: command.requestId,
     });
     return null;
   }
 
+  const worklogOwner = await resolveMspCentralWorklogOwner({
+    email: ownerEmail ?? undefined,
+    mspClient,
+    technicianId: ownerTechnicianId,
+  });
   const runtime = createWorklogDispositionRuntime({
     graphClient: createGraphClient(config.microsoft),
     mspClient,
     outcomeStore: createPostgresWorklogOutcomeStore({
       databaseUrl: config.databaseUrl,
     }),
+    worklogOwner,
   });
   return createWorklogDispositionProcessor({
     applyDisposition: runtime.applyDisposition,
@@ -594,11 +620,15 @@ async function writeMobileWorklogToMsp({
   body,
   command,
   mspClient,
+  ownerEmail,
+  ownerTechnicianId,
   requestId,
 }: {
   body: string;
   command: MobileWorklogCommand;
   mspClient: MspCentralClient | null;
+  ownerEmail?: string | null;
+  ownerTechnicianId?: string | null;
   requestId: string;
 }) {
   if (!mspClient?.addRequestWorklog) {
@@ -610,13 +640,27 @@ async function writeMobileWorklogToMsp({
   const startedAt =
     command.startedAt ??
     new Date(new Date(endedAt).getTime() - durationMinutes * 60_000).toISOString();
+  const owner = await resolveMspCentralWorklogOwner({
+    email: ownerEmail ?? undefined,
+    mspClient,
+    technicianId: ownerTechnicianId,
+  });
+  const worklogType =
+    command.workType ??
+    (command.visibility === "internal"
+      ? "internal"
+      : command.billable === false
+        ? "non_billable"
+        : "billable");
 
   await mspClient.addRequestWorklog({
     description: body,
     durationMinutes,
     endedAt,
+    ownerId: owner.id,
     requestId,
     startedAt,
+    worklogType,
   });
 }
 

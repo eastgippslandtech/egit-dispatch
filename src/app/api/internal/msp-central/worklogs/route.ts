@@ -9,6 +9,7 @@ import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
+import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
@@ -26,12 +27,18 @@ export async function POST(request: Request) {
   try {
     const command = validateWorklogDispositionCommand(await request.json());
     const config = readDispatchConfig();
+    const mspClient = createMspCentralClient(config);
+    const worklogOwner = await resolveMspCentralWorklogOwner({
+      email: access.email,
+      mspClient,
+    });
     const runtime = createWorklogDispositionRuntime({
       graphClient: createGraphClient(config.microsoft),
-      mspClient: createMspCentralClient(config),
+      mspClient,
       outcomeStore: createPostgresWorklogOutcomeStore({
         databaseUrl: config.databaseUrl,
       }),
+      worklogOwner,
     });
     const processor = createWorklogDispositionProcessor({
       applyDisposition: runtime.applyDisposition,

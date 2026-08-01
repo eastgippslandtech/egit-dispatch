@@ -37,6 +37,7 @@ import type {
   WorklogDisposition,
   WorklogForwardBooking,
   WorklogTransfer,
+  WorklogType,
 } from "@/server/worklogs/disposition";
 
 import type {
@@ -566,7 +567,7 @@ export function CommandCentrePrototype({
     notes: string;
     transfer?: WorklogTransfer;
     visibility: "external" | "internal";
-    workType: string;
+    workType: WorklogType;
   }) {
     const requestId = workLogRequestId;
     if (!requestId) return;
@@ -631,6 +632,8 @@ export function CommandCentrePrototype({
           scheduled,
           startedAt,
           transfer,
+          visibility,
+          workType,
         });
         if (result.status === "recovery_required") {
           setToast(
@@ -2772,7 +2775,7 @@ function WorkLogModal({
     notes: string;
     transfer?: WorklogTransfer;
     visibility: "external" | "internal";
-    workType: string;
+    workType: WorklogType;
   }) => Promise<void>;
   request?: DispatchRequest;
   technician: string;
@@ -2797,7 +2800,7 @@ function WorkLogModal({
   const [visibility, setVisibility] = useState<"external" | "internal">(
     "external",
   );
-  const [workType, setWorkType] = useState(
+  const [workType, setWorkType] = useState<WorklogType>(
     request?.billable === false ? "non_billable" : "billable",
   );
   const scheduled = Boolean(appointment || request?.scheduledStart);
@@ -3089,7 +3092,7 @@ function WorkLogModal({
                 className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
                 value={workType}
                 onChange={(event) => {
-                  const nextWorkType = event.target.value;
+                  const nextWorkType = event.target.value as WorklogType;
                   setWorkType(nextWorkType);
 
                   if (nextWorkType === "billable") {

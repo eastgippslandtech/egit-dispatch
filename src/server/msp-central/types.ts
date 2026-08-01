@@ -1,4 +1,5 @@
 import type { DispatchRequest, Technician } from "@/server/dispatch/types";
+import type { WorklogType } from "@/server/worklogs/disposition";
 
 export type MspCentralRawTechnician = {
   email?: string | null;
@@ -156,8 +157,10 @@ export type MspCentralClient = {
     description: string;
     durationMinutes: number;
     endedAt: string;
+    ownerId: string;
     requestId: string;
     startedAt: string;
+    worklogType: WorklogType;
   }): Promise<void>;
   assignRequest(input: {
     requestId: string;

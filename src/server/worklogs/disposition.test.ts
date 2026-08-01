@@ -10,6 +10,8 @@ const baseCommand = {
   requestId: "request-1",
   scheduled: true,
   startedAt: "2026-08-03T00:15:00.000Z",
+  visibility: "external" as const,
+  workType: "billable" as const,
 };
 
 describe("worklog disposition validation", () => {
@@ -63,5 +65,40 @@ describe("worklog disposition validation", () => {
         transfer: { reason: "", targetTechnicianId: "tech-matt" },
       }),
     ).toThrow("Transfer / escalate requires");
+  });
+
+  it("enforces the billing and visibility rules", () => {
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "billable",
+      }),
+    ).toMatchObject({ visibility: "external", workType: "billable" });
+    expect(
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "non_billable",
+      }),
+    ).toMatchObject({ visibility: "external", workType: "non_billable" });
+    expect(() =>
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "internal",
+        workType: "billable",
+      }),
+    ).toThrow("Billable Work Logs must be customer-facing");
+    expect(() =>
+      validateWorklogDispositionCommand({
+        ...baseCommand,
+        disposition: "complete",
+        visibility: "external",
+        workType: "internal",
+      }),
+    ).toThrow("Internal Work Logs must use internal visibility");
   });
 });

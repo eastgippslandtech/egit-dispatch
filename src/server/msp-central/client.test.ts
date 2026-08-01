@@ -727,8 +727,10 @@ describe("MSP Central live client", () => {
       description: "Resolved printer fault.",
       durationMinutes: 95,
       endedAt: "2026-07-24T11:35:00+10:00",
+      ownerId: "msp-tech-simeon",
       requestId: "123",
       startedAt: "2026-07-24T10:00:00+10:00",
+      worklogType: "billable",
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -740,7 +742,56 @@ describe("MSP Central live client", () => {
     expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
       worklog: {
         description: "Resolved printer fault.",
+        owner: { id: "msp-tech-simeon" },
         time_spent: { hours: "1", minutes: "35" },
+        worklog_type: { name: "Billable" },
+      },
+    });
+  });
+
+  it.each([
+    ["billable", "Billable"],
+    ["non_billable", "Non-billable"],
+    ["internal", "Internal"],
+  ] as const)("maps %s Work Logs to the configured MSP type", async (worklogType, expectedName) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestWorklog?.({
+      description: "Tested Work Log type.",
+      durationMinutes: 15,
+      endedAt: "2026-08-01T10:15:00+10:00",
+      ownerId: "msp-tech-simeon",
+      requestId: "123",
+      startedAt: "2026-08-01T10:00:00+10:00",
+      worklogType,
+    });
+
+    const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
+      worklog: {
+        owner: { id: "msp-tech-simeon" },
+        worklog_type: { name: expectedName },
       },
     });
   });

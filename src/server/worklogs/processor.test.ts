@@ -16,6 +16,8 @@ const command: WorklogDispositionCommand = {
   requestId: "request-1",
   scheduled: true,
   startedAt: "2026-08-03T00:30:00.000Z",
+  visibility: "external",
+  workType: "billable",
 };
 
 describe("Work Log disposition processor", () => {

@@ -89,6 +89,7 @@ test("renders the locked Command Centre prototype with shared mock data", async 
 test("live scheduling lets the dispatcher choose the booking type", () => {
   const data = getDispatchDesignMockData();
   const onBookingTypeChange = vi.fn();
+  const onDurationChange = vi.fn();
 
   render(
     <ScheduleConfirmModal
@@ -109,7 +110,7 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
       onBookingTypeChange={onBookingTypeChange}
       onCancel={vi.fn()}
       onConfirm={vi.fn()}
-      onDurationChange={vi.fn()}
+      onDurationChange={onDurationChange}
       onStartChange={vi.fn()}
       onTechnicianChange={vi.fn()}
     />,
@@ -118,6 +119,13 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
   expect(screen.getByText("Confirm live schedule")).toBeInTheDocument();
   expect(screen.getByText("MSP Central + Outlook")).toBeInTheDocument();
   expect(screen.getByText("Includes 15 minutes for onsite notes.")).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "15 minutes" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "45 minutes" })).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("Job duration"), {
+    target: { value: "45" },
+  });
+  expect(onDurationChange).toHaveBeenCalledWith(45);
 
   fireEvent.change(screen.getByLabelText("Booking type"), {
     target: { value: "Remote" },

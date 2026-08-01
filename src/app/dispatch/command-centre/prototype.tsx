@@ -2414,7 +2414,7 @@ export function ScheduleConfirmModal({
               value={pending.durationMinutes}
               onChange={(event) => onDurationChange(Number(event.target.value))}
             >
-              {[30, 60, 90, 120, 150, 180].map((duration) => (
+              {[15, 30, 45, 60, 90, 120, 150, 180].map((duration) => (
                 <option key={duration} value={duration}>
                   {formatDuration(duration)}
                 </option>

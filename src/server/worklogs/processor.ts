@@ -16,6 +16,7 @@ export type WorklogDispositionOperation = {
 
 export interface WorklogDispositionRepository {
   begin(command: WorklogDispositionCommand): Promise<WorklogDispositionOperation>;
+  find(idempotencyKey: string): Promise<WorklogDispositionOperation | undefined>;
   markCompleted(idempotencyKey: string): Promise<void>;
   markRecoveryRequired(idempotencyKey: string, error: string): Promise<void>;
   markWorklogSaved(idempotencyKey: string): Promise<void>;

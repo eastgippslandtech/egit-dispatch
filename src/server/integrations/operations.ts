@@ -48,6 +48,7 @@ export type WorklogOperationInput = {
   command: WorklogDispositionCommand;
   ownerId: string;
   sourceVersion?: string;
+  worklogAlreadySaved?: boolean;
 };
 
 export type CommunicationOperationInput = {
@@ -233,18 +234,20 @@ export function worklogOperation(
         ]
       : []),
   ]).sort(byTechnicianId);
-  const steps: EnqueueIntegrationOperation["steps"] = [
-    step("msp_central", "msp.add_worklog", "msp:worklog", {
-      contentFingerprint: fingerprintPayload(command.description.trim()),
-      description: command.description,
-      durationMinutes: command.durationMinutes,
-      endedAt: command.endedAt,
-      ownerId: input.ownerId,
-      requestId: command.requestId,
-      startedAt: command.startedAt,
-      worklogType: command.workType,
-    }),
-  ];
+  const steps: EnqueueIntegrationOperation["steps"] = input.worklogAlreadySaved
+    ? []
+    : [
+        step("msp_central", "msp.add_worklog", "msp:worklog", {
+          contentFingerprint: fingerprintPayload(command.description.trim()),
+          description: command.description,
+          durationMinutes: command.durationMinutes,
+          endedAt: command.endedAt,
+          ownerId: input.ownerId,
+          requestId: command.requestId,
+          startedAt: command.startedAt,
+          worklogType: command.workType,
+        }),
+      ];
 
   appendDispositionSteps(steps, command, assignments);
   steps.push(refreshStep(command.requestId));
@@ -268,6 +271,7 @@ export function communicationOperation(
     contentFingerprint: fingerprintPayload(input.body.trim()),
     description: input.body.trim(),
     occurredAt: input.occurredAt,
+    notifyTechnician: false,
     requestId: input.requestId,
     showToRequester: visibility === "customer",
     visibility,

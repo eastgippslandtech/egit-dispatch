@@ -1,12 +1,18 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import {
   getCommandCentreAccess,
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
-import { createMspCentralClient } from "@/server/msp-central/client";
 import type { Priority } from "@/server/dispatch/types";
+import {
+  integrationRouteErrorStatus,
+  requireIdempotencyKey,
+} from "@/server/integrations/http";
+import { createRequestOperation } from "@/server/integrations/operations";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 
 export const dynamic = "force-dynamic";
 
@@ -25,41 +31,69 @@ export async function POST(request: Request) {
     const input = (await request.json()) as {
       customer?: string;
       description?: string;
+      idempotencyKey?: string;
       priority?: Priority;
       requesterEmail?: string;
       site?: string;
+      sourceVersion?: string;
       subject?: string;
     };
     const subject = input.subject?.trim() ?? "";
+    const idempotencyKey = requireIdempotencyKey(request, input.idempotencyKey);
     const priority = priorities.has(input.priority ?? "Medium")
       ? (input.priority ?? "Medium")
       : "Medium";
     if (!subject) return json({ error: "Subject is required." }, 400);
 
-    const client = createMspCentralClient(readDispatchConfig());
-    if (!client.createRequest) {
-      return json({ error: "MSP Central request creation is unavailable." }, 503);
-    }
-    const created = await client.createRequest({
-      customer: input.customer?.trim(),
-      description: input.description?.trim(),
-      priority,
-      requesterEmail: input.requesterEmail?.trim(),
-      site: input.site?.trim(),
-      subject,
+    const repository = createPostgresIntegrationRepository({
+      databaseUrl: readDispatchConfig().databaseUrl,
     });
-    return json({ ok: true, request: created }, 201);
+    const { operation } = await repository.enqueue(
+      createRequestOperation({
+        actorEmail: access.email,
+        customer: input.customer?.trim(),
+        description: input.description?.trim(),
+        idempotencyKey,
+        priority,
+        requesterEmail: input.requesterEmail?.trim(),
+        site: input.site?.trim(),
+        sourceVersion: input.sourceVersion?.trim() || undefined,
+        subject,
+      }),
+    );
+    after(() => bestEffortWake(operation.id));
+
+    return json(
+      {
+        ok: true,
+        operationId: operation.id,
+        pendingRequestId: operation.requestId,
+        status: operation.state,
+      },
+      202,
+    );
   } catch (error) {
-    console.error("MSP Central request creation failed", error);
+    console.error("MSP Central request creation queue failed", error);
     return json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "MSP Central request could not be created.",
+            : "MSP Central request could not be queued.",
       },
-      400,
+      integrationRouteErrorStatus(error),
     );
+  }
+}
+
+async function bestEffortWake(operationId: string) {
+  try {
+    await wakeIntegrationProcessor(operationId);
+  } catch (error) {
+    console.warn("Request creation remains durably queued after wake-up failure.", {
+      message: error instanceof Error ? error.message : "Unknown wake-up error.",
+      operationId,
+    });
   }
 }
 

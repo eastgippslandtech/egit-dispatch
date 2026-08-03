@@ -1,122 +1,109 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
-import { createMspCentralClient } from "@/server/msp-central/client";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 
 import { POST } from "./route";
+
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: vi.fn(),
+}));
 
 vi.mock("@/server/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
-vi.mock("@/server/msp-central/client", () => ({
-  createMspCentralClient: vi.fn(),
+vi.mock("@/server/integrations/repository", () => ({
+  createPostgresIntegrationRepository: vi.fn(),
 }));
 
-const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
-const createMspCentralClientMock = vi.mocked(createMspCentralClient);
+vi.mock("@/server/integrations/wake", () => ({
+  wakeIntegrationProcessor: vi.fn(),
+}));
+
+const getAccessMock = vi.mocked(getCommandCentreAccess);
+const createRepositoryMock = vi.mocked(createPostgresIntegrationRepository);
+const enqueue = vi.fn();
 
 describe("MSP Central merge requests route", () => {
-  it("rejects a wallboard-only session", async () => {
-    getCommandCentreAccessMock.mockResolvedValueOnce({
-      name: "Command Centre Wallboard",
-      status: "wallboard-only",
-    });
-
-    const response = await POST(
-      new Request(
-        "https://command.egit.com.au/api/internal/msp-central/merge-requests",
-        {
-          body: "{}",
-          method: "POST",
-        },
-      ),
-    );
-
-    expect(response.status).toBe(403);
-  });
-
-  it("rejects merging a request into itself", async () => {
-    const mergeRequests = vi.fn();
-    getCommandCentreAccessMock.mockResolvedValueOnce({
-      accessLevel: "staff",
-      email: "simeon@egit.com.au",
-      status: "approved",
-    });
-    createMspCentralClientMock.mockReturnValue(
-      mspClientWith({ mergeRequests }),
-    );
-
-    const response = await POST(
-      new Request(
-        "https://command.egit.com.au/api/internal/msp-central/merge-requests",
-        {
-          body: JSON.stringify({
-            childRequestId: "123",
-            parentRequestId: "123",
-          }),
-          method: "POST",
-        },
-      ),
-    );
-
-    expect(response.status).toBe(400);
-    expect(mergeRequests).not.toHaveBeenCalled();
-  });
-
-  it("merges the duplicate child into the surviving parent", async () => {
-    const mergeRequests = vi.fn().mockResolvedValue(undefined);
-    getCommandCentreAccessMock.mockResolvedValueOnce({
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccessMock.mockResolvedValue({
       accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",
     });
-    createMspCentralClientMock.mockReturnValue(
-      mspClientWith({ mergeRequests }),
-    );
+    enqueue.mockResolvedValue({
+      operation: { id: "operation-merge-1", state: "queued" },
+      replayed: false,
+    });
+    createRepositoryMock.mockReturnValue({ enqueue } as never);
+  });
 
+  it("rejects a wallboard-only session", async () => {
+    getAccessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await POST(requestWith({}));
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects merging a request into itself", async () => {
     const response = await POST(
-      new Request(
-        "https://command.egit.com.au/api/internal/msp-central/merge-requests",
-        {
-          body: JSON.stringify({
-            childRequestId: "duplicate-123",
-            parentRequestId: "surviving-456",
-          }),
-          method: "POST",
-        },
-      ),
+      requestWith({
+        childRequestId: "123",
+        idempotencyKey: "merge-command-123",
+        parentRequestId: "123",
+      }),
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("queues the duplicate child into the surviving parent", async () => {
+    const response = await POST(
+      requestWith({
+        childRequestId: "duplicate-123",
+        idempotencyKey: "merge-command-123-456",
+        parentRequestId: "surviving-456",
+      }),
+    );
+
+    expect(response.status).toBe(202);
     await expect(response.json()).resolves.toEqual({
       childRequestId: "duplicate-123",
       ok: true,
+      operationId: "operation-merge-1",
       parentRequestId: "surviving-456",
+      status: "queued",
     });
-    expect(mergeRequests).toHaveBeenCalledWith({
-      childRequestId: "duplicate-123",
-      parentRequestId: "surviving-456",
-    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "helpdesk.merge",
+        idempotencyKey: "merge-command-123-456",
+        payload: {
+          childRequestId: "duplicate-123",
+          parentRequestId: "surviving-456",
+        },
+      }),
+    );
   });
 });
 
-function mspClientWith({
-  mergeRequests,
-}: {
-  mergeRequests: ReturnType<typeof vi.fn>;
-}) {
-  return {
-    getRequest: vi.fn(),
-    getTechnician: vi.fn(),
-    listCustomers: vi.fn(),
-    listRequests: vi.fn(),
-    listSites: vi.fn(),
-    listTechnicians: vi.fn(),
-    mergeRequests,
-    refreshAccessToken: vi.fn(),
-    updateRequestSchedule: vi.fn(),
-  };
+function requestWith(body: unknown) {
+  return new Request(
+    "https://command.egit.com.au/api/internal/msp-central/merge-requests",
+    {
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
 }

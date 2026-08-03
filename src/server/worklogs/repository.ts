@@ -65,6 +65,21 @@ export function createPostgresWorklogDispositionRepository({
       return operation;
     },
 
+    async find(idempotencyKey) {
+      const rows = await sql<OperationRow[]>`
+        select
+          idempotency_key as "idempotencyKey",
+          request_id as "requestId",
+          command_payload as "command",
+          state,
+          last_error as "lastError"
+        from public.worklog_disposition_operations
+        where idempotency_key = ${idempotencyKey}
+        limit 1
+      `;
+      return rows[0];
+    },
+
     async markCompleted(idempotencyKey) {
       await updateState(sql, idempotencyKey, "completed", null);
     },

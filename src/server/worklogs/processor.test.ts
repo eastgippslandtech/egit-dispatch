@@ -82,6 +82,9 @@ function createMemoryRepository(): WorklogDispositionRepository {
       operations.set(operation.idempotencyKey, operation);
       return operation;
     },
+    async find(key) {
+      return operations.get(key);
+    },
     async markCompleted(key) {
       update(key, { lastError: null, state: "completed" });
     },

@@ -1,22 +1,26 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import {
   getCommandCentreAccess,
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
-import { createGraphClient } from "@/server/graph/client";
+import { fingerprintPayload } from "@/server/integrations/fingerprint";
+import { integrationRouteErrorStatus } from "@/server/integrations/http";
+import { worklogOperation } from "@/server/integrations/operations";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 import { createMspCentralClient } from "@/server/msp-central/client";
-import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import {
+  validateWorklogDispositionCommand,
+  type WorklogDispositionCommand,
+} from "@/server/worklogs/disposition";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
-import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
-import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
-
   if (access.status === "unauthenticated") {
     return json({ error: "Authentication required." }, 401);
   }
@@ -25,46 +29,120 @@ export async function POST(request: Request) {
   }
 
   try {
-    const command = validateWorklogDispositionCommand(await request.json());
+    const submitted = validateWorklogDispositionCommand(await request.json());
     const config = readDispatchConfig();
+    const legacyRepository = createPostgresWorklogDispositionRepository({
+      databaseUrl: config.databaseUrl,
+    });
+    const legacy = await legacyRepository.find(submitted.idempotencyKey);
+    const command = resolveLegacyCommand(legacy?.command, submitted);
+
+    if (legacy?.state === "completed") {
+      return json(
+        {
+          idempotencyKey: command.idempotencyKey,
+          ok: true,
+          operationId: `legacy:${command.idempotencyKey}`,
+          status: "synced",
+        },
+        200,
+      );
+    }
+
     const mspClient = createMspCentralClient(config);
-    const worklogOwner = await resolveMspCentralWorklogOwner({
+    const owner = await resolveMspCentralWorklogOwner({
       email: access.email,
       mspClient,
     });
-    const runtime = createWorklogDispositionRuntime({
-      graphClient: createGraphClient(config.microsoft),
-      mspClient,
-      outcomeStore: createPostgresWorklogOutcomeStore({
-        databaseUrl: config.databaseUrl,
-      }),
-      worklogOwner,
+    const outcomeStore = createPostgresWorklogOutcomeStore({
+      databaseUrl: config.databaseUrl,
     });
-    const processor = createWorklogDispositionProcessor({
-      applyDisposition: runtime.applyDisposition,
-      repository: createPostgresWorklogDispositionRepository({
-        databaseUrl: config.databaseUrl,
-      }),
-      saveWorklog: runtime.saveWorklog,
+    const storedAssignments = await outcomeStore.listCalendarAssignments({
+      requestId: command.requestId,
     });
-    const result = await processor.process(command);
+    const calendarAssignments = storedAssignments.map((assignment) => ({
+      ...assignment,
+      technicianId:
+        command.currentBooking?.eventId === assignment.eventId &&
+        command.currentBooking.userPrincipalName === assignment.userPrincipalName
+          ? command.currentBooking.technicianId ?? calendarIdentity(assignment)
+          : calendarIdentity(assignment),
+    }));
+    const repository = createPostgresIntegrationRepository({
+      databaseUrl: config.databaseUrl,
+    });
+    const { operation } = await repository.enqueue(
+      worklogOperation({
+        actorEmail: access.email,
+        calendarAssignments,
+        command,
+        ownerId: owner.id,
+        worklogAlreadySaved:
+          legacy?.state === "worklog_saved" ||
+          legacy?.state === "recovery_required",
+      }),
+    );
+    after(() => bestEffortWake(operation.id));
 
     return json(
-      { ok: result.status === "completed", ...result },
-      result.status === "completed" ? 200 : 202,
+      {
+        idempotencyKey: command.idempotencyKey,
+        ok: true,
+        operationId: operation.id,
+        status: operation.state,
+      },
+      202,
     );
   } catch (error) {
-    console.error("MSP Central Work Log route failed", error);
+    console.error("MSP Central Work Log queue failed", error);
     return json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "MSP Central Work Log save failed.",
+            : "MSP Central Work Log could not be queued.",
         ok: false,
       },
-      400,
+      integrationRouteErrorStatus(error),
     );
+  }
+}
+
+function resolveLegacyCommand(
+  legacy: WorklogDispositionCommand | undefined,
+  submitted: WorklogDispositionCommand,
+) {
+  if (!legacy) return submitted;
+  if (
+    fingerprintPayload(jsonCompatible(legacy)) !==
+    fingerprintPayload(jsonCompatible(submitted))
+  ) {
+    throw new Error(
+      "This Work Log idempotency key was already used for different work.",
+    );
+  }
+  return legacy;
+}
+
+function jsonCompatible(value: unknown) {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function calendarIdentity(input: {
+  eventId: string;
+  userPrincipalName: string;
+}) {
+  return `calendar:${fingerprintPayload(input).slice(0, 24)}`;
+}
+
+async function bestEffortWake(operationId: string) {
+  try {
+    await wakeIntegrationProcessor(operationId);
+  } catch (error) {
+    console.warn("Work Log remains durably queued after wake-up failure.", {
+      message: error instanceof Error ? error.message : "Unknown wake-up error.",
+      operationId,
+    });
   }
 }
 

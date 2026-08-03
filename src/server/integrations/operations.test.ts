@@ -225,6 +225,33 @@ describe("integration operation builders", () => {
     });
   });
 
+  it("migrates a legacy saved Work Log without adding the Work Log again", () => {
+    const operation = worklogOperation({
+      actorEmail: "simeon@egit.com.au",
+      command: {
+        description: "Replaced the failed power supply.",
+        disposition: "complete",
+        durationMinutes: 30,
+        endedAt: "2026-08-04T10:30:00+10:00",
+        idempotencyKey: "legacy-worklog:request-42",
+        requestId: "request-42",
+        scheduled: true,
+        startedAt: "2026-08-04T10:00:00+10:00",
+        visibility: "external",
+        workType: "billable",
+      },
+      ownerId: "msp-simeon",
+      worklogAlreadySaved: true,
+    });
+
+    expect(operation.steps.some((step) => step.stepKey === "msp:worklog")).toBe(false);
+    expect(operation.steps.map((step) => step.stepKey)).toEqual([
+      "msp:status:resolved",
+      "command:clear-schedule",
+      "command:refresh",
+    ]);
+  });
+
   it("rounds Book Forward start and end to the next 15-minute boundary", () => {
     const operation = worklogOperation({
       actorEmail: "simeon@egit.com.au",
@@ -285,7 +312,7 @@ describe("integration operation builders", () => {
 
     expect(operation.steps[0]).toMatchObject({
       action: "msp.add_note",
-      payload: { showToRequester, visibility },
+      payload: { notifyTechnician: false, showToRequester, visibility },
       stepKey: "msp:communication",
     });
     expect(operation.steps.at(-1)?.stepKey).toBe("command:refresh");

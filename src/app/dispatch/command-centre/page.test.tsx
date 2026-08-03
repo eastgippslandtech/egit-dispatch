@@ -17,6 +17,7 @@ import CommandCentrePage from "./page";
 import {
   bookingCardPriorityClass,
   CommandCentrePrototype,
+  pendingLiveAppointmentId,
   reconcileDashboardWithPendingWritebacks,
   requestNotesSummary,
   safeRequestContentParts,
@@ -220,6 +221,15 @@ test("shows immediate proof that schedule confirmation was accepted", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
   expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("reuses the same optimistic appointment id when a schedule command is retried", () => {
+  expect(pendingLiveAppointmentId("request-123", "schedule:command-123")).toBe(
+    pendingLiveAppointmentId("request-123", "schedule:command-123"),
+  );
+  expect(pendingLiveAppointmentId("request-123", "schedule:command-123")).not.toBe(
+    pendingLiveAppointmentId("request-123", "schedule:command-456"),
+  );
 });
 
 test("keeps error notices visible longer than success notices", () => {
@@ -778,7 +788,9 @@ test("merges the queue duplicate into a searched surviving parent after confirma
     json: async () => ({
       childRequestId: "100284",
       ok: true,
+      operationId: "operation-merge-1",
       parentRequestId: "100301",
+      status: "queued",
     }),
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -822,26 +834,23 @@ test("merges the queue duplicate into a searched surviving parent after confirma
     }),
   );
 
-  await waitFor(() =>
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/internal/msp-central/merge-requests",
-      expect.objectContaining({
-        body: JSON.stringify({
-          childRequestId: "100284",
-          parentRequestId: "100301",
-        }),
-        method: "POST",
-      }),
-    ),
-  );
-  await waitFor(() =>
-    expect(
-      within(screen.getByTestId("request-queue")).queryByRole("button", {
-        name: "REQ-100284 Packhouse label printer offline",
-      }),
-    ).not.toBeInTheDocument(),
-  );
-  expect(screen.getByText("REQ-100284 merged into REQ-100301.")).toBeInTheDocument();
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("/api/internal/msp-central/merge-requests");
+  expect(init.method).toBe("POST");
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    childRequestId: "100284",
+    idempotencyKey: expect.stringMatching(/^merge:/),
+    parentRequestId: "100301",
+  });
+  expect(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "REQ-100284 Packhouse label printer offline",
+    }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("REQ-100284 merge queued. Syncing with MSP Central."),
+  ).toBeInTheDocument();
 });
 
 test("renders overlapping timeline appointments in separate visible lanes", async () => {
@@ -948,7 +957,11 @@ test("creates a new live Helpdesk request from the queue", async () => {
     dispatchDataSource: "msp-central",
   });
   const fetchMock = vi.fn().mockResolvedValue({
-    json: async () => ({ request: { id: "456", requestNumber: "REQ-456" } }),
+    json: async () => ({
+      operationId: "operation-create-1",
+      pendingRequestId: "pending:create-1",
+      status: "queued",
+    }),
     ok: true,
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -974,7 +987,16 @@ test("creates a new live Helpdesk request from the queue", async () => {
       expect.objectContaining({ method: "POST" }),
     ),
   );
-  expect(await screen.findByText("REQ-456 created in MSP Central.")).toBeInTheDocument();
+  const createCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/internal/msp-central/requests",
+  );
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    idempotencyKey: expect.stringMatching(/^request:/),
+    subject: "Printer offline",
+  });
+  expect(
+    await screen.findByText("Request creation queued. Syncing with MSP Central."),
+  ).toBeInTheDocument();
 });
 
 test("turns safe external links in request content into clickable links", () => {

@@ -117,7 +117,9 @@ type DragPayload =
 
 type LiveScheduleResult = {
   id?: string;
+  operationId?: string;
   queued?: boolean;
+  status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
   webLink?: string;
 };
 
@@ -279,6 +281,7 @@ type PendingSchedule =
       bookingType: BookingType;
       crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "request";
       date: string;
       requestId: string;
@@ -293,6 +296,7 @@ type PendingSchedule =
       bookingType: BookingType;
       crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "appointment";
       date: string;
       oldEnd: string;
@@ -564,7 +568,10 @@ export function CommandCentrePrototype({
     markTicketUpdateSeen(appointment.requestId);
   }
 
-  async function mergeRequestIntoParent(parentRequestId: string) {
+  async function mergeRequestIntoParent(
+    parentRequestId: string,
+    idempotencyKey: string,
+  ) {
     const childRequest = dashboard.requests.find(
       (request) => request.id === mergeRequestId,
     );
@@ -578,28 +585,12 @@ export function CommandCentrePrototype({
 
     await publishMspCentralRequestMerge({
       childRequestId: childRequest.id,
+      idempotencyKey,
       parentRequestId: parentRequest.id,
     });
-
-    setDashboard((current) => ({
-      ...current,
-      appointments: current.appointments.map((appointment) =>
-        appointment.requestId === childRequest.id
-          ? { ...appointment, requestId: parentRequest.id }
-          : appointment,
-      ),
-      requests: current.requests.filter(
-        (request) => request.id !== childRequest.id,
-      ),
-      selectedRequestId:
-        current.selectedRequestId === childRequest.id
-          ? parentRequest.id
-          : current.selectedRequestId,
-    }));
-    setSelection({ kind: "request", requestId: parentRequest.id });
     setMergeRequestId(undefined);
     setToast(
-      `${childRequest.requestNumber} merged into ${parentRequest.requestNumber}.`,
+      `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
     );
     router.refresh();
   }
@@ -765,9 +756,9 @@ export function CommandCentrePrototype({
           visibility,
           workType,
         });
-        if (result.status === "recovery_required") {
+        if (result.status === "review_required") {
           setToast(
-            `Work Log saved, but the selected outcome still needs recovery: ${result.error ?? "retry the save"}`,
+            `Work Log needs review before it can sync: ${result.error ?? "open Integrations to review it"}`,
           );
           return;
         }
@@ -909,8 +900,8 @@ export function CommandCentrePrototype({
     setToast(
       liveWorklog
         ? disposition === "complete"
-          ? "Work Log saved and ticket resolved in MSP Central."
-          : "Work Log and outcome saved in MSP Central."
+          ? "Work Log queued. Ticket completion is syncing."
+          : "Work Log and outcome queued for sync."
         : disposition === "complete"
           ? "Work Log saved and ticket resolved locally for test sync."
           : disposition
@@ -1042,6 +1033,7 @@ export function CommandCentrePrototype({
         bookingType,
         crewTechnicianIds: [],
         durationMinutes,
+        idempotencyKey: createClientCommandId("schedule"),
         kind: "request",
         date,
         requestId: request.id,
@@ -1112,6 +1104,7 @@ export function CommandCentrePrototype({
             .map((candidate) => candidate.technicianId)
         : [],
       durationMinutes,
+      idempotencyKey: createClientCommandId("schedule"),
       kind: "appointment",
       date,
       oldEnd: appointment.end,
@@ -1445,8 +1438,11 @@ export function CommandCentrePrototype({
 
       const liveSchedule = canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
+      const idempotencyKey =
+        pendingSchedule.idempotencyKey ??
+        `schedule:${request.id}:${pendingSchedule.date}:${pendingSchedule.start}:${pendingSchedule.end}:${pendingSchedule.technicianId}`;
       const appointmentId = liveSchedule
-        ? `pending-live-${request.id}-${Date.now()}`
+        ? pendingLiveAppointmentId(request.id, idempotencyKey)
         : `mock-${request.id}-${Date.now()}`;
       const bookingType = pendingSchedule.bookingType;
       const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
@@ -1473,6 +1469,7 @@ export function CommandCentrePrototype({
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
+            idempotencyKey,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
             requestId: request.id,
@@ -1673,6 +1670,8 @@ export function CommandCentrePrototype({
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
+            idempotencyKey:
+              pendingSchedule.idempotencyKey ?? createClientCommandId("schedule"),
             eventId: leadAppointment?.outlookEventId,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
@@ -1889,6 +1888,7 @@ export function CommandCentrePrototype({
         customer: selectedRequest.customer,
         date: leadAppointment.date ?? selectedDateKey,
         end: leadAppointment.end,
+        idempotencyKey: createClientCommandId("schedule"),
         eventId: leadAppointment.outlookEventId,
         location: selectedRequest.siteAddress ?? selectedRequest.site,
         previousAssignments: teamAppointments.flatMap((appointment) =>
@@ -2430,17 +2430,17 @@ export function CommandCentrePrototype({
             }}
             onSaved={() => {
               router.refresh();
-              setToast("Communication saved in MSP Central.");
+              setToast("Communication queued. Syncing with MSP Central.");
             }}
           />
         ) : null}
         {createRequestOpen ? (
           <CreateRequestModal
             onCancel={() => setCreateRequestOpen(false)}
-            onCreated={(requestNumber) => {
+            onCreated={() => {
               setCreateRequestOpen(false);
               setQueueView("unscheduled");
-              setToast(`${requestNumber} created in MSP Central.`);
+              setToast("Request creation queued. Syncing with MSP Central.");
               router.refresh();
             }}
           />
@@ -2505,6 +2505,7 @@ async function publishLiveSchedule(event: {
   date: string;
   end: string;
   eventId?: string;
+  idempotencyKey: string;
   location: string;
   priority?: DispatchRequest["priority"];
   previousAssignments?: Array<{
@@ -2532,7 +2533,12 @@ async function publishLiveSchedule(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; event?: LiveScheduleResult; queued?: boolean }
+    | {
+        error?: string;
+        event?: LiveScheduleResult;
+        operationId?: string;
+        status?: LiveScheduleResult["status"];
+      }
     | null;
 
   if (!response.ok) {
@@ -2541,12 +2547,15 @@ async function publishLiveSchedule(event: {
 
   return {
     ...body?.event,
-    queued: body?.queued,
+    operationId: body?.operationId,
+    queued: body?.status === "queued" || body?.status === "syncing",
+    status: body?.status,
   };
 }
 
 async function publishMspCentralRequestMerge(event: {
   childRequestId: string;
+  idempotencyKey: string;
   parentRequestId: string;
 }) {
   const response = await fetch("/api/internal/msp-central/merge-requests", {
@@ -2576,7 +2585,10 @@ async function publishMspCentralWorklog(
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; status?: "completed" | "recovery_required" }
+    | {
+        error?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
     | null;
 
   if (!response.ok) {
@@ -2584,7 +2596,7 @@ async function publishMspCentralWorklog(
   }
   return {
     error: body?.error,
-    status: body?.status ?? ("completed" as const),
+    status: body?.status ?? ("queued" as const),
   };
 }
 
@@ -2605,7 +2617,9 @@ async function loadMspCentralRequestContext(requestId: string) {
 }
 
 async function publishMspCentralCommunication(input: {
+  idempotencyKey: string;
   message: string;
+  occurredAt: string;
   requestId: string;
   visibility: "customer" | "internal";
 }) {
@@ -2613,7 +2627,9 @@ async function publishMspCentralCommunication(input: {
     `/api/internal/msp-central/requests/${encodeURIComponent(input.requestId)}/communications`,
     {
       body: JSON.stringify({
+        idempotencyKey: input.idempotencyKey,
         message: input.message,
+        occurredAt: input.occurredAt,
         visibility: input.visibility,
       }),
       headers: { "Content-Type": "application/json" },
@@ -2622,10 +2638,9 @@ async function publishMspCentralCommunication(input: {
   );
   const body = (await response.json().catch(() => null)) as
     | {
-        context?: MspCentralRequestContext | null;
         error?: string;
-        refreshWarning?: string;
-        stale?: boolean;
+        operationId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
       }
     | null;
   if (!response.ok || !body) {
@@ -2637,6 +2652,7 @@ async function publishMspCentralCommunication(input: {
 async function publishMspCentralRequest(input: {
   customer: string;
   description: string;
+  idempotencyKey: string;
   priority: DispatchRequest["priority"];
   requesterEmail: string;
   site: string;
@@ -2648,12 +2664,30 @@ async function publishMspCentralRequest(input: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; request?: { id: string; requestNumber: string } }
+    | {
+        error?: string;
+        operationId?: string;
+        pendingRequestId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
     | null;
-  if (!response.ok || !body?.request) {
+  if (!response.ok || !body?.operationId) {
     throw new Error(body?.error ?? "Request could not be created.");
   }
-  return body.request;
+  return body;
+}
+
+function createClientCommandId(prefix: string) {
+  const id = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}:${id}`;
+}
+
+export function pendingLiveAppointmentId(
+  requestId: string,
+  idempotencyKey: string,
+) {
+  return `pending-live-${requestId}-${idempotencyKey}`;
 }
 
 function testSyncErrorMessage(error: unknown) {
@@ -2719,7 +2753,7 @@ function MergeRequestModal({
 }: {
   childRequest?: DispatchRequest;
   onCancel: () => void;
-  onConfirm: (parentRequestId: string) => Promise<void>;
+  onConfirm: (parentRequestId: string, idempotencyKey: string) => Promise<void>;
   requests: DispatchRequest[];
 }) {
   const [step, setStep] = useState<"search" | "confirm">("search");
@@ -2727,6 +2761,7 @@ function MergeRequestModal({
   const [parentRequestId, setParentRequestId] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [idempotencyKey] = useState(() => createClientCommandId("merge"));
 
   if (!childRequest) {
     return null;
@@ -2764,7 +2799,7 @@ function MergeRequestModal({
     setError(undefined);
 
     try {
-      await onConfirm(parentRequest.id);
+      await onConfirm(parentRequest.id, idempotencyKey);
     } catch (mergeError) {
       setError(
         mergeError instanceof Error
@@ -3295,7 +3330,7 @@ function CreateRequestModal({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: (requestNumber: string) => void;
+  onCreated: () => void;
 }) {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -3305,6 +3340,7 @@ function CreateRequestModal({
   const [priority, setPriority] = useState<DispatchRequest["priority"]>("Medium");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [idempotencyKey] = useState(() => createClientCommandId("request"));
 
   async function submit() {
     if (!subject.trim() || saving) return;
@@ -3314,12 +3350,14 @@ function CreateRequestModal({
       const created = await publishMspCentralRequest({
         customer: customer.trim(),
         description: description.trim(),
+        idempotencyKey,
         priority,
         requesterEmail: requesterEmail.trim(),
         site: site.trim(),
         subject: subject.trim(),
       });
-      onCreated(created.requestNumber);
+      if (!created.operationId) throw new Error("Request was not queued.");
+      onCreated();
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -3461,6 +3499,12 @@ function TicketWorkspaceModal({
   const [message, setMessage] = useState("");
   const [visibility, setVisibility] = useState<"customer" | "internal">("customer");
   const [sending, setSending] = useState(false);
+  const pendingCommunication = useRef<{
+    idempotencyKey: string;
+    message: string;
+    occurredAt: string;
+    visibility: "customer" | "internal";
+  } | undefined>(undefined);
 
   useEffect(() => {
     if (!liveWriteback || !request?.id) return;
@@ -3506,15 +3550,25 @@ function TicketWorkspaceModal({
     setError(undefined);
     setRefreshWarning(undefined);
     try {
-      const result = await publishMspCentralCommunication({
-        message: nextMessage,
+      const current = pendingCommunication.current;
+      const command =
+        current?.message === nextMessage && current.visibility === visibility
+          ? current
+          : {
+              idempotencyKey: createClientCommandId("comms"),
+              message: nextMessage,
+              occurredAt: new Date().toISOString(),
+              visibility,
+            };
+      pendingCommunication.current = command;
+      await publishMspCentralCommunication({
+        idempotencyKey: command.idempotencyKey,
+        message: command.message,
+        occurredAt: command.occurredAt,
         requestId: request.id,
-        visibility,
+        visibility: command.visibility,
       });
-      if (result.context) {
-        setContext(result.context);
-      }
-      setRefreshWarning(result.refreshWarning);
+      pendingCommunication.current = undefined;
       setMessage("");
       onSaved();
     } catch (sendError) {

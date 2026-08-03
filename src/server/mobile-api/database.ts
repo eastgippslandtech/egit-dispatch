@@ -146,7 +146,7 @@ export function createPostgresMobileDatabase({
 
     async findJobForStaff({ jobId, staffId }) {
       const rows = await selectJobRows(sql, {
-        extraWhere: sql`and dl.id = ${jobId}::uuid`,
+        extraWhere: sql`and assignments.assignment_id = ${jobId}::uuid`,
         staffId,
       });
 

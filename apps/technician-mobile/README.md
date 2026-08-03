@@ -67,11 +67,20 @@ Preview distribution requires Expo project ownership plus Apple and Google signi
 
 Current handoff status: both preview commands are blocked on this Mac until `eas login` is completed or `EXPO_TOKEN` is set.
 
+## Job detail data
+
+Database-backed request detail is enriched by the Command Centre server with
+the live MSP Central request description, customer replies, internal notes, and
+Work Logs. The native app receives only the normalized job activity; MSP
+Central credentials never leave the server. Successful detail reads cache the
+complete enriched job in SQLite so the same activity remains available when
+the phone is offline.
+
 ## Runtime security notes
 
 - Zoho mobile auth is authorization-code + PKCE; no Zoho client secret is stored in the native app.
 - Command Centre sessions are stored through SecureStore.
 - SQLite stores cached jobs, timers, staged evidence metadata, drafts, and mutation queue state, not bearer or refresh tokens.
-- The first approved Zoho session asks for notification permission and registers the phone immediately when approved. Denied permissions remain retryable from Profile.
+- The first approved Zoho session shows the in-app setup prompt. Notification permission is requested only after the technician taps Enable notifications, and denied permissions remain retryable from Profile.
 - Push tokens are never echoed in API responses.
 - ETA uses foreground location only after the user taps Calculate ETA.

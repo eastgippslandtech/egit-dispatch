@@ -57,7 +57,11 @@ import {
   type MobileOutlookCalendar,
 } from "./outlook";
 import { createMspCentralClient } from "@/server/msp-central/client";
-import type { MspCentralClient } from "@/server/msp-central/types";
+import type {
+  MspCentralClient,
+  MspCentralRequestContext,
+  MspCentralRequestUpdate,
+} from "@/server/msp-central/types";
 import { createGraphClient } from "@/server/graph/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
@@ -192,11 +196,13 @@ export async function getMobileJob({
   auth,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
   outlookCalendar = getConfiguredMobileOutlookCalendar(),
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
   outlookCalendar?: MobileOutlookCalendar | null;
 }): Promise<{ job: MobileJob }> {
   if (database) {
@@ -221,7 +227,24 @@ export async function getMobileJob({
         status: 404,
       });
     }
-    return { job: mapDatabaseJob(job) };
+    const databaseJob = mapDatabaseJob(job);
+    if (!mspClient) {
+      return { job: databaseJob };
+    }
+
+    try {
+      const context = await mspClient.getRequestContext(job.sdpRequestId);
+      return { job: enrichMobileJobWithRequestContext(databaseJob, context) };
+    } catch (error) {
+      console.error("Mobile Helpdesk request context read failed", safeError(error));
+      return {
+        job: {
+          ...databaseJob,
+          activityWarning:
+            "Latest Helpdesk activity could not be loaded. Showing the saved Command Centre copy.",
+        },
+      };
+    }
   }
 
   if (outlookCalendar && jobId.startsWith("outlook-")) {
@@ -1132,6 +1155,7 @@ function mapOutlookAppointment(
   const startAt = melbourneIsoTime(appointment.date, appointment.start);
   const endAt = melbourneIsoTime(appointment.date, appointment.end);
   return {
+    activityWarning: null,
     attachments: [],
     bookingType: appointment.bookingType ?? "In house",
     contactEmail: null,
@@ -1279,11 +1303,14 @@ function mapTestSyncedAppointment(
     previousNotes.push({
       id: `${appointment.id}-request-note`,
       localId: null,
+      kind: "customer_reply",
       visibility: "external",
       body: request.notes,
       authorName: "Command Centre",
       createdAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
       updatedAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
+      durationMinutes: null,
+      isBillable: null,
       syncState: "synced",
       canEdit: false,
       canDelete: false,
@@ -1294,11 +1321,14 @@ function mapTestSyncedAppointment(
     previousNotes.push({
       id: `${appointment.id}-appointment-note`,
       localId: null,
+      kind: "internal_note",
       visibility: "internal",
       body: appointment.bodyPreview,
       authorName: "Command Centre",
       createdAt: mockIsoTime(appointment.date, appointment.start),
       updatedAt: mockIsoTime(appointment.date, appointment.start),
+      durationMinutes: null,
+      isBillable: null,
       syncState: "synced",
       canEdit: false,
       canDelete: false,
@@ -1307,6 +1337,7 @@ function mapTestSyncedAppointment(
 
   return {
     id: appointment.id,
+    activityWarning: null,
     source: "mock",
     requestNumber: request?.requestNumber ?? null,
     outlookEventId: appointment.outlookEventId ?? null,
@@ -1431,6 +1462,7 @@ function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
 
   return {
     id: row.id,
+    activityWarning: null,
     source: "msp_central",
     requestNumber: row.sdpRequestNumber,
     outlookEventId: row.outlookEventId,
@@ -1509,14 +1541,100 @@ function mapDatabaseNote(note: DatabaseJobNoteRow): MobileJobNote {
   return {
     id: note.id,
     localId: null,
+    kind:
+      visibilityFromPayload(payload) === "external"
+        ? "customer_reply"
+        : "internal_note",
     visibility: visibilityFromPayload(payload),
     body,
     authorName: pickNestedString(payload, ["authorName"]) ?? "Command Centre",
     createdAt: toIsoString(note.createdAt),
     updatedAt: toIsoString(note.createdAt),
+    durationMinutes: null,
+    isBillable: null,
     syncState: note.status === "failed" ? "failed" : "synced",
     canEdit: false,
     canDelete: false,
+  };
+}
+
+function enrichMobileJobWithRequestContext(
+  job: MobileJob,
+  context: MspCentralRequestContext,
+): MobileJob {
+  const fallbackCreatedAt = context.request.updatedAt ?? job.updatedAt;
+  const activity = [
+    ...context.customerResponses.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "customer_reply",
+        visibility: "external",
+      }),
+    ),
+    ...context.internalNotes.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "internal_note",
+        visibility: "internal",
+      }),
+    ),
+    ...context.worklogs.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "worklog",
+        visibility: entry.isBillable ? "external" : "internal",
+      }),
+    ),
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const activityWarnings = [context.notesWarning, context.worklogsWarning].filter(
+    (warning): warning is string => Boolean(warning),
+  );
+  const request = context.request;
+
+  return {
+    ...job,
+    activityWarning: activityWarnings.length ? activityWarnings.join(" ") : null,
+    bookingType: request.bookingType ?? job.bookingType,
+    contactName: request.requester || job.contactName,
+    customerName: request.customer || job.customerName,
+    description: request.notes || job.description,
+    previousNotes: activity,
+    priority: request.priority ?? job.priority,
+    siteAddress: request.siteAddress ?? job.siteAddress,
+    siteName: request.siteName ?? request.site ?? job.siteName,
+    siteTown: request.siteTown ?? job.siteTown,
+    slaDueAt: request.dueAt || job.slaDueAt,
+    status: mobileStatusForRequest(request),
+    title: cleanRequestTitle(request.subject, request.requestNumber) || job.title,
+    updatedAt: request.updatedAt ?? job.updatedAt,
+    version: `${job.version}-helpdesk-${request.updatedAt ?? job.updatedAt}`,
+  };
+}
+
+function mapHelpdeskActivity(
+  entry: MspCentralRequestUpdate,
+  options: {
+    fallbackCreatedAt: string;
+    kind: MobileJobNote["kind"];
+    visibility: MobileJobNote["visibility"];
+  },
+): MobileJobNote {
+  const createdAt = entry.createdAt ?? options.fallbackCreatedAt;
+
+  return {
+    authorName: entry.author,
+    body: entry.body,
+    canDelete: false,
+    canEdit: false,
+    createdAt,
+    durationMinutes: entry.durationMinutes ?? null,
+    id: entry.id,
+    isBillable: entry.isBillable ?? null,
+    kind: options.kind,
+    localId: null,
+    syncState: "synced",
+    updatedAt: createdAt,
+    visibility: options.visibility,
   };
 }
 

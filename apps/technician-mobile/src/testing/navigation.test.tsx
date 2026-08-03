@@ -534,7 +534,7 @@ describe("technician navigation", () => {
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
 
-  it("starts notification registration on first load after live sign-in", async () => {
+  it("waits for the first-login action before requesting notifications", async () => {
     const liveSession = {
       accessToken: "access-riley",
       expiresAt: "2030-01-01T00:00:00.000Z",
@@ -542,7 +542,7 @@ describe("technician navigation", () => {
       staffEmail: riley.email,
     };
 
-    await renderTechnicianRouterAsync({
+    const rendered = await renderTechnicianRouterAsync({
       status: "approved",
       mobileSession: liveSession,
       staff: riley,
@@ -550,11 +550,17 @@ describe("technician navigation", () => {
 
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).not.toHaveBeenCalled();
+
+    await pressButtonAsync(rendered, "Enable notifications");
+
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).toHaveBeenCalledTimes(1);
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).toHaveBeenCalledWith({
-      mode: "automatic",
+      mode: "manual",
       mobileSession: liveSession,
     });
   });

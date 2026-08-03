@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { MobileJob } from "../../contracts/mobile";
@@ -9,6 +16,7 @@ import { useTechnicianRepository } from "../../providers/app-providers";
 import { colours } from "../../theme/tokens";
 import { useActiveTimer } from "../timer/active-timer-provider";
 import { WorklogForm } from "../worklogs/worklog-form";
+import { JobActivity } from "./job-activity";
 import { JobCard } from "./job-card";
 import { createNativeActions } from "./native-actions";
 
@@ -34,6 +42,8 @@ export function JobDetail({ jobId }: JobDetailProps) {
   );
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<MobileJob | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const paymentOpeningRef = useRef(false);
 
   useEffect(() => {
@@ -44,6 +54,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
         if (!cancelled) {
           setJob(nextJob);
           setError(null);
+          setRefreshMessage(nextJob.activityWarning);
         }
       })
       .catch((jobError: unknown) => {
@@ -58,6 +69,22 @@ export function JobDetail({ jobId }: JobDetailProps) {
       cancelled = true;
     };
   }, [jobId, repository]);
+
+  const refreshJob = async () => {
+    setRefreshing(true);
+    try {
+      const nextJob = await repository.getJob(jobId);
+      setJob(nextJob);
+      setError(null);
+      setRefreshMessage(nextJob.activityWarning);
+    } catch {
+      setRefreshMessage(
+        "Could not refresh job activity. Showing the saved copy.",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (error) {
     return (
@@ -104,13 +131,27 @@ export function JobDetail({ jobId }: JobDetailProps) {
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            onRefresh={refreshJob}
+            refreshing={refreshing}
+            tintColor={colours.primary}
+          />
+        }
+      >
         <Text style={styles.eyebrow}>{job.requestNumber ?? "Calendar event"}</Text>
         <Text accessibilityRole="header" style={styles.title}>
           {job.title}
         </Text>
         {readOnly ? <Text style={styles.readOnly}>Outlook Read Only</Text> : null}
         {timerMessage ? <Text style={styles.muted}>{timerMessage}</Text> : null}
+        {refreshMessage ? (
+          <Text accessibilityRole="alert" style={styles.refreshMessage}>
+            {refreshMessage}
+          </Text>
+        ) : null}
         <JobCard job={job} />
 
         <Section title="Customer and site">
@@ -122,11 +163,16 @@ export function JobDetail({ jobId }: JobDetailProps) {
           <Detail label="Email" value={job.contactEmail} />
         </Section>
 
+        <Section title="Request description">
+          <Text style={styles.description}>
+            {job.description || "No request description has been recorded yet."}
+          </Text>
+        </Section>
+
         <Section title="Service context">
           <Detail label="Status" value={job.status} />
           <Detail label="Booking" value={job.bookingType} />
           <Detail label="SLA" value={job.slaDueAt} />
-          <Detail label="Description" value={job.description} />
           <Detail label="Sync" value={job.syncState} />
         </Section>
 
@@ -189,19 +235,8 @@ export function JobDetail({ jobId }: JobDetailProps) {
           </Section>
         ) : null}
 
-        <Section title="Latest ticket notes">
-          {job.previousNotes.length ? (
-            job.previousNotes.map((note) => (
-              <View key={note.id} style={styles.note}>
-                <Text style={styles.noteMeta}>
-                  {note.visibility} · {note.authorName}
-                </Text>
-                <Text style={styles.noteBody}>{note.body}</Text>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.muted}>No ticket notes yet.</Text>
-          )}
+        <Section title="Job activity">
+          <JobActivity entries={job.previousNotes} />
         </Section>
 
         {job.permissions.readOnlyReason ? (
@@ -264,6 +299,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
+  description: {
+    color: colours.text,
+    fontSize: 15,
+    lineHeight: 23,
+  },
   detailLabel: {
     color: colours.text,
     fontWeight: "800",
@@ -283,26 +323,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  note: {
-    backgroundColor: colours.surfaceRaised,
-    borderRadius: 14,
-    gap: 4,
-    padding: 12,
-  },
-  noteBody: {
-    color: colours.text,
-    fontSize: 14,
-  },
-  noteMeta: {
-    color: colours.primary,
-    fontSize: 12,
-    fontWeight: "800",
-    textTransform: "uppercase",
-  },
   readOnly: {
     color: colours.outlook,
     fontSize: 14,
     fontWeight: "900",
+  },
+  refreshMessage: {
+    backgroundColor: colours.surfaceRaised,
+    borderColor: colours.primary,
+    borderRadius: 12,
+    borderWidth: 1,
+    color: colours.text,
+    fontSize: 14,
+    lineHeight: 20,
+    padding: 12,
   },
   screen: {
     backgroundColor: colours.canvas,

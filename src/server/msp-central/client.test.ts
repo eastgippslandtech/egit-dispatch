@@ -241,6 +241,138 @@ describe("MSP Central live client", () => {
     ]);
   });
 
+  it("loads every page of request notes and worklogs", async () => {
+    const requestedStarts: Record<"notes" | "worklogs", number[]> = {
+      notes: [],
+      worklogs: [],
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        };
+      }
+      if (url.endsWith("/requests/123")) {
+        return {
+          ok: true,
+          json: async () => ({
+            request: {
+              customer: { name: "Client Company" },
+              description: "<p>Full request.</p>",
+              id: "123",
+              request_number: "REQ-123",
+              subject: "Printer offline",
+            },
+          }),
+        };
+      }
+
+      const requestUrl = new URL(url);
+      const inputData = JSON.parse(
+        requestUrl.searchParams.get("input_data") ?? "{}",
+      ) as { list_info?: { start_index?: number } };
+      const startIndex = inputData.list_info?.start_index ?? 1;
+
+      if (requestUrl.pathname.endsWith("/notes")) {
+        requestedStarts.notes.push(startIndex);
+        return {
+          ok: true,
+          json: async () =>
+            startIndex === 1
+              ? {
+                  list_info: { has_more_rows: true },
+                  request_notes: [
+                    {
+                      created_by: { is_technician: false, name: "Customer One" },
+                      created_time: { value: "1783501200000" },
+                      description: "<p>First customer reply.</p>",
+                      id: "note-1",
+                    },
+                    {
+                      created_by: { is_technician: true, name: "Tech One" },
+                      created_time: { value: "1783504800000" },
+                      description: "<p>First internal note.</p>",
+                      id: "note-2",
+                    },
+                  ],
+                }
+              : {
+                  list_info: { has_more_rows: false },
+                  request_notes: [
+                    {
+                      created_by: { is_technician: false, name: "Customer Two" },
+                      created_time: { value: "1783508400000" },
+                      description: "<p>Second customer reply.</p>",
+                      id: "note-3",
+                    },
+                  ],
+                },
+        };
+      }
+
+      if (requestUrl.pathname.endsWith("/worklogs")) {
+        requestedStarts.worklogs.push(startIndex);
+        return {
+          ok: true,
+          json: async () =>
+            startIndex === 1
+              ? {
+                  list_info: { has_more_rows: true },
+                  worklogs: [
+                    {
+                      description: "First Work Log.",
+                      id: "worklog-1",
+                      owner: { name: "Tech One" },
+                      recorded_time: { value: "1783512000000" },
+                    },
+                  ],
+                }
+              : {
+                  list_info: { has_more_rows: false },
+                  worklogs: [
+                    {
+                      description: "Second Work Log.",
+                      id: "worklog-2",
+                      owner: { name: "Tech Two" },
+                      recorded_time: { value: "1783515600000" },
+                    },
+                  ],
+                },
+        };
+      }
+
+      throw new Error(`Unexpected MSP request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const context = await client.getRequestContext("123");
+
+    expect(requestedStarts.notes).toEqual([1, 3]);
+    expect(requestedStarts.worklogs).toEqual([1, 2]);
+    expect(context.customerResponses.map(({ id }) => id)).toEqual([
+      "note-1",
+      "note-3",
+    ]);
+    expect(context.internalNotes.map(({ id }) => id)).toEqual(["note-2"]);
+    expect(context.worklogs.map(({ id }) => id)).toEqual([
+      "worklog-1",
+      "worklog-2",
+    ]);
+  });
+
   it("does not discard an unexpired token when an endpoint returns unauthorized", async () => {
     const fetchMock = vi
       .fn()

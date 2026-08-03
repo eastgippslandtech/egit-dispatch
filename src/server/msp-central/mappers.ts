@@ -374,7 +374,12 @@ export function mapMspCentralRequestNotes(
       id: readString(note.id) ?? `request-note-${index}`,
     };
 
-    if (note.created_by?.is_technician === false) {
+    const shownToRequester =
+      note.show_to_requester === true ||
+      (note.show_to_requester == null &&
+        note.created_by?.is_technician === false);
+
+    if (shownToRequester) {
       customerResponses.push(update);
     } else {
       internalNotes.push(update);

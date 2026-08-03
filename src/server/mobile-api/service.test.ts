@@ -543,6 +543,120 @@ describe("mobile API service", () => {
     });
   });
 
+  it("enriches a database job with the complete live Helpdesk activity", async () => {
+    const getRequestContext = vi.fn(async () => ({
+      customerResponses: [
+        {
+          author: "Alex Morgan",
+          body: "VPN still disconnects after ten minutes.",
+          createdAt: "2026-07-14T02:00:00.000Z",
+          id: "customer-reply-1",
+        },
+      ],
+      internalNotes: [
+        {
+          author: "Simeon",
+          body: "Replacement firewall has been prepared.",
+          createdAt: "2026-07-14T03:00:00.000Z",
+          id: "internal-note-1",
+        },
+      ],
+      request: {
+        ...getDispatchDesignMockData().requests[0],
+        contact: "+61 400 111 222",
+        customer: "Current Customer",
+        dueAt: "2026-07-14T06:00:00.000Z",
+        id: "100900",
+        notes: "Current detailed job description.",
+        priority: "Critical" as const,
+        requester: "Alex Morgan",
+        requestNumber: "REQ-100900",
+        site: "Current Site",
+        siteAddress: "22 Main Street, Bairnsdale VIC 3875",
+        siteName: "Current Site",
+        status: "Scheduled" as const,
+        subject: "Current VPN outage subject",
+        updatedAt: "2026-07-14T04:30:00.000Z",
+      },
+      worklogs: [
+        {
+          author: "Riley",
+          body: "Initial remote diagnosis.",
+          createdAt: "2026-07-14T01:00:00.000Z",
+          durationMinutes: 20,
+          id: "worklog-old",
+          isBillable: false,
+        },
+        {
+          author: "Riley",
+          body: "Reconfigured the VPN policy.",
+          createdAt: "2026-07-14T04:00:00.000Z",
+          durationMinutes: 45,
+          id: "worklog-latest",
+          isBillable: true,
+        },
+      ],
+    }));
+
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      jobId: dbJobId,
+      mspClient: { getRequestContext } as never,
+    });
+
+    expect(getRequestContext).toHaveBeenCalledWith("100900");
+    expect(response.job).toMatchObject({
+      activityWarning: null,
+      customerName: "Current Customer",
+      description: "Current detailed job description.",
+      id: dbJobId,
+      priority: "Critical",
+      requestNumber: "REQ-100900",
+      startAt: "2026-07-14T10:00:00.000Z",
+      technician: { id: "staff-db-riley" },
+      title: "Current VPN outage subject",
+    });
+    expect(response.job.previousNotes.map(({ kind }) => kind)).toEqual([
+      "worklog",
+      "internal_note",
+      "customer_reply",
+      "worklog",
+    ]);
+    expect(response.job.previousNotes[0]).toMatchObject({
+      body: "Reconfigured the VPN policy.",
+      durationMinutes: 45,
+      isBillable: true,
+      visibility: "external",
+    });
+    expect(response.job.previousNotes[3]).toMatchObject({
+      durationMinutes: 20,
+      isBillable: false,
+      visibility: "internal",
+    });
+  });
+
+  it("keeps the database snapshot when live Helpdesk context is unavailable", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      jobId: dbJobId,
+      mspClient: {
+        getRequestContext: vi.fn(async () => {
+          throw new Error("MSP Central unavailable");
+        }),
+      } as never,
+    });
+
+    expect(response.job).toMatchObject({
+      activityWarning:
+        "Latest Helpdesk activity could not be loaded. Showing the saved Command Centre copy.",
+      description:
+        "Real Command Centre database request description for VPN outage.",
+      id: dbJobId,
+    });
+  });
+
   it("returns an Outlook-only booking detail as read-only", async () => {
     const response = await getMobileJob({
       auth: rileyMobileAuth,

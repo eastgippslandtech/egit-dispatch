@@ -114,10 +114,12 @@ export function createOfflineTechnicianRepository({
     },
 
     async getJob(jobId: string): Promise<MobileJob> {
+      let refreshFailed = false;
       if (remote) {
         try {
           return await cacheJob(await remote.getJob(jobId));
         } catch {
+          refreshFailed = true;
           // Fall through to the local cache when the network is down.
         }
       }
@@ -126,7 +128,13 @@ export function createOfflineTechnicianRepository({
       if (!cachedJob) {
         throw new Error("This job is not available offline yet.");
       }
-      return cachedJob;
+      return refreshFailed
+        ? {
+            ...cachedJob,
+            activityWarning:
+              "Could not refresh job activity. Showing the saved copy.",
+          }
+        : cachedJob;
     },
 
     async startTimer(command: StartTimerCommand): Promise<ActiveTimer> {

@@ -176,7 +176,11 @@ export function completeJobLocally({
             canEdit: true,
             createdAt: new Date(0).toISOString(),
             id: `local-completion-${job.id}`,
+            isBillable: null,
+            kind:
+              visibility === "external" ? "customer_reply" : "internal_note",
             localId: `local-completion-${job.id}`,
+            durationMinutes: null,
             syncState: "pending",
             updatedAt: new Date(0).toISOString(),
             visibility,

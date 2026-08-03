@@ -91,6 +91,7 @@ const matt = MOBILE_STAFF_FIXTURES.find(
 export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
   {
     id: "firewall-riley",
+    activityWarning: null,
     source: "mock",
     requestNumber: "REQ-100241",
     outlookEventId: "outlook-firewall-riley",
@@ -131,11 +132,14 @@ export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
       {
         id: "note-firewall-riley-1",
         localId: null,
+        kind: "internal_note",
         visibility: "internal",
         body: "Configuration backup has been verified.",
         authorName: "Service Desk",
         createdAt: "2026-07-08T05:15:00.000Z",
         updatedAt: "2026-07-08T05:15:00.000Z",
+        durationMinutes: null,
+        isBillable: null,
         syncState: "synced",
         canEdit: false,
         canDelete: false,
@@ -150,6 +154,7 @@ export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
   },
   {
     id: "outlook-block-riley",
+    activityWarning: null,
     source: "outlook",
     requestNumber: null,
     outlookEventId: "outlook-block-riley",
@@ -186,6 +191,7 @@ export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
   },
   {
     id: "remote-support-riley",
+    activityWarning: null,
     source: "msp_central",
     requestNumber: "REQ-100254",
     outlookEventId: "outlook-remote-support-riley",
@@ -222,6 +228,7 @@ export const MOBILE_JOB_FIXTURES: readonly MobileJob[] = [
   },
   {
     id: "server-expansion-matt",
+    activityWarning: null,
     source: "msp_central",
     requestNumber: "REQ-100250",
     outlookEventId: "outlook-server-expansion-matt",

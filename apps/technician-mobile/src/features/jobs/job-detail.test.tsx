@@ -23,8 +23,9 @@ vi.mock("react-native", () => ({
     openURL: vi.fn(async () => undefined),
   },
   Pressable: "Pressable",
-  ScrollView: ({ children }: PropsWithChildren) =>
-    createElement(Fragment, null, children),
+  RefreshControl: "RefreshControl",
+  ScrollView: ({ children, ...props }: PropsWithChildren<Record<string, unknown>>) =>
+    createElement("ScrollView", props, children),
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
   TextInput: "TextInput",
@@ -150,20 +151,53 @@ describe("job detail", () => {
     expect(button(rendered, "Open in Maps").props.disabled).toBe(false);
   });
 
-  it("shows the real request description and latest ticket notes", async () => {
+  it("shows the complete request description and labelled job activity", async () => {
     const job: MobileJob = {
       ...MOBILE_JOB_FIXTURES[0],
       description:
         "Real Command Centre database request description for VPN outage.",
       previousNotes: [
         {
+          id: "worklog-latest",
+          localId: null,
+          kind: "worklog",
+          visibility: "external",
+          body: "Reconfigured the VPN policy and confirmed connectivity.",
+          authorName: "Riley",
+          createdAt: "2026-07-14T04:00:00.000Z",
+          updatedAt: "2026-07-14T04:00:00.000Z",
+          durationMinutes: 45,
+          isBillable: true,
+          syncState: "synced",
+          canEdit: false,
+          canDelete: false,
+        },
+        {
+          id: "internal-note",
+          localId: null,
+          kind: "internal_note",
+          visibility: "internal",
+          body: "Replacement firewall prepared in the workshop.",
+          authorName: "Simeon",
+          createdAt: "2026-07-14T03:00:00.000Z",
+          updatedAt: "2026-07-14T03:00:00.000Z",
+          durationMinutes: null,
+          isBillable: null,
+          syncState: "synced",
+          canEdit: false,
+          canDelete: false,
+        },
+        {
           id: "db-note-latest",
           localId: null,
+          kind: "customer_reply",
           visibility: "external",
           body: "Latest ticket note from the Command Centre database.",
           authorName: "Command Centre",
           createdAt: "2026-07-14T01:15:00.000Z",
           updatedAt: "2026-07-14T01:15:00.000Z",
+          durationMinutes: null,
+          isBillable: null,
           syncState: "synced",
           canEdit: false,
           canDelete: false,
@@ -178,11 +212,81 @@ describe("job detail", () => {
     const rendered = await renderJobDetail(job.id, repository);
 
     expect(textValues(rendered)).toContain(
-      "Description: Real Command Centre database request description for VPN outage.",
+      "Real Command Centre database request description for VPN outage.",
     );
-    expect(textValues(rendered)).toContain("Latest ticket notes");
-    expect(textValues(rendered)).toContain(
+    const text = textValues(rendered);
+    expect(text).toContain("Request description");
+    expect(text).toContain("Job activity");
+    expect(text).toContain("Customer reply");
+    expect(text).toContain("Internal note");
+    expect(text).toContain("Work Log");
+    expect(text).toContain("Riley · 14 July 2026 at 2:00 pm · 45 min · Billable");
+    expect(text).toContain(
       "Latest ticket note from the Command Centre database.",
+    );
+    expect(text.indexOf("Reconfigured the VPN policy and confirmed connectivity.")).toBeLessThan(
+      text.indexOf("Replacement firewall prepared in the workshop."),
+    );
+    expect(text.indexOf("Replacement firewall prepared in the workshop.")).toBeLessThan(
+      text.indexOf("Latest ticket note from the Command Centre database."),
+    );
+  });
+
+  it("renders a legacy cached note without the new activity metadata", async () => {
+    const job: MobileJob = {
+      ...MOBILE_JOB_FIXTURES[0],
+      previousNotes: [
+        {
+          id: "legacy-note",
+          localId: null,
+          visibility: "external",
+          body: "Legacy cached customer update.",
+          authorName: "Customer",
+          createdAt: "2026-07-14T01:00:00.000Z",
+          updatedAt: "2026-07-14T01:00:00.000Z",
+          syncState: "synced",
+          canEdit: false,
+          canDelete: false,
+        } as unknown as MobileJob["previousNotes"][number],
+      ],
+    };
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+
+    const rendered = await renderJobDetail(job.id, repository);
+
+    expect(textValues(rendered)).toContain("Customer reply");
+    expect(textValues(rendered)).toContain("Legacy cached customer update.");
+  });
+
+  it("keeps saved job activity visible when pull-to-refresh fails", async () => {
+    const job = MOBILE_JOB_FIXTURES[0];
+    const repository = new MockTechnicianRepository({
+      jobs: [job],
+      staffEmail: "riley@egit.com.au",
+    });
+    const getJob = vi
+      .spyOn(repository, "getJob")
+      .mockResolvedValueOnce(job)
+      .mockRejectedValueOnce(new Error("offline"));
+    const rendered = await renderJobDetail(job.id, repository);
+    const scrollView = rendered.root.findAll(
+      (node) => String(node.type) === "ScrollView",
+    )[0];
+    if (!scrollView) {
+      throw new Error("Job detail ScrollView was not rendered.");
+    }
+
+    await act(async () => {
+      await scrollView.props.refreshControl.props.onRefresh();
+    });
+
+    expect(getJob).toHaveBeenCalledTimes(2);
+    expect(textValues(rendered)).toContain(job.title);
+    expect(textValues(rendered)).toContain(
+      "Could not refresh job activity. Showing the saved copy.",
     );
   });
 
@@ -197,11 +301,14 @@ describe("job detail", () => {
         {
           id: "latest-note",
           localId: null,
+          kind: "customer_reply",
           visibility: "external",
           body: "Customer confirmed VPN still drops.",
           authorName: "Command Centre",
           createdAt: "2026-07-14T01:15:00.000Z",
           updatedAt: "2026-07-14T01:15:00.000Z",
+          durationMinutes: null,
+          isBillable: null,
           syncState: "synced",
           canEdit: false,
           canDelete: false,

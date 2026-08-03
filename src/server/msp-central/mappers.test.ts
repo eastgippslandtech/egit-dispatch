@@ -5,6 +5,7 @@ import { getInitialStaffProfiles } from "@/server/staff/profiles";
 import {
   mapMspCentralPriority,
   mapMspCentralRequest,
+  mapMspCentralRequestNotes,
   mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
   mapMspCentralSentiment,
@@ -257,6 +258,26 @@ describe("MSP Central request mappers", () => {
       expect.objectContaining({ id: "worklog-1", isBillable: true }),
       expect.objectContaining({ id: "worklog-2", isBillable: false }),
     ]);
+  });
+
+  it("uses requester visibility to distinguish replies from internal notes", () => {
+    const mapped = mapMspCentralRequestNotes([
+      {
+        created_by: { is_technician: true, name: "Riley" },
+        description: "Technician response sent to the customer.",
+        id: "reply-1",
+        show_to_requester: true,
+      },
+      {
+        created_by: { is_technician: true, name: "Riley" },
+        description: "Private diagnostic note.",
+        id: "note-1",
+        show_to_requester: false,
+      },
+    ]);
+
+    expect(mapped.customerResponses.map(({ id }) => id)).toEqual(["reply-1"]);
+    expect(mapped.internalNotes.map(({ id }) => id)).toEqual(["note-1"]);
   });
 
   it("prefers MSP technician ID and warns on display-name-only matches", () => {

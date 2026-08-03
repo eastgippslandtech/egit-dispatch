@@ -1,6 +1,6 @@
 import * as Notifications from "expo-notifications";
 import { Stack } from "expo-router";
-import { type PropsWithChildren, useEffect, useRef } from "react";
+import { type PropsWithChildren } from "react";
 import { StatusBar, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -30,26 +30,6 @@ Notifications.setNotificationHandler({
 export function RootNavigator() {
   const { session } = useSession();
   const isApproved = session.status === "approved";
-  const registeredSession = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (session.status !== "approved" || !session.mobileSession) {
-      registeredSession.current = null;
-      return;
-    }
-
-    const sessionKey = `${session.staff.email}:${session.mobileSession.accessToken}`;
-    if (registeredSession.current === sessionKey) {
-      return;
-    }
-    registeredSession.current = sessionKey;
-    void registerCurrentDeviceNotifications({
-      mode: "automatic",
-      mobileSession: session.mobileSession,
-    }).catch(() => {
-      // Registration can be retried from Profile without blocking app startup.
-    });
-  }, [session]);
 
   return (
     <View style={styles.shell}>

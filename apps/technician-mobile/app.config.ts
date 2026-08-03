@@ -17,7 +17,7 @@ const config: ExpoConfig = {
       NSCameraUsageDescription:
         "Command Centre uses the camera only when you choose to capture job evidence.",
       NSLocationWhenInUseUsageDescription:
-        "Command Centre uses your location only when you tap Calculate ETA.",
+        "Command Centre uses your location while using the app for ETA and navigation helpers. It does not track you in the background.",
       NSPhotoLibraryUsageDescription:
         "Command Centre lets you choose photos only when attaching job evidence.",
     },
@@ -54,7 +54,7 @@ const config: ExpoConfig = {
       "expo-location",
       {
         locationWhenInUsePermission:
-          "Command Centre uses your location only when you tap Calculate ETA.",
+          "Command Centre uses your location while using the app for ETA and navigation helpers. It does not track you in the background.",
       },
     ],
     "expo-notifications",

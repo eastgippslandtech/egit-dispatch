@@ -1,4 +1,5 @@
 import { Link, type Href } from "expo-router";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -17,8 +18,18 @@ import { colours } from "../../src/theme/tokens";
 
 export default function MyWorkRoute() {
   const today = todayDateKey();
+  const [selectedSectionTitle, setSelectedSectionTitle] = useState<string | null>(
+    null,
+  );
   const schedule = useSchedule({ from: today, to: "2026-08-31" });
   const sections = buildSections(schedule.jobs, today);
+  const selectedSection = useMemo(
+    () =>
+      selectedSectionTitle
+        ? sections.find((section) => section.title === selectedSectionTitle) ?? null
+        : null,
+    [sections, selectedSectionTitle],
+  );
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -36,34 +47,68 @@ export default function MyWorkRoute() {
       {schedule.error ? <Text style={styles.error}>{schedule.error}</Text> : null}
       {schedule.loading ? (
         <ActivityIndicator color={colours.primary} />
+      ) : selectedSection ? (
+        <ScrollView contentContainerStyle={styles.sections}>
+          <Pressable
+            accessibilityLabel="Back to My Work cards"
+            accessibilityRole="button"
+            onPress={() => setSelectedSectionTitle(null)}
+            style={styles.backButton}
+          >
+            <Text style={styles.backButtonText}>‹ My Work</Text>
+          </Pressable>
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>{selectedSection.title} jobs</Text>
+                <Text style={styles.emptyCopy}>
+                  {selectedSection.jobs.length
+                    ? "Related jobs in this workload group."
+                    : selectedSection.emptyCopy}
+                </Text>
+              </View>
+              <Text style={styles.sectionCount}>{selectedSection.jobs.length}</Text>
+            </View>
+            {selectedSection.jobs.length ? (
+              selectedSection.jobs.map((job) => (
+                <Link
+                  asChild
+                  href={`/job/${job.id}` as Href}
+                  key={`${selectedSection.title}-${job.id}`}
+                >
+                  <Pressable
+                    accessibilityLabel={`Open ${job.title}`}
+                    accessibilityRole="button"
+                    testID={`work-job-card-${selectedSection.title}-${job.id}`}
+                  >
+                    <JobCard compact job={job} />
+                  </Pressable>
+                </Link>
+              ))
+            ) : (
+              <Text style={styles.emptyCopy}>{selectedSection.emptyCopy}</Text>
+            )}
+          </View>
+        </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={styles.sections}>
           {sections.map((section) => (
-            <View key={section.title} style={styles.section}>
+            <Pressable
+              accessibilityLabel={`Open ${section.title} jobs`}
+              accessibilityRole="button"
+              key={section.title}
+              onPress={() => setSelectedSectionTitle(section.title)}
+              style={styles.section}
+            >
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <View style={styles.sectionText}>
+                  <Text style={styles.sectionTitle}>{section.title}</Text>
+                  <Text style={styles.emptyCopy}>{section.emptyCopy}</Text>
+                </View>
                 <Text style={styles.sectionCount}>{section.jobs.length}</Text>
               </View>
-              {section.jobs.length ? (
-                section.jobs.map((job) => (
-                  <Link
-                    asChild
-                    href={`/job/${job.id}` as Href}
-                    key={`${section.title}-${job.id}`}
-                  >
-                    <Pressable
-                      accessibilityLabel={`Open ${job.title}`}
-                      accessibilityRole="button"
-                      testID={`work-job-card-${section.title}-${job.id}`}
-                    >
-                      <JobCard compact job={job} />
-                    </Pressable>
-                  </Link>
-                ))
-              ) : (
-                <Text style={styles.emptyCopy}>{section.emptyCopy}</Text>
-              )}
-            </View>
+              <Text style={styles.cardHint}>Tap to view related jobs</Text>
+            </Pressable>
           ))}
         </ScrollView>
       )}
@@ -130,6 +175,24 @@ function buildSections(jobs: MobileJob[], today: string) {
 }
 
 const styles = StyleSheet.create({
+  backButton: {
+    alignSelf: "flex-start",
+    borderColor: colours.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  backButtonText: {
+    color: colours.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  cardHint: {
+    color: colours.primary,
+    fontSize: 13,
+    fontWeight: "900",
+  },
   emptyCopy: {
     color: colours.muted,
     fontSize: 14,
@@ -179,6 +242,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     justifyContent: "space-between",
+  },
+  sectionText: {
+    flex: 1,
+    gap: 6,
   },
   sectionTitle: {
     color: colours.text,

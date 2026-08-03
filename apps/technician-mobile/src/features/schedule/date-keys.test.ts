@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   displayDateLabel,
+  jobDateKey,
   relativeDateTitle,
   shiftDateKey,
   todayDateKey,
@@ -30,5 +31,12 @@ describe("schedule date keys", () => {
 
   it("formats the selected calendar date in Melbourne time", () => {
     expect(displayDateLabel("2026-07-12")).toBe("Sunday, 12 July");
+  });
+
+  it("derives a job date in the job timezone", () => {
+    expect(jobDateKey("2026-07-14T23:30:00.000Z")).toBe("2026-07-15");
+    expect(jobDateKey("2026-07-14T23:30:00.000Z", "UTC")).toBe(
+      "2026-07-14",
+    );
   });
 });

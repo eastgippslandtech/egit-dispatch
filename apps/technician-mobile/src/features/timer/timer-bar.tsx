@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppButton } from "../../components/app-button";
 import type { ActiveTimer } from "../../contracts/mobile";
 import { colours } from "../../theme/tokens";
+import {
+  TIMER_BANNER_VERTICAL_PADDING,
+  topCutoutPadding,
+} from "./timer-banner-layout";
 import { elapsedSeconds } from "./timer-service";
 
 export function TimerBar({
@@ -16,6 +22,7 @@ export function TimerBar({
   onStop: () => void;
   timer: ActiveTimer;
 }) {
+  const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState(now);
 
   useEffect(() => {
@@ -29,7 +36,12 @@ export function TimerBar({
   }, [timer.id, timer.startedAt]);
 
   return (
-    <View style={styles.bar}>
+    <View
+      style={[
+        styles.bar,
+        { paddingTop: topCutoutPadding(insets.top, TIMER_BANNER_VERTICAL_PADDING) },
+      ]}
+    >
       <View>
         <Text style={styles.label}>Timer running</Text>
         <Text style={styles.title}>{jobTitle}</Text>
@@ -37,14 +49,12 @@ export function TimerBar({
           {formatElapsed(elapsedSeconds(timer, currentTime))}
         </Text>
       </View>
-      <Pressable
+      <AppButton
         accessibilityLabel="Stop timer"
-        accessibilityRole="button"
+        label="Stop"
         onPress={onStop}
-        style={styles.stopButton}
-      >
-        <Text style={styles.stopText}>Stop</Text>
-      </Pressable>
+        variant="navy"
+      />
     </View>
   );
 }
@@ -61,38 +71,30 @@ function formatElapsed(totalSeconds: number): string {
 const styles = StyleSheet.create({
   bar: {
     alignItems: "center",
-    backgroundColor: colours.surfaceWarm,
-    borderColor: colours.borderWarm,
-    borderRadius: 22,
-    borderWidth: 1,
+    backgroundColor: colours.primary,
+    borderBottomColor: colours.borderWarm,
+    borderBottomWidth: 1,
     flexDirection: "row",
+    gap: 14,
     justifyContent: "space-between",
-    padding: 14,
+    paddingHorizontal: 16,
+    paddingBottom: TIMER_BANNER_VERTICAL_PADDING,
   },
   elapsed: {
-    color: colours.primary,
-    fontSize: 18,
+    color: colours.brandNavy,
+    fontSize: 24,
     fontWeight: "900",
+    fontVariant: ["tabular-nums"],
   },
   label: {
-    color: colours.muted,
+    color: colours.brandNavy,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "900",
     textTransform: "uppercase",
   },
-  stopButton: {
-    backgroundColor: colours.critical,
-    borderRadius: 14,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  stopText: {
-    color: colours.text,
-    fontWeight: "900",
-  },
   title: {
-    color: colours.text,
+    color: colours.brandNavy,
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "900",
   },
 });

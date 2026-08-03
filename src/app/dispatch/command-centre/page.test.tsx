@@ -15,8 +15,8 @@ import type { DispatchRequest } from "@/server/dispatch/types";
 
 import CommandCentrePage from "./page";
 import {
-  bookingCardPriorityClass,
   CommandCentrePrototype,
+  bookingCardPriorityClass,
   integrationReceiptDisposition,
   pendingLiveAppointmentId,
   reconcileDashboardWithPendingWritebacks,
@@ -153,6 +153,36 @@ test("opens the request named by the integrations recovery link", async () => {
       target.requestNumber,
     ),
   ).toBeInTheDocument();
+});
+
+test("shows a live mobile timer counter in the selected job drawer", () => {
+  const data = getDispatchDesignMockData();
+  const selectedRequestId = "100284";
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        selectedRequestId,
+        requests: data.requests.map((request) =>
+          request.id === selectedRequestId
+            ? {
+                ...request,
+                activeTimer: {
+                  id: "timer-mobile-1",
+                  jobId: "mock-100284-test",
+                  startedAt: "2026-07-08T01:15:00.000Z",
+                  technicianId: "tech-riley",
+                },
+              }
+            : request,
+        ),
+      }}
+    />,
+  );
+
+  const drawer = screen.getByTestId("command-centre-drawer");
+  expect(within(drawer).getByText("Active mobile timer")).toBeInTheDocument();
+  expect(within(drawer).getByText("45m")).toBeInTheDocument();
 });
 
 test("live scheduling lets the dispatcher choose the booking type", () => {

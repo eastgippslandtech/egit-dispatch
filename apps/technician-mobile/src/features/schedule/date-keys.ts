@@ -53,6 +53,32 @@ export function displayDateLabel(dateKey: string): string {
   return `${partValue(parts, "weekday")}, ${partValue(parts, "day")} ${partValue(parts, "month")}`;
 }
 
+export function jobDateKey(
+  value: string,
+  timeZone = MELBOURNE_TIME_ZONE,
+): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(new Date(value));
+
+  return `${partValue(parts, "year")}-${partValue(parts, "month")}-${partValue(parts, "day")}`;
+}
+
+export function dateKeyIsWithinRange({
+  dateKey,
+  from,
+  to,
+}: {
+  dateKey: string;
+  from: string;
+  to: string;
+}): boolean {
+  return dateKey >= from && dateKey <= to;
+}
+
 function partValue(
   parts: Intl.DateTimeFormatPart[],
   type: Intl.DateTimeFormatPartTypes,

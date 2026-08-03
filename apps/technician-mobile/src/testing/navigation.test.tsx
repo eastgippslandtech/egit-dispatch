@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RootNavigator } from "../../app/_layout";
 import TabsLayout from "../../app/(tabs)/_layout";
 import IndexRoute from "../../app/index";
+import ProfileRoute from "../../app/(tabs)/profile";
 import SignInRoute from "../../app/sign-in";
 import {
   AppProviders,
@@ -33,6 +34,8 @@ const navigationHarness = vi.hoisted(() => ({
   routes: {} as Record<string, ComponentType>,
   stackOptions: {} as Record<string, Record<string, unknown>>,
   tabBarActiveTintColor: "",
+  hiddenTabTitles: [] as string[],
+  routerPush: vi.fn(),
   tabBarStyle: {} as Record<string, unknown>,
   tabIcons: [] as ReactElement[],
 }));
@@ -53,6 +56,16 @@ const sessionRefreshMock = vi.hoisted(() => ({
 
 vi.mock("../auth/session-refresh", () => sessionRefreshMock);
 
+const secureStoreMock = vi.hoisted(() => ({
+  values: new Map<string, string>(),
+  getItemAsync: vi.fn(async (key: string) => secureStoreMock.values.get(key) ?? null),
+  setItemAsync: vi.fn(async (key: string, value: string) => {
+    secureStoreMock.values.set(key, value);
+  }),
+}));
+
+vi.mock("expo-secure-store", () => secureStoreMock);
+
 const notificationRegistrationMock = vi.hoisted(() => ({
   registerCurrentDeviceNotifications: vi.fn(),
 }));
@@ -65,6 +78,7 @@ vi.mock(
 vi.mock("react-native", () => ({
   Image: "Image",
   Pressable: "Pressable",
+  ScrollView: "ScrollView",
   StatusBar: "StatusBar",
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
@@ -79,13 +93,29 @@ vi.mock("react-native-safe-area-context", () => ({
     return createElement(Fragment, null, children);
   },
   SafeAreaView: "SafeAreaView",
+  useSafeAreaInsets: () => ({ bottom: 34, left: 0, right: 0, top: 59 }),
 }));
 
 vi.mock("@expo/vector-icons/MaterialCommunityIcons", () => ({
   default: "MaterialCommunityIcons",
 }));
 
+vi.mock("expo-constants", () => ({
+  default: { expoConfig: { version: "0.1.0" } },
+}));
+
+vi.mock("expo-device", () => ({
+  osInternalBuildId: "test-build",
+}));
+
+vi.mock("expo-location", () => ({
+  requestForegroundPermissionsAsync: vi.fn(),
+}));
+
 vi.mock("expo-notifications", () => ({
+  getExpoPushTokenAsync: vi.fn(),
+  getPermissionsAsync: vi.fn(),
+  requestPermissionsAsync: vi.fn(),
   setNotificationHandler: vi.fn(),
 }));
 
@@ -131,6 +161,7 @@ vi.mock("expo-router", () => {
     options,
   }: {
     options: {
+      href?: string | null;
       tabBarAccessibilityLabel?: string;
       tabBarIcon: (properties: {
         color: string;
@@ -140,6 +171,11 @@ vi.mock("expo-router", () => {
       title: string;
     };
   }) {
+    if (options.href === null) {
+      navigationHarness.hiddenTabTitles.push(options.title);
+      return null;
+    }
+
     const icon = options.tabBarIcon({
       color: "#123456",
       focused: false,
@@ -172,6 +208,7 @@ vi.mock("expo-router", () => {
       ),
     Stack,
     Tabs,
+    useRouter: () => ({ push: navigationHarness.routerPush }),
   };
 });
 
@@ -246,6 +283,8 @@ function renderTechnicianRouter(
   navigationHarness.stackOptions = {};
   navigationHarness.tabBarStyle = {};
   navigationHarness.tabBarActiveTintColor = "";
+  navigationHarness.hiddenTabTitles = [];
+  navigationHarness.routerPush.mockReset();
   navigationHarness.tabIcons = [];
   try {
     act(() => {
@@ -270,6 +309,46 @@ function renderTechnicianRouter(
   return rendered;
 }
 
+function renderProfileSettings(session: TechnicianSession) {
+  let rendered: ReactTestRenderer | undefined;
+  const testGlobal = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const consoleError = vi.spyOn(console, "error").mockImplementation((message) => {
+    if (!String(message).includes("react-test-renderer is deprecated")) {
+      throw new Error(`Unexpected render error: ${String(message)}`);
+    }
+  });
+
+  testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  navigationHarness.routerPush.mockReset();
+  try {
+    act(() => {
+      rendered = TestRenderer.create(
+        <AppProviders initialSession={session}>
+          <ProfileRoute />
+        </AppProviders>,
+      );
+    });
+  } finally {
+    consoleError.mockRestore();
+  }
+
+  if (!rendered) {
+    throw new Error("The profile settings screen did not render.");
+  }
+
+  return rendered;
+}
+
+async function renderProfileSettingsAsync(session: TechnicianSession) {
+  const rendered = renderProfileSettings(session);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return rendered;
+}
+
 async function renderTechnicianRouterAsync(
   session: TechnicianSession,
   signInWithZoho = approvedRileyZohoSignIn,
@@ -289,6 +368,8 @@ async function renderTechnicianRouterAsync(
   navigationHarness.stackOptions = {};
   navigationHarness.tabBarStyle = {};
   navigationHarness.tabBarActiveTintColor = "";
+  navigationHarness.hiddenTabTitles = [];
+  navigationHarness.routerPush.mockReset();
   navigationHarness.tabIcons = [];
   try {
     await act(async () => {
@@ -380,6 +461,7 @@ function changeText(rendered: ReactTestRenderer, name: string, value: string) {
 
 describe("technician navigation", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     sessionStoreMock.clearMobileSession.mockReset();
     sessionStoreMock.restoreMobileSession.mockReset();
     sessionStoreMock.saveMobileSession.mockReset();
@@ -388,6 +470,9 @@ describe("technician navigation", () => {
     sessionRefreshMock.refreshMobileSession.mockImplementation((session) =>
       Promise.resolve(session),
     );
+    secureStoreMock.values.clear();
+    secureStoreMock.getItemAsync.mockClear();
+    secureStoreMock.setItemAsync.mockClear();
     notificationRegistrationMock.registerCurrentDeviceNotifications.mockReset();
     notificationRegistrationMock.registerCurrentDeviceNotifications.mockResolvedValue({
       status: "registered",
@@ -417,8 +502,9 @@ describe("technician navigation", () => {
     pressButton(rendered, "Open reviewer demo");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
@@ -441,13 +527,14 @@ describe("technician navigation", () => {
     const labels = textValues(rendered.root);
 
     expect(labels).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(labels).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
   });
 
-  it("starts notification registration on first load after live sign-in", async () => {
+  it("waits for the first-login action before requesting notifications", async () => {
     const liveSession = {
       accessToken: "access-riley",
       expiresAt: "2030-01-01T00:00:00.000Z",
@@ -455,7 +542,7 @@ describe("technician navigation", () => {
       staffEmail: riley.email,
     };
 
-    await renderTechnicianRouterAsync({
+    const rendered = await renderTechnicianRouterAsync({
       status: "approved",
       mobileSession: liveSession,
       staff: riley,
@@ -463,11 +550,17 @@ describe("technician navigation", () => {
 
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).not.toHaveBeenCalled();
+
+    await pressButtonAsync(rendered, "Enable notifications");
+
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).toHaveBeenCalledTimes(1);
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).toHaveBeenCalledWith({
-      mode: "automatic",
+      mode: "manual",
       mobileSession: liveSession,
     });
   });
@@ -486,10 +579,135 @@ describe("technician navigation", () => {
     await pressButtonAsync(rendered, "Sign in with Zoho");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Sync", "Profile"]),
+      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
     );
+    expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
     expect(redirectTarget(rendered.root)).toBe("/(tabs)/today");
+  });
+
+  it("keeps sync available from profile settings without showing it as a bottom tab", () => {
+    renderTechnicianRouter(approvedRileySession);
+
+    expect(navigationHarness.hiddenTabTitles).toContain("Sync");
+
+    const profile = renderProfileSettings(approvedRileySession);
+    pressButton(profile, "Open sync settings");
+
+    expect(navigationHarness.routerPush).toHaveBeenCalledWith("/(tabs)/sync");
+  });
+
+  it("keeps profile settings scrollable with evenly spaced actions", () => {
+    const profile = renderProfileSettings(approvedRileySession);
+
+    const scrollContent = profile.root.findByProps({
+      testID: "profile-settings-scroll",
+    });
+    const actionGroup = profile.root.findByProps({
+      testID: "profile-settings-actions",
+    });
+
+    expect(scrollContent.props.contentInsetAdjustmentBehavior).toBe("automatic");
+    expect(scrollContent.props.contentContainerStyle).toMatchObject({
+      gap: 20,
+      paddingBottom: expect.any(Number),
+    });
+    expect(actionGroup.props.style).toMatchObject({ gap: 12 });
+  });
+
+  it("starts a 30 minute lunch from profile settings", async () => {
+    const liveRileySession: TechnicianSession = {
+      ...approvedRileySession,
+      mobileSession: {
+        accessToken: "access-riley",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        refreshToken: "refresh-riley",
+        staffEmail: riley.email,
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            override: {
+              endsAt: "2026-07-26T02:30:00.000Z",
+              id: "lunch",
+              status: "lunch",
+            },
+          },
+          meta: { requestId: "mobile-test", serverTime: "2026-07-26T02:00:00.000Z" },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    try {
+      const profile = renderProfileSettings(liveRileySession);
+      await pressButtonAsync(profile, "Start lunch");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://command.egit.com.au/api/mobile/v1/presence",
+        expect.objectContaining({
+          body: JSON.stringify({ action: "start_lunch" }),
+          method: "POST",
+        }),
+      );
+      expect(textValues(profile.root)).toContain("Lunch started: 30 minutes");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("only allows lunch once per local day", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T02:00:00.000Z"));
+    const liveRileySession: TechnicianSession = {
+      ...approvedRileySession,
+      mobileSession: {
+        accessToken: "access-riley",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        refreshToken: "refresh-riley",
+        staffEmail: riley.email,
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            override: {
+              endsAt: "2026-07-30T02:30:00.000Z",
+              id: "lunch",
+              status: "lunch",
+            },
+          },
+          meta: { requestId: "mobile-test", serverTime: "2026-07-30T02:00:00.000Z" },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    try {
+      const profile = await renderProfileSettingsAsync(liveRileySession);
+      await pressButtonAsync(profile, "Start lunch");
+
+      expect(buttonsNamed(profile.root, "Start lunch")[0].props.disabled).toBe(true);
+      expect(textValues(profile.root)).toContain("Lunch started: 30 minutes");
+
+      const sameDayProfile = await renderProfileSettingsAsync(liveRileySession);
+      expect(
+        buttonsNamed(sameDayProfile.root, "Start lunch")[0].props.disabled,
+      ).toBe(true);
+      expect(textValues(sameDayProfile.root)).toContain("Lunch already taken today");
+
+      vi.setSystemTime(new Date("2026-07-31T02:00:00.000Z"));
+      const nextDayProfile = await renderProfileSettingsAsync(liveRileySession);
+      expect(
+        buttonsNamed(nextDayProfile.root, "Start lunch")[0].props.disabled,
+      ).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("restores the saved mobile session without asking for Zoho again", async () => {
@@ -618,9 +836,8 @@ describe("technician navigation", () => {
   it("uses native tab icons with navigator-provided size and colour", () => {
     renderTechnicianRouter(approvedRileySession);
 
-    expect(navigationHarness.tabIcons).toHaveLength(4);
+    expect(navigationHarness.tabIcons).toHaveLength(3);
     expect(navigationHarness.tabIcons.map((icon) => icon.type)).toEqual([
-      "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",

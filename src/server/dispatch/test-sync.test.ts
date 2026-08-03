@@ -701,6 +701,71 @@ describe("dispatch test sync overlays", () => {
     });
     expect(dashboard.requests[0].warnings).toContain("Work Log added");
   });
+
+  it("applies mobile timer start and stop events to the dispatch request", () => {
+    const running = applyDispatchTestSyncEvents(baseDashboard, [
+      normaliseDispatchTestSyncEvent({
+        eventType: "timer_started",
+        requestId: "req-1",
+        appointmentId: "appt-test",
+        technicianId: "matt",
+        createdAt: "2026-07-08T01:15:00.000Z",
+        payload: {
+          timer: {
+            id: "timer-mobile-1",
+            jobId: "appt-test",
+            startedAt: "2026-07-08T01:15:00.000Z",
+            technicianId: "matt",
+          },
+        },
+      }),
+    ]);
+
+    expect(running.requests[0].activeTimer).toMatchObject({
+      id: "timer-mobile-1",
+      jobId: "appt-test",
+      startedAt: "2026-07-08T01:15:00.000Z",
+      technicianId: "matt",
+    });
+    expect(running.requests[0].warnings).toContain("Active timer");
+
+    const stopped = applyDispatchTestSyncEvents(baseDashboard, [
+      normaliseDispatchTestSyncEvent({
+        eventType: "timer_started",
+        requestId: "req-1",
+        appointmentId: "appt-test",
+        technicianId: "matt",
+        createdAt: "2026-07-08T01:15:00.000Z",
+        payload: {
+          timer: {
+            id: "timer-mobile-1",
+            jobId: "appt-test",
+            startedAt: "2026-07-08T01:15:00.000Z",
+            technicianId: "matt",
+          },
+        },
+      }),
+      normaliseDispatchTestSyncEvent({
+        eventType: "timer_stopped",
+        requestId: "req-1",
+        appointmentId: "appt-test",
+        technicianId: "matt",
+        createdAt: "2026-07-08T01:45:00.000Z",
+        payload: {
+          timer: {
+            id: "timer-mobile-1",
+            jobId: "appt-test",
+            startedAt: "2026-07-08T01:15:00.000Z",
+            stoppedAt: "2026-07-08T01:45:00.000Z",
+            technicianId: "matt",
+          },
+        },
+      }),
+    ]);
+
+    expect(stopped.requests[0].activeTimer).toBeUndefined();
+    expect(stopped.requests[0].warnings).not.toContain("Active timer");
+  });
 });
 
 function scheduleEvent(

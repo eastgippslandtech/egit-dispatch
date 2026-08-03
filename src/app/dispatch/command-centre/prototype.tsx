@@ -2547,6 +2547,7 @@ export function CommandCentrePrototype({
             appointment={selectedAppointment}
             calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
             integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
+            now={now}
             showIntegrations={showIntegrations}
             onOpenWorkLog={openWorkLog}
             onOpenWorkspace={(requestId, appointmentId) =>
@@ -6908,6 +6909,7 @@ function DetailDrawer({
   appointment,
   calendarWriteEnabled,
   integrationState,
+  now,
   showIntegrations,
   onOpenWorkLog,
   onOpenWorkspace,
@@ -6920,6 +6922,7 @@ function DetailDrawer({
   appointment?: Appointment;
   calendarWriteEnabled: boolean;
   integrationState?: TrackedIntegrationOperation["state"];
+  now: Date;
   showIntegrations: boolean;
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
   onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
@@ -7051,6 +7054,23 @@ function DetailDrawer({
           )}
         </DrawerSection>
         <DrawerSection title="Schedule and sync">
+          {request?.activeTimer ? (
+            <div className="mb-2 rounded-md border border-cc-orange/45 bg-cc-orange/15 p-2.5 shadow-[0_0_24px_rgba(255,130,58,0.12)]">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-cc-orange">
+                    Active mobile timer
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-300">
+                    {request.activeTimer.technicianName ?? technician}
+                  </div>
+                </div>
+                <div className="font-mono text-2xl font-bold tabular-nums text-slate-50">
+                  {formatActiveTimerElapsed(request.activeTimer.startedAt, now)}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <DetailRow label="Technician" value={technician} />
           <DetailRow
             label="Technician mapping"
@@ -8107,4 +8127,23 @@ function formatDateTime(value: string) {
     timeStyle: "short",
     timeZone: "Australia/Melbourne",
   }).format(date);
+}
+
+function formatActiveTimerElapsed(startedAt: string, now: Date) {
+  const started = new Date(startedAt);
+  if (Number.isNaN(started.getTime())) {
+    return "0m";
+  }
+
+  const elapsedMinutes = Math.max(
+    0,
+    Math.floor((now.getTime() - started.getTime()) / 60_000),
+  );
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m`;
+  }
+
+  const hours = Math.floor(elapsedMinutes / 60);
+  const minutes = elapsedMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }

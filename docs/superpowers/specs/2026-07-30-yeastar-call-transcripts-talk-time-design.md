@@ -1,7 +1,7 @@
 # Yeastar Call Transcripts and External Talk-Time Design
 
-**Date:** 2026-07-30  
-**Status:** Approved  
+**Date:** 2026-07-30
+**Status:** Approved
 **Target:** Existing Command Centre deployment on Vercel with Supabase Postgres
 
 ## Objective

@@ -5,6 +5,7 @@ import {
 } from "../../../apps/technician-mobile/src/testing/fixtures";
 import type { MobileJob } from "../../../apps/technician-mobile/src/contracts/mobile";
 import type {
+  ActiveTimer,
   BookingType,
   MobileJobNote,
   MobileJobPermissions,
@@ -13,6 +14,9 @@ import type {
   MobileStaff,
   MobileTravelContext,
   MutationReceipt,
+  StartTimerCommand,
+  StoppedTimer,
+  StopTimerCommand,
   SyncState,
 } from "../../../apps/technician-mobile/src/contracts/mobile";
 
@@ -28,6 +32,7 @@ import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import {
   applyDispatchTestSyncEvents,
   listDispatchTestSyncEvents,
+  recordDispatchTestSyncEvent,
 } from "@/server/dispatch/test-sync";
 import type {
   Appointment,
@@ -52,7 +57,11 @@ import {
   type MobileOutlookCalendar,
 } from "./outlook";
 import { createMspCentralClient } from "@/server/msp-central/client";
-import type { MspCentralClient } from "@/server/msp-central/types";
+import type {
+  MspCentralClient,
+  MspCentralRequestContext,
+  MspCentralRequestUpdate,
+} from "@/server/msp-central/types";
 import { createGraphClient } from "@/server/graph/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
@@ -61,6 +70,11 @@ import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
 import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 import { roundWorklogMinutes } from "@/server/worklogs/time";
+
+type ResolvedTimerJob = {
+  databaseJob?: DatabaseJobRow;
+  mobileJob: MobileJob;
+};
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -182,11 +196,13 @@ export async function getMobileJob({
   auth,
   database = getConfiguredMobileDatabase(),
   jobId,
+  mspClient = getConfiguredMobileMspClient(),
   outlookCalendar = getConfiguredMobileOutlookCalendar(),
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
   jobId: string;
+  mspClient?: MspCentralClient | null;
   outlookCalendar?: MobileOutlookCalendar | null;
 }): Promise<{ job: MobileJob }> {
   if (database) {
@@ -211,7 +227,24 @@ export async function getMobileJob({
         status: 404,
       });
     }
-    return { job: mapDatabaseJob(job) };
+    const databaseJob = mapDatabaseJob(job);
+    if (!mspClient) {
+      return { job: databaseJob };
+    }
+
+    try {
+      const context = await mspClient.getRequestContext(job.sdpRequestId);
+      return { job: enrichMobileJobWithRequestContext(databaseJob, context) };
+    } catch (error) {
+      console.error("Mobile Helpdesk request context read failed", safeError(error));
+      return {
+        job: {
+          ...databaseJob,
+          activityWarning:
+            "Latest Helpdesk activity could not be loaded. Showing the saved Command Centre copy.",
+        },
+      };
+    }
   }
 
   if (outlookCalendar && jobId.startsWith("outlook-")) {
@@ -354,6 +387,134 @@ export async function saveMobileWorklog({
       resourceVersion: `${job.version}-note`,
       status: "applied" as const,
     },
+  };
+}
+
+export async function startMobileTimer({
+  auth,
+  command,
+  database = getConfiguredMobileDatabase(),
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  command: StartTimerCommand;
+  database?: MobileDatabase | null;
+  jobId: string;
+}): Promise<{ timer: ActiveTimer }> {
+  const resolved = database
+    ? await requireTimerJobForStaff({ auth, database, jobId })
+    : { mobileJob: findOwnedJob(auth, jobId) };
+  const job = resolved.mobileJob;
+
+  if (!job.permissions.canStartTimer) {
+    throw Object.assign(
+      new Error(job.permissions.readOnlyReason ?? "A timer cannot be started for this job."),
+      { code: "READ_ONLY_SOURCE", status: 409 },
+    );
+  }
+
+  const startedAt = requireIsoTimestamp(command.occurredAt, "Timer start time");
+  const timer: ActiveTimer = {
+    accumulatedPausedSeconds: 0,
+    id: `timer-${command.clientMutationId}`,
+    jobId,
+    pausedAt: null,
+    startedAt,
+    technicianId: job.technician.id,
+  };
+
+  if (database && resolved.databaseJob) {
+    await database.saveTimerEvent({
+      action: "mobile_timer_start",
+      clientMutationId: command.clientMutationId,
+      installationId: command.installationId,
+      job: resolved.databaseJob,
+      occurredAt: startedAt,
+      timer,
+    });
+  } else if (database && job.source === "mock") {
+    await recordMobileTimerTestSyncEvent({
+      action: "timer_started",
+      auth,
+      job,
+      timer,
+    });
+  }
+
+  return {
+    timer,
+  };
+}
+
+export async function stopMobileTimer({
+  auth,
+  command,
+  database = getConfiguredMobileDatabase(),
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  command: StopTimerCommand;
+  database?: MobileDatabase | null;
+  jobId: string;
+}): Promise<{ timer: StoppedTimer }> {
+  const resolved = database
+    ? await requireTimerJobForStaff({ auth, database, jobId })
+    : { mobileJob: findOwnedJob(auth, jobId) };
+  const job = resolved.mobileJob;
+
+  if (!job.permissions.canStartTimer) {
+    throw Object.assign(
+      new Error(job.permissions.readOnlyReason ?? "A timer cannot be stopped for this job."),
+      { code: "READ_ONLY_SOURCE", status: 409 },
+    );
+  }
+
+  const startedAt = requireIsoTimestamp(command.startedAt, "Timer start time");
+  const stoppedAt = requireIsoTimestamp(command.occurredAt, "Timer stop time");
+  if (new Date(stoppedAt) < new Date(startedAt)) {
+    throw Object.assign(new Error("Timer stop time cannot be before its start time."), {
+      code: "BAD_REQUEST",
+      status: 400,
+    });
+  }
+
+  const actualElapsedMinutes = Math.max(
+    1,
+    Math.ceil((new Date(stoppedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
+  );
+
+  const timer: StoppedTimer = {
+    accumulatedPausedSeconds: 0,
+    actualElapsedMinutes,
+    id: command.timerId,
+    jobId,
+    pausedAt: null,
+    roundedMinutes: Math.ceil(actualElapsedMinutes / 15) * 15,
+    startedAt,
+    stoppedAt,
+    technicianId: job.technician.id,
+  };
+
+  if (database && resolved.databaseJob) {
+    await database.saveTimerEvent({
+      action: "mobile_timer_stop",
+      clientMutationId: command.clientMutationId,
+      installationId: command.installationId,
+      job: resolved.databaseJob,
+      occurredAt: stoppedAt,
+      timer,
+    });
+  } else if (database && job.source === "mock") {
+    await recordMobileTimerTestSyncEvent({
+      action: "timer_stopped",
+      auth,
+      job,
+      timer,
+    });
+  }
+
+  return {
+    timer,
   };
 }
 
@@ -835,6 +996,80 @@ async function requireDatabaseStaff(database: MobileDatabase, zohoEmail: string)
   return staff;
 }
 
+async function requireTimerJobForStaff({
+  auth,
+  database,
+  jobId,
+}: {
+  auth: MobileAuthContext;
+  database: MobileDatabase;
+  jobId: string;
+}): Promise<ResolvedTimerJob> {
+  const staff = await requireDatabaseStaff(database, auth.email);
+  const databaseJob = isUuid(jobId)
+    ? await database.findJobForStaff({ jobId, staffId: staff.id })
+    : null;
+  if (databaseJob) {
+    return {
+      databaseJob,
+      mobileJob: mapDatabaseJob(databaseJob),
+    };
+  }
+
+  const testJob = await findTestSyncedMobileJob({ auth, jobId });
+  if (testJob) {
+    return { mobileJob: testJob };
+  }
+
+  throw Object.assign(new Error("Mobile job was not found."), {
+    code: "NOT_FOUND",
+    status: 404,
+  });
+}
+
+async function recordMobileTimerTestSyncEvent({
+  action,
+  auth,
+  job,
+  timer,
+}: {
+  action: "timer_started" | "timer_stopped";
+  auth: MobileAuthContext;
+  job: MobileJob;
+  timer: ActiveTimer | StoppedTimer;
+}) {
+  await recordDispatchTestSyncEvent(
+    {
+      appointmentId: job.id,
+      createdAt: "stoppedAt" in timer ? timer.stoppedAt : timer.startedAt,
+      eventType: action,
+      requestId: requestIdForMobileJob(job),
+      technicianId: job.technician.id,
+      payload: {
+        timer: {
+          id: timer.id,
+          jobId: timer.jobId,
+          startedAt: timer.startedAt,
+          stoppedAt: "stoppedAt" in timer ? timer.stoppedAt : undefined,
+          technicianId: timer.technicianId,
+          technicianName: job.technician.displayName,
+        },
+      },
+    },
+    auth.email,
+  );
+}
+
+function requestIdForMobileJob(job: MobileJob) {
+  return job.requestNumber?.replace(/^REQ-/i, "") ?? job.id;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
 const WRITABLE_PERMISSIONS: MobileJobPermissions = {
   canAddPart: true,
   canAttachEvidence: true,
@@ -920,6 +1155,7 @@ function mapOutlookAppointment(
   const startAt = melbourneIsoTime(appointment.date, appointment.start);
   const endAt = melbourneIsoTime(appointment.date, appointment.end);
   return {
+    activityWarning: null,
     attachments: [],
     bookingType: appointment.bookingType ?? "In house",
     contactEmail: null,
@@ -1067,11 +1303,14 @@ function mapTestSyncedAppointment(
     previousNotes.push({
       id: `${appointment.id}-request-note`,
       localId: null,
+      kind: "customer_reply",
       visibility: "external",
       body: request.notes,
       authorName: "Command Centre",
       createdAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
       updatedAt: request.updatedAt ?? mockIsoTime(appointment.date, appointment.start),
+      durationMinutes: null,
+      isBillable: null,
       syncState: "synced",
       canEdit: false,
       canDelete: false,
@@ -1082,11 +1321,14 @@ function mapTestSyncedAppointment(
     previousNotes.push({
       id: `${appointment.id}-appointment-note`,
       localId: null,
+      kind: "internal_note",
       visibility: "internal",
       body: appointment.bodyPreview,
       authorName: "Command Centre",
       createdAt: mockIsoTime(appointment.date, appointment.start),
       updatedAt: mockIsoTime(appointment.date, appointment.start),
+      durationMinutes: null,
+      isBillable: null,
       syncState: "synced",
       canEdit: false,
       canDelete: false,
@@ -1095,6 +1337,7 @@ function mapTestSyncedAppointment(
 
   return {
     id: appointment.id,
+    activityWarning: null,
     source: "mock",
     requestNumber: request?.requestNumber ?? null,
     outlookEventId: appointment.outlookEventId ?? null,
@@ -1219,6 +1462,7 @@ function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
 
   return {
     id: row.id,
+    activityWarning: null,
     source: "msp_central",
     requestNumber: row.sdpRequestNumber,
     outlookEventId: row.outlookEventId,
@@ -1297,14 +1541,100 @@ function mapDatabaseNote(note: DatabaseJobNoteRow): MobileJobNote {
   return {
     id: note.id,
     localId: null,
+    kind:
+      visibilityFromPayload(payload) === "external"
+        ? "customer_reply"
+        : "internal_note",
     visibility: visibilityFromPayload(payload),
     body,
     authorName: pickNestedString(payload, ["authorName"]) ?? "Command Centre",
     createdAt: toIsoString(note.createdAt),
     updatedAt: toIsoString(note.createdAt),
+    durationMinutes: null,
+    isBillable: null,
     syncState: note.status === "failed" ? "failed" : "synced",
     canEdit: false,
     canDelete: false,
+  };
+}
+
+function enrichMobileJobWithRequestContext(
+  job: MobileJob,
+  context: MspCentralRequestContext,
+): MobileJob {
+  const fallbackCreatedAt = context.request.updatedAt ?? job.updatedAt;
+  const activity = [
+    ...context.customerResponses.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "customer_reply",
+        visibility: "external",
+      }),
+    ),
+    ...context.internalNotes.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "internal_note",
+        visibility: "internal",
+      }),
+    ),
+    ...context.worklogs.map((entry) =>
+      mapHelpdeskActivity(entry, {
+        fallbackCreatedAt,
+        kind: "worklog",
+        visibility: entry.isBillable ? "external" : "internal",
+      }),
+    ),
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const activityWarnings = [context.notesWarning, context.worklogsWarning].filter(
+    (warning): warning is string => Boolean(warning),
+  );
+  const request = context.request;
+
+  return {
+    ...job,
+    activityWarning: activityWarnings.length ? activityWarnings.join(" ") : null,
+    bookingType: request.bookingType ?? job.bookingType,
+    contactName: request.requester || job.contactName,
+    customerName: request.customer || job.customerName,
+    description: request.notes || job.description,
+    previousNotes: activity,
+    priority: request.priority ?? job.priority,
+    siteAddress: request.siteAddress ?? job.siteAddress,
+    siteName: request.siteName ?? request.site ?? job.siteName,
+    siteTown: request.siteTown ?? job.siteTown,
+    slaDueAt: request.dueAt || job.slaDueAt,
+    status: mobileStatusForRequest(request),
+    title: cleanRequestTitle(request.subject, request.requestNumber) || job.title,
+    updatedAt: request.updatedAt ?? job.updatedAt,
+    version: `${job.version}-helpdesk-${request.updatedAt ?? job.updatedAt}`,
+  };
+}
+
+function mapHelpdeskActivity(
+  entry: MspCentralRequestUpdate,
+  options: {
+    fallbackCreatedAt: string;
+    kind: MobileJobNote["kind"];
+    visibility: MobileJobNote["visibility"];
+  },
+): MobileJobNote {
+  const createdAt = entry.createdAt ?? options.fallbackCreatedAt;
+
+  return {
+    authorName: entry.author,
+    body: entry.body,
+    canDelete: false,
+    canEdit: false,
+    createdAt,
+    durationMinutes: entry.durationMinutes ?? null,
+    id: entry.id,
+    isBillable: entry.isBillable ?? null,
+    kind: options.kind,
+    localId: null,
+    syncState: "synced",
+    updatedAt: createdAt,
+    visibility: options.visibility,
   };
 }
 
@@ -1422,6 +1752,16 @@ function visibilityFromPayload(record: Record<string, unknown>) {
 
 function worklogBody(command: MobileWorklogCommand) {
   return (command.body ?? command.summary ?? "").trim();
+}
+
+function requireIsoTimestamp(value: string | undefined, label: string) {
+  if (!value || Number.isNaN(Date.parse(value))) {
+    throw Object.assign(new Error(`${label} is required.`), {
+      code: "BAD_REQUEST",
+      status: 400,
+    });
+  }
+  return value;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -1,13 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import type { ActiveTimer, MobileJob } from "../../contracts/mobile";
+import type { MobileJob } from "../../contracts/mobile";
+import { AppButton } from "../../components/app-button";
 import { getMobileRuntimeConfig } from "../../config/runtime";
 import { useTechnicianRepository } from "../../providers/app-providers";
 import { colours } from "../../theme/tokens";
-import { TimerBar } from "../timer/timer-bar";
+import { useActiveTimer } from "../timer/active-timer-provider";
 import { WorklogForm } from "../worklogs/worklog-form";
+import { JobActivity } from "./job-activity";
 import { JobCard } from "./job-card";
 import { createNativeActions } from "./native-actions";
 
@@ -17,6 +26,13 @@ interface JobDetailProps {
 
 export function JobDetail({ jobId }: JobDetailProps) {
   const repository = useTechnicianRepository();
+  const {
+    activeTimer,
+    isTimerForJob,
+    startTimerForJob,
+    stopActiveTimer,
+    timerMessage,
+  } = useActiveTimer();
   const actions = useMemo(
     () =>
       createNativeActions({
@@ -24,10 +40,11 @@ export function JobDetail({ jobId }: JobDetailProps) {
       }),
     [],
   );
-  const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<MobileJob | null>(null);
-  const [timerMessage, setTimerMessage] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const paymentOpeningRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,12 +54,7 @@ export function JobDetail({ jobId }: JobDetailProps) {
         if (!cancelled) {
           setJob(nextJob);
           setError(null);
-          void restoreActiveTimerSnapshot(nextJob.id).then((timer) => {
-            if (!cancelled && timer) {
-              setActiveTimer(timer);
-              setTimerMessage("Timer running");
-            }
-          });
+          setRefreshMessage(nextJob.activityWarning);
         }
       })
       .catch((jobError: unknown) => {
@@ -57,6 +69,22 @@ export function JobDetail({ jobId }: JobDetailProps) {
       cancelled = true;
     };
   }, [jobId, repository]);
+
+  const refreshJob = async () => {
+    setRefreshing(true);
+    try {
+      const nextJob = await repository.getJob(jobId);
+      setJob(nextJob);
+      setError(null);
+      setRefreshMessage(nextJob.activityWarning);
+    } catch {
+      setRefreshMessage(
+        "Could not refresh job activity. Showing the saved copy.",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (error) {
     return (
@@ -75,67 +103,55 @@ export function JobDetail({ jobId }: JobDetailProps) {
   }
 
   const readOnly = Boolean(job.permissions.readOnlyReason);
-  const startJobTimer = () => {
-    void repository
-      .startTimer({
-        baseVersion: job.version,
-        clientMutationId: `timer-start-${job.id}-${Date.now()}`,
-        installationId: "local-simulator",
-        jobId: job.id,
-        occurredAt: new Date().toISOString(),
-      })
-      .then((timer) => {
-        setActiveTimer(timer);
-        setTimerMessage("Timer running");
-        void saveActiveTimerSnapshot(timer);
-      })
-      .catch((timerError: unknown) =>
-        setTimerMessage(
-          timerError instanceof Error
-            ? timerError.message
-            : "Timer could not start.",
-        ),
-      );
-  };
-  const stopJobTimer = () => {
-    if (!activeTimer) return;
-    void repository
-      .stopTimer({
-        baseVersion: job.version,
-        clientMutationId: `timer-stop-${job.id}-${Date.now()}`,
-        installationId: "local-simulator",
-        jobId: job.id,
-        occurredAt: new Date().toISOString(),
-        startedAt: activeTimer.startedAt,
-        timerId: activeTimer.id,
-      })
-      .then((stopped) => {
-        setActiveTimer(null);
-        setTimerMessage(`Timer stopped: ${stopped.roundedMinutes} minutes queued`);
-        void clearActiveTimerSnapshot();
-      })
-      .catch((timerError: unknown) =>
-        handleTimerStopFailure(timerError, activeTimer, setActiveTimer, setTimerMessage),
-      );
+  const activeForThisJob = isTimerForJob(job.id);
+  const timerRunningElsewhere = Boolean(activeTimer && !activeForThisJob);
+  const hasPaymentContext = Boolean(job.requestNumber && job.customerName);
+
+  const takePayment = async () => {
+    if (!hasPaymentContext || paymentOpeningRef.current) {
+      return;
+    }
+
+    paymentOpeningRef.current = true;
+    try {
+      const opened = await actions.takePayment({
+        customerName: job.customerName,
+        requestNumber: job.requestNumber,
+      });
+      if (!opened) {
+        Alert.alert(
+          "Payments app unavailable",
+          "Install or update the EGIT Payments app, then try again.",
+        );
+      }
+    } finally {
+      paymentOpeningRef.current = false;
+    }
   };
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            onRefresh={refreshJob}
+            refreshing={refreshing}
+            tintColor={colours.primary}
+          />
+        }
+      >
         <Text style={styles.eyebrow}>{job.requestNumber ?? "Calendar event"}</Text>
         <Text accessibilityRole="header" style={styles.title}>
           {job.title}
         </Text>
         {readOnly ? <Text style={styles.readOnly}>Outlook Read Only</Text> : null}
-        {activeTimer ? (
-          <TimerBar
-            jobTitle={job.title}
-            now={new Date()}
-            onStop={stopJobTimer}
-            timer={activeTimer}
-          />
-        ) : null}
         {timerMessage ? <Text style={styles.muted}>{timerMessage}</Text> : null}
+        {refreshMessage ? (
+          <Text accessibilityRole="alert" style={styles.refreshMessage}>
+            {refreshMessage}
+          </Text>
+        ) : null}
         <JobCard job={job} />
 
         <Section title="Customer and site">
@@ -147,11 +163,16 @@ export function JobDetail({ jobId }: JobDetailProps) {
           <Detail label="Email" value={job.contactEmail} />
         </Section>
 
+        <Section title="Request description">
+          <Text style={styles.description}>
+            {job.description || "No request description has been recorded yet."}
+          </Text>
+        </Section>
+
         <Section title="Service context">
           <Detail label="Status" value={job.status} />
           <Detail label="Booking" value={job.bookingType} />
           <Detail label="SLA" value={job.slaDueAt} />
-          <Detail label="Description" value={job.description} />
           <Detail label="Sync" value={job.syncState} />
         </Section>
 
@@ -163,9 +184,11 @@ export function JobDetail({ jobId }: JobDetailProps) {
           ) : null}
           <View style={styles.actionGrid}>
             <ActionButton
-              disabled={!job.permissions.canStartTimer}
-              label={activeTimer ? "Stop timer" : "Start timer"}
-              onPress={activeTimer ? stopJobTimer : startJobTimer}
+              disabled={!job.permissions.canStartTimer || timerRunningElsewhere}
+              label={activeForThisJob ? "Stop timer" : "Start timer"}
+              onPress={() => {
+                void (activeForThisJob ? stopActiveTimer() : startTimerForJob(job));
+              }}
             />
             <ActionButton
               disabled={!job.permissions.canComplete}
@@ -192,24 +215,16 @@ export function JobDetail({ jobId }: JobDetailProps) {
               label="Open Outlook event"
               onPress={() => void actions.openOutlookEvent(job.outlookWebLink)}
             />
+            {!hasPaymentContext ? (
+              <Text style={styles.muted}>
+                Payment needs a request number and customer name before it can
+                open EGIT Payments.
+              </Text>
+            ) : null}
             <ActionButton
-              disabled={!job.requestNumber || !job.customerName}
+              disabled={!hasPaymentContext}
               label="Take payment"
-              onPress={() => {
-                void actions
-                  .takePayment({
-                    customerName: job.customerName,
-                    requestNumber: job.requestNumber,
-                  })
-                  .then((opened) => {
-                    if (!opened) {
-                      Alert.alert(
-                        "Payments app unavailable",
-                        "Install or update the EGIT Payments app, then try again.",
-                      );
-                    }
-                  });
-              }}
+              onPress={takePayment}
             />
           </View>
         </Section>
@@ -220,19 +235,8 @@ export function JobDetail({ jobId }: JobDetailProps) {
           </Section>
         ) : null}
 
-        <Section title="Latest ticket notes">
-          {job.previousNotes.length ? (
-            job.previousNotes.map((note) => (
-              <View key={note.id} style={styles.note}>
-                <Text style={styles.noteMeta}>
-                  {note.visibility} · {note.authorName}
-                </Text>
-                <Text style={styles.noteBody}>{note.body}</Text>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.muted}>No ticket notes yet.</Text>
-          )}
+        <Section title="Job activity">
+          <JobActivity entries={job.previousNotes} />
         </Section>
 
         {job.permissions.readOnlyReason ? (
@@ -273,92 +277,18 @@ function ActionButton({
   onPress: () => void;
 }) {
   return (
-    <Pressable
+    <AppButton
       accessibilityLabel={label}
-      accessibilityRole="button"
       disabled={disabled}
+      label={label}
       onPress={onPress}
-      style={[styles.actionButton, disabled && styles.actionButtonDisabled]}
-    >
-      <Text style={styles.actionText}>{label}</Text>
-    </Pressable>
+    />
   );
 }
 
-const ACTIVE_TIMER_KEY = "command-centre.active-timer.v1";
-
-async function saveActiveTimerSnapshot(timer: ActiveTimer): Promise<void> {
-  const secureStore = await loadSecureStore();
-  await secureStore?.setItemAsync(ACTIVE_TIMER_KEY, JSON.stringify(timer));
-}
-
-async function restoreActiveTimerSnapshot(
-  jobId: string,
-): Promise<ActiveTimer | null> {
-  const secureStore = await loadSecureStore();
-  const raw = await secureStore?.getItemAsync(ACTIVE_TIMER_KEY);
-  if (!raw) return null;
-  const timer = JSON.parse(raw) as ActiveTimer;
-  return timer.jobId === jobId ? timer : null;
-}
-
-async function clearActiveTimerSnapshot(): Promise<void> {
-  const secureStore = await loadSecureStore();
-  await secureStore?.deleteItemAsync(ACTIVE_TIMER_KEY);
-}
-
-function handleTimerStopFailure(
-  timerError: unknown,
-  activeTimer: ActiveTimer,
-  setActiveTimer: (timer: ActiveTimer | null) => void,
-  setTimerMessage: (message: string) => void,
-): void {
-  const message =
-    timerError instanceof Error ? timerError.message : "Timer could not stop.";
-  if (message.includes("active timer does not match")) {
-    setActiveTimer(null);
-    setTimerMessage("Timer stopped: restored timer queued");
-    void clearActiveTimerSnapshot();
-    return;
-  }
-  setTimerMessage(message);
-}
-
-async function loadSecureStore(): Promise<
-  | {
-      deleteItemAsync(key: string): Promise<void>;
-      getItemAsync(key: string): Promise<string | null>;
-      setItemAsync(key: string, value: string): Promise<void>;
-    }
-  | null
-> {
-  try {
-    return await import("expo-secure-store");
-  } catch {
-    return null;
-  }
-}
-
 const styles = StyleSheet.create({
-  actionButton: {
-    backgroundColor: colours.primary,
-    borderRadius: 14,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  actionButtonDisabled: {
-    backgroundColor: colours.surfaceRaised,
-    opacity: 0.55,
-  },
   actionGrid: {
     gap: 10,
-  },
-  actionText: {
-    color: colours.textOnWarm,
-    fontSize: 15,
-    fontWeight: "800",
-    textAlign: "center",
   },
   content: {
     gap: 14,
@@ -368,6 +298,11 @@ const styles = StyleSheet.create({
     color: colours.muted,
     fontSize: 14,
     lineHeight: 21,
+  },
+  description: {
+    color: colours.text,
+    fontSize: 15,
+    lineHeight: 23,
   },
   detailLabel: {
     color: colours.text,
@@ -388,26 +323,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  note: {
-    backgroundColor: colours.surfaceRaised,
-    borderRadius: 14,
-    gap: 4,
-    padding: 12,
-  },
-  noteBody: {
-    color: colours.text,
-    fontSize: 14,
-  },
-  noteMeta: {
-    color: colours.primary,
-    fontSize: 12,
-    fontWeight: "800",
-    textTransform: "uppercase",
-  },
   readOnly: {
     color: colours.outlook,
     fontSize: 14,
     fontWeight: "900",
+  },
+  refreshMessage: {
+    backgroundColor: colours.surfaceRaised,
+    borderColor: colours.primary,
+    borderRadius: 12,
+    borderWidth: 1,
+    color: colours.text,
+    fontSize: 14,
+    lineHeight: 20,
+    padding: 12,
   },
   screen: {
     backgroundColor: colours.canvas,

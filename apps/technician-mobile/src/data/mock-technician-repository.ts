@@ -171,11 +171,15 @@ export class MockTechnicianRepository implements TechnicianRepository {
     job.previousNotes.push({
       id: `mock-worklog-${command.clientMutationId}`,
       localId: command.clientMutationId,
+      kind: "worklog",
       visibility: command.visibility,
       body: command.summary.trim(),
       authorName: this.requireStaff().displayName,
       createdAt: command.occurredAt,
       updatedAt: command.occurredAt,
+      durationMinutes: command.durationMinutes,
+      isBillable:
+        command.workType === "billable" || command.billable === true,
       syncState: "pending",
       canEdit: true,
       canDelete: true,
@@ -292,11 +296,17 @@ export class MockTechnicianRepository implements TechnicianRepository {
       job.previousNotes.push({
         id: `mock-completion-note-${command.clientMutationId}`,
         localId: command.clientMutationId,
+        kind:
+          command.visibility === "external"
+            ? "customer_reply"
+            : "internal_note",
         visibility: command.visibility,
         body: command.summary.trim(),
         authorName: this.requireStaff().displayName,
         createdAt: command.occurredAt,
         updatedAt: command.occurredAt,
+        durationMinutes: null,
+        isBillable: null,
         syncState: "pending",
         canEdit: true,
         canDelete: true,

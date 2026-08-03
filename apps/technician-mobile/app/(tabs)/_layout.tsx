@@ -55,6 +55,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="sync"
         options={{
+          href: null,
           tabBarAccessibilityLabel: "Sync tab",
           tabBarIcon: ({ color, size }) => (
             <MaterialCommunityIcons
@@ -71,17 +72,17 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          tabBarAccessibilityLabel: "Profile tab",
+          tabBarAccessibilityLabel: "Profile and Settings tab",
           tabBarIcon: ({ color, size }) => (
             <MaterialCommunityIcons
               accessibilityElementsHidden
               color={color}
               importantForAccessibility="no-hide-descendants"
-              name="account-outline"
+              name="account-cog-outline"
               size={size}
             />
           ),
-          title: "Profile",
+          title: "Profile & Settings",
         }}
       />
     </Tabs>

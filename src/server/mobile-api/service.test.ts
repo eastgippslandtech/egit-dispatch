@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listDispatchTestSyncEvents } from "@/server/dispatch/test-sync";
+import {
+  listDispatchTestSyncEvents,
+  recordDispatchTestSyncEvent,
+} from "@/server/dispatch/test-sync";
 import {
   completeMobileJob,
   listMobileJobs,
@@ -8,6 +11,8 @@ import {
   registerMobilePushToken,
   rileyMobileAuth,
   saveMobileWorklog,
+  startMobileTimer,
+  stopMobileTimer,
 } from "./service";
 import type { DatabaseJobRow, DatabaseStaffRow, MobileDatabase } from "./database";
 import type { Appointment } from "@/server/dispatch/types";
@@ -20,10 +25,12 @@ vi.mock("@/server/dispatch/test-sync", async (importOriginal) => {
   return {
     ...actual,
     listDispatchTestSyncEvents: vi.fn(),
+    recordDispatchTestSyncEvent: vi.fn(),
   };
 });
 
 const listDispatchTestSyncEventsMock = vi.mocked(listDispatchTestSyncEvents);
+const recordDispatchTestSyncEventMock = vi.mocked(recordDispatchTestSyncEvent);
 
 const dbStaff: DatabaseStaffRow = {
   active: true,
@@ -39,9 +46,11 @@ const dbStaff: DatabaseStaffRow = {
   zohoEmail: "riley@egit.com.au",
 };
 
+const dbJobId = "00000000-0000-4000-8000-000000100900";
+
 const dbJob: DatabaseJobRow = {
   createdAt: "2026-07-14T00:00:00.000Z",
-  id: "link-100900",
+  id: dbJobId,
   lastSyncError: null,
   lastSyncStatus: "linked",
   notes: [
@@ -134,7 +143,14 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
       return {
         recordedAt: "2026-07-14T02:00:00.000Z",
         resourceId: "log-mobile-note-1",
-        resourceVersion: "db-link-100900-log-mobile-note-1",
+        resourceVersion: `db-${dbJobId}-log-mobile-note-1`,
+      };
+    },
+    async saveTimerEvent() {
+      return {
+        recordedAt: "2026-07-14T01:30:00.000Z",
+        resourceId: "timer-log-1",
+        resourceVersion: `db-${dbJobId}-timer-log-1`,
       };
     },
     ...overrides,
@@ -144,6 +160,7 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
 describe("mobile API service", () => {
   beforeEach(() => {
     listDispatchTestSyncEventsMock.mockResolvedValue([]);
+    recordDispatchTestSyncEventMock.mockReset();
   });
 
   it("returns only jobs for the authenticated staff profile", async () => {
@@ -208,7 +225,7 @@ describe("mobile API service", () => {
       customerName: "Gippsland Legal",
       description:
         "Real Command Centre database request description for VPN outage.",
-      id: "link-100900",
+      id: dbJobId,
       requestNumber: "REQ-100900",
       source: "msp_central",
       title: "VPN outage follow-up",
@@ -283,7 +300,7 @@ describe("mobile API service", () => {
 
     expect(response.jobs).toHaveLength(1);
     expect(response.jobs[0]).toMatchObject({
-      id: "link-100900",
+      id: dbJobId,
       outlookEventId: "event-outlook-1",
       source: "msp_central",
     });
@@ -405,11 +422,115 @@ describe("mobile API service", () => {
     );
   });
 
+  it("starts timers for dispatcher test-sync jobs when the database is configured", async () => {
+    listDispatchTestSyncEventsMock.mockResolvedValueOnce([
+      {
+        appointmentId: "mock-100284-test",
+        bookingType: "Onsite",
+        createdAt: "2026-07-14T01:00:00.000Z",
+        date: "2026-07-14",
+        end: "14:00",
+        eventType: "scheduled",
+        id: "event-100284",
+        payload: {},
+        priority: "Critical",
+        requestId: "100284",
+        start: "12:45",
+        technicianId: "tech-riley",
+      },
+    ]);
+
+    const started = await startMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion:
+          "test-sync-mock-100284-test-2026-07-14-12:45-14:00",
+        clientMutationId: "timer-start-test-sync-1",
+        installationId: "phone-1",
+        jobId: "mock-100284-test",
+        occurredAt: "2026-07-14T02:30:00.000Z",
+      },
+      database: createDatabase({
+        async findJobForStaff() {
+          return null;
+        },
+      }),
+      jobId: "mock-100284-test",
+    });
+
+    expect(started.timer).toMatchObject({
+      id: "timer-timer-start-test-sync-1",
+      jobId: "mock-100284-test",
+      startedAt: "2026-07-14T02:30:00.000Z",
+      technicianId: "tech-riley",
+    });
+    expect(recordDispatchTestSyncEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appointmentId: "mock-100284-test",
+        eventType: "timer_started",
+        requestId: "100284",
+        technicianId: "tech-riley",
+        payload: {
+          timer: expect.objectContaining({
+            id: "timer-timer-start-test-sync-1",
+            startedAt: "2026-07-14T02:30:00.000Z",
+          }),
+        },
+      }),
+      "riley@egit.com.au",
+    );
+  });
+
+  it("does not run a UUID database lookup before starting a test-sync timer", async () => {
+    listDispatchTestSyncEventsMock.mockResolvedValueOnce([
+      {
+        appointmentId: "mock-100284-test",
+        bookingType: "Onsite",
+        createdAt: "2026-07-14T01:00:00.000Z",
+        date: "2026-07-14",
+        end: "14:00",
+        eventType: "scheduled",
+        id: "event-100284",
+        payload: {},
+        priority: "Critical",
+        requestId: "100284",
+        start: "12:45",
+        technicianId: "tech-riley",
+      },
+    ]);
+    const findJobForStaff = vi.fn(async () => {
+      throw new Error("invalid input syntax for type uuid: mock-100284-test");
+    });
+
+    await expect(
+      startMobileTimer({
+        auth: rileyMobileAuth,
+        command: {
+          baseVersion:
+            "test-sync-mock-100284-test-2026-07-14-12:45-14:00",
+          clientMutationId: "timer-start-test-sync-uuid-guard",
+          installationId: "phone-1",
+          jobId: "mock-100284-test",
+          occurredAt: "2026-07-14T02:30:00.000Z",
+        },
+        database: createDatabase({ findJobForStaff }),
+        jobId: "mock-100284-test",
+      }),
+    ).resolves.toMatchObject({
+      timer: {
+        id: "timer-timer-start-test-sync-uuid-guard",
+        jobId: "mock-100284-test",
+        technicianId: "tech-riley",
+      },
+    });
+    expect(findJobForStaff).not.toHaveBeenCalled();
+  });
+
   it("returns a single real database job with latest notes and request description", async () => {
     const response = await getMobileJob({
       auth: rileyMobileAuth,
       database: createDatabase(),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(response.job.description).toBe(
@@ -419,6 +540,120 @@ describe("mobile API service", () => {
       authorName: "Command Centre",
       body: "Customer confirmed VPN works after reboot.",
       visibility: "external",
+    });
+  });
+
+  it("enriches a database job with the complete live Helpdesk activity", async () => {
+    const getRequestContext = vi.fn(async () => ({
+      customerResponses: [
+        {
+          author: "Alex Morgan",
+          body: "VPN still disconnects after ten minutes.",
+          createdAt: "2026-07-14T02:00:00.000Z",
+          id: "customer-reply-1",
+        },
+      ],
+      internalNotes: [
+        {
+          author: "Simeon",
+          body: "Replacement firewall has been prepared.",
+          createdAt: "2026-07-14T03:00:00.000Z",
+          id: "internal-note-1",
+        },
+      ],
+      request: {
+        ...getDispatchDesignMockData().requests[0],
+        contact: "+61 400 111 222",
+        customer: "Current Customer",
+        dueAt: "2026-07-14T06:00:00.000Z",
+        id: "100900",
+        notes: "Current detailed job description.",
+        priority: "Critical" as const,
+        requester: "Alex Morgan",
+        requestNumber: "REQ-100900",
+        site: "Current Site",
+        siteAddress: "22 Main Street, Bairnsdale VIC 3875",
+        siteName: "Current Site",
+        status: "Scheduled" as const,
+        subject: "Current VPN outage subject",
+        updatedAt: "2026-07-14T04:30:00.000Z",
+      },
+      worklogs: [
+        {
+          author: "Riley",
+          body: "Initial remote diagnosis.",
+          createdAt: "2026-07-14T01:00:00.000Z",
+          durationMinutes: 20,
+          id: "worklog-old",
+          isBillable: false,
+        },
+        {
+          author: "Riley",
+          body: "Reconfigured the VPN policy.",
+          createdAt: "2026-07-14T04:00:00.000Z",
+          durationMinutes: 45,
+          id: "worklog-latest",
+          isBillable: true,
+        },
+      ],
+    }));
+
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      jobId: dbJobId,
+      mspClient: { getRequestContext } as never,
+    });
+
+    expect(getRequestContext).toHaveBeenCalledWith("100900");
+    expect(response.job).toMatchObject({
+      activityWarning: null,
+      customerName: "Current Customer",
+      description: "Current detailed job description.",
+      id: dbJobId,
+      priority: "Critical",
+      requestNumber: "REQ-100900",
+      startAt: "2026-07-14T10:00:00.000Z",
+      technician: { id: "staff-db-riley" },
+      title: "Current VPN outage subject",
+    });
+    expect(response.job.previousNotes.map(({ kind }) => kind)).toEqual([
+      "worklog",
+      "internal_note",
+      "customer_reply",
+      "worklog",
+    ]);
+    expect(response.job.previousNotes[0]).toMatchObject({
+      body: "Reconfigured the VPN policy.",
+      durationMinutes: 45,
+      isBillable: true,
+      visibility: "external",
+    });
+    expect(response.job.previousNotes[3]).toMatchObject({
+      durationMinutes: 20,
+      isBillable: false,
+      visibility: "internal",
+    });
+  });
+
+  it("keeps the database snapshot when live Helpdesk context is unavailable", async () => {
+    const response = await getMobileJob({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      jobId: dbJobId,
+      mspClient: {
+        getRequestContext: vi.fn(async () => {
+          throw new Error("MSP Central unavailable");
+        }),
+      } as never,
+    });
+
+    expect(response.job).toMatchObject({
+      activityWarning:
+        "Latest Helpdesk activity could not be loaded. Showing the saved Command Centre copy.",
+      description:
+        "Real Command Centre database request description for VPN outage.",
+      id: dbJobId,
     });
   });
 
@@ -470,13 +705,13 @@ describe("mobile API service", () => {
     const saved = vi.fn(async () => ({
       recordedAt: "2026-07-14T02:00:00.000Z",
       resourceId: "log-mobile-note-1",
-      resourceVersion: "db-link-100900-log-mobile-note-1",
+      resourceVersion: `db-${dbJobId}-log-mobile-note-1`,
     }));
 
     const response = await saveMobileWorklog({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         clientMutationId: "note-1",
         disposition: "return_to_queue",
         durationMinutes: 30,
@@ -491,7 +726,7 @@ describe("mobile API service", () => {
         workType: "billable",
       },
       database: createDatabase({ saveWorklog: saved }),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(saved).toHaveBeenCalledWith(
@@ -536,13 +771,13 @@ describe("mobile API service", () => {
     const saved = vi.fn(async () => ({
       recordedAt: "2026-07-14T02:05:00.000Z",
       resourceId: "log-mobile-complete-1",
-      resourceVersion: "db-link-100900-log-mobile-complete-1",
+      resourceVersion: `db-${dbJobId}-log-mobile-complete-1`,
     }));
 
     const response = await completeMobileJob({
       auth: rileyMobileAuth,
       command: {
-        baseVersion: "db-link-100900-2026-07-14T01:20:00.000Z",
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
         billable: false,
         clientMutationId: "complete-1",
         durationMinutes: 45,
@@ -554,7 +789,7 @@ describe("mobile API service", () => {
         workType: "non_billable",
       },
       database: createDatabase({ saveWorklog: saved }),
-      jobId: "link-100900",
+      jobId: dbJobId,
     });
 
     expect(saved).toHaveBeenCalledWith(
@@ -576,5 +811,82 @@ describe("mobile API service", () => {
       resourceId: "log-mobile-complete-1",
       status: "pending",
     });
+  });
+
+  it("starts and stops native timers for real database jobs", async () => {
+    const saveTimerEvent = vi.fn(async () => ({
+      recordedAt: "2026-07-14T01:30:00.000Z",
+      resourceId: "timer-log-1",
+      resourceVersion: `db-${dbJobId}-timer-log-1`,
+    }));
+    const started = await startMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
+        clientMutationId: "timer-start-1",
+        installationId: "phone-1",
+        jobId: dbJobId,
+        occurredAt: "2026-07-14T01:30:00.000Z",
+      },
+      database: createDatabase({
+        saveTimerEvent,
+      } as unknown as Partial<MobileDatabase>),
+      jobId: dbJobId,
+    });
+
+    expect(started.timer).toMatchObject({
+      id: "timer-timer-start-1",
+      jobId: dbJobId,
+      startedAt: "2026-07-14T01:30:00.000Z",
+      technicianId: "staff-db-riley",
+    });
+    expect(saveTimerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "mobile_timer_start",
+        clientMutationId: "timer-start-1",
+        job: dbJob,
+        timer: expect.objectContaining({
+          id: "timer-timer-start-1",
+          startedAt: "2026-07-14T01:30:00.000Z",
+        }),
+      }),
+    );
+
+    const stopped = await stopMobileTimer({
+      auth: rileyMobileAuth,
+      command: {
+        baseVersion: `db-${dbJobId}-2026-07-14T01:20:00.000Z`,
+        clientMutationId: "timer-stop-1",
+        installationId: "phone-1",
+        jobId: dbJobId,
+        occurredAt: "2026-07-14T01:47:00.000Z",
+        startedAt: "2026-07-14T01:30:00.000Z",
+        timerId: "timer-timer-start-1",
+      },
+      database: createDatabase({
+        saveTimerEvent,
+      } as unknown as Partial<MobileDatabase>),
+      jobId: dbJobId,
+    });
+
+    expect(stopped.timer).toMatchObject({
+      actualElapsedMinutes: 17,
+      id: "timer-timer-start-1",
+      jobId: dbJobId,
+      roundedMinutes: 30,
+      stoppedAt: "2026-07-14T01:47:00.000Z",
+      technicianId: "staff-db-riley",
+    });
+    expect(saveTimerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "mobile_timer_stop",
+        clientMutationId: "timer-stop-1",
+        job: dbJob,
+        timer: expect.objectContaining({
+          id: "timer-timer-start-1",
+          stoppedAt: "2026-07-14T01:47:00.000Z",
+        }),
+      }),
+    );
   });
 });

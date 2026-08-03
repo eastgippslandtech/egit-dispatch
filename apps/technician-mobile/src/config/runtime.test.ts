@@ -32,4 +32,16 @@ describe("mobile runtime config", () => {
       ).authMode,
     ).toBe("mock");
   });
+
+  it("keeps the Payments app URL configurable", () => {
+    expect(
+      getMobileRuntimeConfig(
+        {
+          EXPO_PUBLIC_PAYMENTS_APP_URL:
+            "egitpayments://take-payment?source=command-centre",
+        },
+        { isDevelopment: false },
+      ).paymentsAppUrl,
+    ).toBe("egitpayments://take-payment?source=command-centre");
+  });
 });

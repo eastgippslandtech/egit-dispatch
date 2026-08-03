@@ -43,6 +43,106 @@ describe("offline technician repository", () => {
     ]);
   });
 
+  it("preserves the complete enriched activity timeline for offline job detail", async () => {
+    const enrichedJob = {
+      ...firewallJob,
+      description: "Full Helpdesk request description.",
+      previousNotes: [
+        {
+          authorName: "Riley",
+          body: "Reconfigured the VPN policy.",
+          canDelete: false,
+          canEdit: false,
+          createdAt: "2026-07-14T04:00:00.000Z",
+          durationMinutes: 45,
+          id: "worklog-1",
+          isBillable: true,
+          kind: "worklog" as const,
+          localId: null,
+          syncState: "synced" as const,
+          updatedAt: "2026-07-14T04:00:00.000Z",
+          visibility: "external" as const,
+        },
+        {
+          authorName: "Simeon",
+          body: "Replacement firewall prepared.",
+          canDelete: false,
+          canEdit: false,
+          createdAt: "2026-07-14T03:00:00.000Z",
+          durationMinutes: null,
+          id: "internal-note-1",
+          isBillable: null,
+          kind: "internal_note" as const,
+          localId: null,
+          syncState: "synced" as const,
+          updatedAt: "2026-07-14T03:00:00.000Z",
+          visibility: "internal" as const,
+        },
+        {
+          authorName: "Alex Morgan",
+          body: "VPN still disconnects.",
+          canDelete: false,
+          canEdit: false,
+          createdAt: "2026-07-14T02:00:00.000Z",
+          durationMinutes: null,
+          id: "customer-reply-1",
+          isBillable: null,
+          kind: "customer_reply" as const,
+          localId: null,
+          syncState: "synced" as const,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+          visibility: "external" as const,
+        },
+      ],
+    };
+    let online = true;
+    const repository = createOfflineTechnicianRepository({
+      database,
+      queue,
+      remote: {
+        getCurrentStaff: async () => firewallJob.technician,
+        getJob: async () => {
+          if (!online) throw new Error("offline");
+          return enrichedJob;
+        },
+        listSchedule: async () => [firewallJob],
+      },
+    });
+
+    expect(await repository.getJob(firewallJob.id)).toEqual(enrichedJob);
+    online = false;
+
+    const offlineJob = await repository.getJob(firewallJob.id);
+
+    expect(offlineJob.description).toBe("Full Helpdesk request description.");
+    expect(offlineJob.previousNotes).toEqual(enrichedJob.previousNotes);
+    expect(offlineJob.activityWarning).toBe(
+      "Could not refresh job activity. Showing the saved copy.",
+    );
+  });
+
+  it("does not show out-of-range remote jobs for the selected day", async () => {
+    const repository = createOfflineTechnicianRepository({
+      database,
+      queue,
+      remote: {
+        getCurrentStaff: async () => firewallJob.technician,
+        getJob: async () => firewallJob,
+        listSchedule: async () => [
+          MOBILE_JOB_FIXTURES.find((job) => job.id === "firewall-riley"),
+          MOBILE_JOB_FIXTURES.find((job) => job.id === "remote-support-riley"),
+        ].filter((job): job is NonNullable<typeof job> => Boolean(job)),
+      },
+    });
+
+    const jobs = await repository.listSchedule({
+      from: "2026-07-09",
+      to: "2026-07-09",
+    });
+
+    expect(jobs.map((job) => job.id)).toEqual(["firewall-riley"]);
+  });
+
   it("sends an idempotency key and marks one successful receipt", async () => {
     const calls: { headers: Record<string, string> }[] = [];
     const api = createApiClient({

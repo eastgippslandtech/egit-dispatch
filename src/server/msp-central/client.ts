@@ -343,26 +343,9 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         sourceSystem: "msp-central",
       })[0];
 
-      const listInput = JSON.stringify({
-        list_info: {
-          row_count: 100,
-          sort_field: "created_time",
-          sort_order: "desc",
-          start_index: 1,
-        },
-      });
-      const notesUrl = new URL(
-        `${apiRoot}/requests/${encodeURIComponent(requestId)}/notes`,
-      );
-      notesUrl.searchParams.set("input_data", listInput);
-      const worklogsUrl = new URL(
-        `${apiRoot}/requests/${encodeURIComponent(requestId)}/worklogs`,
-      );
-      worklogsUrl.searchParams.set("input_data", listInput);
-
       const [notesResult, worklogsResult] = await Promise.allSettled([
-        getJson<MspCentralRequestNoteListResponse>(notesUrl.toString()),
-        getJson<MspCentralRequestWorklogListResponse>(worklogsUrl.toString()),
+        fetchRequestNotes(requestId),
+        fetchRequestWorklogs(requestId),
       ]);
 
       if (notesResult.status === "rejected") {
@@ -380,7 +363,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
       return {
         ...(notesResult.status === "fulfilled"
-          ? mapMspCentralRequestNotes(notesResult.value.request_notes)
+          ? mapMspCentralRequestNotes(notesResult.value)
           : { customerResponses: [], internalNotes: [] }),
         notesWarning:
           notesResult.status === "rejected"
@@ -389,7 +372,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         request,
         worklogs:
           worklogsResult.status === "fulfilled"
-            ? mapMspCentralRequestWorklogs(worklogsResult.value.worklogs)
+            ? mapMspCentralRequestWorklogs(worklogsResult.value)
             : [],
         worklogsWarning:
           worklogsResult.status === "rejected"
@@ -551,6 +534,88 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
   async function getJson<T>(url: string): Promise<T> {
     return requestJson<T>(url, { method: "GET" });
+  }
+
+  async function fetchRequestNotes(requestId: string) {
+    return fetchRequestEntryPages({
+      path: "notes",
+      readEntries: (payload: MspCentralRequestNoteListResponse) =>
+        payload.request_notes ?? [],
+      requestId,
+    });
+  }
+
+  async function fetchRequestWorklogs(requestId: string) {
+    return fetchRequestEntryPages({
+      path: "worklogs",
+      readEntries: (payload: MspCentralRequestWorklogListResponse) =>
+        payload.worklogs ?? [],
+      requestId,
+    });
+  }
+
+  async function fetchRequestEntryPages<
+    TPayload extends {
+      list_info?: MspCentralRequestNoteListResponse["list_info"];
+    },
+    TEntry,
+  >({
+    path,
+    readEntries,
+    requestId,
+  }: {
+    path: "notes" | "worklogs";
+    readEntries: (payload: TPayload) => TEntry[];
+    requestId: string;
+  }): Promise<TEntry[]> {
+    const entries: TEntry[] = [];
+    let startIndex = 1;
+
+    for (let page = 0; page < MSP_REQUEST_MAX_PAGES; page += 1) {
+      const url = new URL(
+        `${apiRoot}/requests/${encodeURIComponent(requestId)}/${path}`,
+      );
+      url.searchParams.set(
+        "input_data",
+        JSON.stringify({
+          list_info: {
+            row_count: MSP_REQUEST_PAGE_SIZE,
+            sort_field: "created_time",
+            sort_order: "desc",
+            start_index: startIndex,
+          },
+        }),
+      );
+      const payload = await getJson<TPayload>(url.toString());
+      const pageEntries = readEntries(payload);
+      entries.push(...pageEntries);
+
+      if (
+        !mspHasMoreRows(payload.list_info?.has_more_rows) ||
+        pageEntries.length === 0
+      ) {
+        break;
+      }
+
+      const returnedStartIndex = mspListNumber(
+        payload.list_info?.start_index,
+        startIndex,
+      );
+      const returnedRowCount = mspListNumber(
+        payload.list_info?.row_count,
+        pageEntries.length,
+      );
+      const nextStartIndex =
+        returnedStartIndex + Math.max(returnedRowCount, pageEntries.length, 1);
+      if (nextStartIndex <= startIndex) {
+        throw new MspCentralConfigurationError(
+          `MSP Central ${path} pagination did not advance.`,
+        );
+      }
+      startIndex = nextStartIndex;
+    }
+
+    return entries;
   }
 
   async function fetchRawRequests(

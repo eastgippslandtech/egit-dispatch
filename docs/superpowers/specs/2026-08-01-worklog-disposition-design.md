@@ -1,5 +1,4 @@
 # Work Log Disposition Design
-
 ## Goal
 
 Prevent scheduled Helpdesk jobs from being left in limbo after a Work Log is submitted. The dispatcher web app and native technician app must require a clear ticket outcome whenever the ticket is not completed.
@@ -91,4 +90,3 @@ Coverage must include:
 - browser dialog conditionally requires the correct fields
 - native app presents and submits all four outcomes
 - offline native retry preserves the chosen outcome and idempotency key
-

@@ -11,6 +11,10 @@ export type MobileJobStatus =
   | "Cancelled / No Access";
 export type SyncState = "synced" | "pending" | "failed" | "conflict";
 export type NoteVisibility = "internal" | "external";
+export type MobileJobActivityKind =
+  | "customer_reply"
+  | "internal_note"
+  | "worklog";
 export type EvidenceKind = "photo" | "document";
 export type WorkLogType = "billable" | "non_billable" | "internal";
 export type WorklogDisposition =
@@ -77,11 +81,14 @@ export interface MobileTravelContext {
 export interface MobileJobNote {
   id: string;
   localId: string | null;
+  kind: MobileJobActivityKind;
   visibility: NoteVisibility;
   body: string;
   authorName: string;
   createdAt: string;
   updatedAt: string;
+  durationMinutes: number | null;
+  isBillable: boolean | null;
   syncState: SyncState;
   canEdit: boolean;
   canDelete: boolean;
@@ -131,6 +138,7 @@ export interface MobileJobPermissions {
 
 export interface MobileJob {
   id: string;
+  activityWarning: string | null;
   source: MobileJobSource;
   requestNumber: string | null;
   outlookEventId: string | null;

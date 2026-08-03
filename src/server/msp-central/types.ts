@@ -88,7 +88,15 @@ export type MspCentralRawRequestNote = {
   show_to_requester?: boolean | null;
 };
 
+export type MspCentralListInfo = {
+  has_more_rows?: boolean | string | null;
+  row_count?: number | string | null;
+  start_index?: number | string | null;
+  total_count?: number | string | null;
+};
+
 export type MspCentralRequestNoteListResponse = {
+  list_info?: MspCentralListInfo | null;
   request_notes?: MspCentralRawRequestNote[];
 };
 
@@ -117,6 +125,7 @@ export type MspCentralRawWorklog = {
 };
 
 export type MspCentralRequestWorklogListResponse = {
+  list_info?: MspCentralListInfo | null;
   worklogs?: MspCentralRawWorklog[];
 };
 

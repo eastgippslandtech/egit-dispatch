@@ -3,9 +3,7 @@ export async function wakeIntegrationProcessor(operationId?: string) {
     process.env.APP_BASE_URL?.trim() ||
     process.env.AUTH_URL?.trim() ||
     process.env.NEXTAUTH_URL?.trim();
-  const secret =
-    process.env.INTEGRATION_CRON_SECRET?.trim() ||
-    process.env.CRON_SECRET?.trim();
+  const secret = process.env.INTEGRATION_CRON_SECRET?.trim();
 
   if (!baseUrl || !secret) return;
 

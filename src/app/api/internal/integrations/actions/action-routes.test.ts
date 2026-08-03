@@ -60,6 +60,17 @@ describe("integration operator action routes", () => {
     expect(wake).toHaveBeenCalledWith("operation-1");
   });
 
+  it("requires an explicit confirmed-absent instruction before clearing ambiguity", async () => {
+    const response = await retry(request("retry", { confirmAbsent: true }), context());
+
+    expect(response.status).toBe(202);
+    expect(retryOperationWithAudit).toHaveBeenCalledWith({
+      actorEmail: "simeon@egit.com.au",
+      confirmedAbsent: true,
+      operationId: "operation-1",
+    });
+  });
+
   it("returns conflict when retry is not allowed", async () => {
     retryOperationWithAudit.mockRejectedValue(new Error("not ready for manual retry"));
     const response = await retry(request("retry"), context());
@@ -106,10 +117,14 @@ describe("integration operator action routes", () => {
   });
 });
 
-function request(action: string) {
+function request(action: string, body?: Record<string, unknown>) {
   return new Request(
     `https://command.egit.com.au/api/internal/integrations/actions/operation-1/${action}`,
-    { method: "POST" },
+    {
+      body: body ? JSON.stringify(body) : undefined,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      method: "POST",
+    },
   );
 }
 

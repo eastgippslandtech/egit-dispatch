@@ -562,7 +562,11 @@ class FakeIntegrationSql implements IntegrationSql {
       return operation ? [structuredClone(operation)] : [];
     }
     if (name === "retryOperation") {
-      const [operationId, changedAt] = values as [string, string];
+      const [operationId, changedAt, confirmedAbsent] = values as [
+        string,
+        string,
+        boolean,
+      ];
       const operation = this.operations.get(operationId);
       if (!operation || operation.state !== "review_required") return [];
       operation.state = "retrying";
@@ -573,6 +577,7 @@ class FakeIntegrationSql implements IntegrationSql {
         if (step.operationId === operationId && step.state === "review_required") {
           step.state = "retrying";
           step.nextAttemptAt = changedAt;
+          if (confirmedAbsent) step.requiresReconciliation = false;
           step.updatedAt = changedAt;
         }
       }

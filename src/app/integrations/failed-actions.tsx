@@ -28,7 +28,7 @@ export function FailedActions({
   actions: FailedActionSummary[];
   busyOperationId?: string;
   onCancel: (operationId: string) => void;
-  onRetry: (operationId: string) => void;
+  onRetry: (operationId: string, confirmedAbsent?: boolean) => void;
 }) {
   return (
     <section aria-labelledby="failed-actions-title">
@@ -76,9 +76,24 @@ export function FailedActions({
                         disabled={busy}
                         title="Retry this action after reviewing the provider error"
                         type="button"
-                        onClick={() => onRetry(action.id)}
+                        onClick={() => onRetry(action.id, false)}
                       >
                         <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> Retry
+                      </button>
+                    ) : null}
+                    {action.state === "review_required" ? (
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/25 bg-amber-400/10 px-2.5 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-50"
+                        disabled={busy}
+                        title="Use only after confirming the provider has no matching record"
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("Only continue if you verified in the provider that no matching record exists. Retry this write?")) {
+                            onRetry(action.id, true);
+                          }
+                        }}
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> Confirm absent and retry
                       </button>
                     ) : null}
                     {action.state === "queued" || action.state === "review_required" || action.state === "retrying" ? (

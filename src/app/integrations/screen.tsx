@@ -88,19 +88,34 @@ export function IntegrationsConsole() {
     };
   }, [refresh]);
 
-  async function runAction(operationId: string, action: "cancel" | "retry") {
+  async function runAction(
+    operationId: string,
+    action: "cancel" | "retry",
+    confirmedAbsent = false,
+  ) {
     setBusyOperationId(operationId);
     setNotice(undefined);
     try {
       const response = await fetch(
         `/api/internal/integrations/actions/${encodeURIComponent(operationId)}/${action}`,
-        { method: "POST", cache: "no-store" },
+        {
+          body: action === "retry" ? JSON.stringify({ confirmAbsent: confirmedAbsent }) : undefined,
+          cache: "no-store",
+          headers: action === "retry" ? { "Content-Type": "application/json" } : undefined,
+          method: "POST",
+        },
       );
       const body = (await response.json().catch(() => null)) as { error?: string } | null;
       if ([401, 403].includes(response.status)) throw new Error("Your session no longer has access to integration recovery.");
       if (!response.ok) throw new Error(body?.error ?? `The action could not be ${action === "retry" ? "retried" : "cancelled"}.`);
       if (!mounted.current) return;
-      setNotice(action === "retry" ? "Retry queued. Syncing will continue in the background." : "Action cancelled.");
+      setNotice(
+        action === "retry"
+          ? confirmedAbsent
+            ? "Confirmed-absent retry queued. Syncing will continue in the background."
+            : "Retry queued. Syncing will continue in the background."
+          : "Action cancelled.",
+      );
       await refresh();
     } catch (actionError) {
       if (!mounted.current) return;
@@ -143,7 +158,7 @@ export function IntegrationsConsole() {
         {snapshot ? (
           <>
             <IntegrationHealth connectors={snapshot.connectors} counts={snapshot.counts} />
-            <FailedActions actions={snapshot.actions} busyOperationId={busyOperationId} onCancel={(id) => void runAction(id, "cancel")} onRetry={(id) => void runAction(id, "retry")} />
+            <FailedActions actions={snapshot.actions} busyOperationId={busyOperationId} onCancel={(id) => void runAction(id, "cancel")} onRetry={(id, confirmedAbsent) => void runAction(id, "retry", confirmedAbsent)} />
             <RecoveryAuditSummary actions={snapshot.actions} />
           </>
         ) : null}

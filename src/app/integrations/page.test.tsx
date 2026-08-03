@@ -101,6 +101,9 @@ describe("FailedActions", () => {
     );
 
     expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: "Confirm absent and retry" }),
+    ).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(3);
     expect(screen.getAllByRole("link", { name: "Open request" })[0]).toHaveAttribute(
       "href",
@@ -124,6 +127,25 @@ describe("FailedActions", () => {
     expect(onCancel).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledWith("operation-review");
+  });
+
+  it("requires explicit confirmation before retrying an ambiguous absent write", () => {
+    const onRetry = vi.fn();
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    render(
+      <FailedActions
+        actions={[action("operation-review", "review_required")]}
+        busyOperationId={undefined}
+        onCancel={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Confirm absent and retry" });
+    fireEvent.click(button);
+    expect(onRetry).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(onRetry).toHaveBeenCalledWith("operation-review", true);
   });
 });
 

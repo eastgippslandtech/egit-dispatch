@@ -42,4 +42,16 @@ describe("integration processor wake-up", () => {
       }),
     );
   });
+
+  it("does not fall back to the legacy cron secret", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("APP_BASE_URL", "https://command.egit.com.au");
+    vi.stubEnv("INTEGRATION_CRON_SECRET", "");
+    vi.stubEnv("CRON_SECRET", "legacy-secret");
+
+    await wakeIntegrationProcessor("operation-1");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

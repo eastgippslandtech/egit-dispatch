@@ -56,7 +56,7 @@ For an ambiguous Work Log:
 1. Open the affected request in MSP Central.
 2. Compare technician, rounded duration, start/end time, billable type, and normalized content.
 3. If the Work Log exists, do not submit another copy. Record/reconcile the provider result through the supported recovery path.
-4. If absence is proven and the underlying fault is corrected, use Retry once.
+4. If absence is proven and the underlying fault is corrected, use **Confirm absent and retry** once.
 5. If neither outcome can be proven, leave it in review and escalate to an application owner.
 
 An expired worker lease also becomes `Review required`; it is never automatically replayed because the provider may have accepted the interrupted write.
@@ -65,7 +65,8 @@ An expired worker lease also becomes `Review required`; it is never automaticall
 
 Use the controls on `https://command.egit.com.au/integrations`.
 
-- **Retry** is available only for review-required work. Correct the configuration or data issue first. The same idempotency identity and reconciliation requirement are retained.
+- **Retry** is available only for review-required work. Correct the configuration or data issue first. The same idempotency identity and reconciliation requirement are retained, so ambiguous writes are reconciled rather than replayed.
+- **Confirm absent and retry** is the only action that clears an ambiguous-write reconciliation requirement. Use it only after checking the provider and proving that no matching record exists.
 - **Cancel** is available only when no step has an active lease and the operation is not already synced. Cancellation does not undo a provider write that already succeeded.
 - Both actions record the signed-in operator in the audit timeline.
 
@@ -144,7 +145,7 @@ Use emergency disable when a provider is receiving duplicates, authentication is
 
 1. Stop staff from initiating the affected action and record the incident time.
 2. Unschedule `command-centre-integration-recovery` in the Supabase SQL editor using the job name; do not delete operation/audit rows.
-3. Remove or disable the immediate worker secret in the production environment if calls must stop completely, then redeploy.
+3. Remove or disable `INTEGRATION_CRON_SECRET` in the production environment if integration recovery calls must stop completely, then redeploy. The integration worker does not fall back to the legacy `CRON_SECRET`.
 4. Inspect all `syncing`, `retrying`, and `review_required` operations. Treat active/expired leases as ambiguous until provider state is checked.
 5. Correct code, mappings, credentials, or provider configuration.
 6. Verify automated tests and a read-only health check.
@@ -166,12 +167,12 @@ Use designated non-customer test requests only. Record request IDs and expected 
 - [ ] One merge removes the duplicate child and refreshes both child and parent views.
 - [ ] A forced safe retry reaches Synced without repeating the already-successful provider step.
 - [ ] A forced ambiguous Work Log reaches Review required and is not automatically replayed.
-- [ ] Retry and Cancel are permission-gated and add audit events.
+- [ ] Retry, Confirm absent and retry, and Cancel are permission-gated and add audit events.
 - [ ] Dispatch closes accepted dialogs immediately, shows Syncing, then Synced or Review required.
 - [ ] Browser verification at 1920x1080 finds no page-level overflow or unreadable overlap.
 
 ## Release evidence
 
-Automated release evidence must include fresh results for `pnpm test`, `pnpm lint`, and `pnpm build`. Automated tests are deterministic and perform no live provider or production database writes.
+Automated release evidence must include fresh results for `pnpm test`, `pnpm lint`, and `pnpm build`. Automated tests are deterministic, exercise the repository through an in-memory SQL boundary, and perform no live provider or production database writes.
 
 Live migration, scheduler, browser, and controlled-provider evidence must be recorded separately by the deployment owner. Do not claim those checks from local automated results.

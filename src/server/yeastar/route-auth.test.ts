@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
 
-import { cronAuthorized, dispatchRouteAccess } from "./route-auth";
+import {
+  cronAuthorized,
+  dispatchRouteAccess,
+  integrationCronAuthorized,
+} from "./route-auth";
 
 vi.mock("@/server/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/auth/session")>()),
@@ -30,19 +34,29 @@ describe("cron authorization", () => {
     vi.stubEnv("INTEGRATION_CRON_SECRET", "integration-secret");
     vi.stubEnv("CRON_SECRET", "fallback-secret");
 
-    expect(cronAuthorized(request("integration-secret"))).toBe(true);
-    expect(cronAuthorized(request("integration-secreu"))).toBe(false);
-    expect(cronAuthorized(request("short"))).toBe(false);
+    expect(integrationCronAuthorized(request("integration-secret"))).toBe(true);
+    expect(integrationCronAuthorized(request("integration-secreu"))).toBe(false);
+    expect(integrationCronAuthorized(request("short"))).toBe(false);
   });
 
-  it("prefers INTEGRATION_CRON_SECRET and falls back to CRON_SECRET", () => {
+  it("keeps legacy cron authorization separate from integration recovery", () => {
     vi.stubEnv("INTEGRATION_CRON_SECRET", "primary-secret");
     vi.stubEnv("CRON_SECRET", "fallback-secret");
-    expect(cronAuthorized(request("primary-secret"))).toBe(true);
-    expect(cronAuthorized(request("fallback-secret"))).toBe(false);
-
-    vi.stubEnv("INTEGRATION_CRON_SECRET", "   ");
     expect(cronAuthorized(request("fallback-secret"))).toBe(true);
+    expect(cronAuthorized(request("primary-secret"))).toBe(false);
+
+    expect(integrationCronAuthorized(request("primary-secret"))).toBe(true);
+    expect(integrationCronAuthorized(request("fallback-secret"))).toBe(false);
+
+    vi.stubEnv("CRON_SECRET", "   ");
+    expect(cronAuthorized(request("primary-secret"))).toBe(true);
+  });
+
+  it("fails integration authorization closed instead of using CRON_SECRET", () => {
+    vi.stubEnv("INTEGRATION_CRON_SECRET", "");
+    vi.stubEnv("CRON_SECRET", "legacy-secret");
+
+    expect(integrationCronAuthorized(request("legacy-secret"))).toBe(false);
   });
 
   it("fails closed when configuration or authorization is missing", () => {

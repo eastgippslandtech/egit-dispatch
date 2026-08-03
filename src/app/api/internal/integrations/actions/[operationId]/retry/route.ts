@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ operationId: string }> },
 ) {
   const access = await dispatchRouteAccess();
@@ -17,9 +17,17 @@ export async function POST(
     return integrationJson({ error: "Unauthorized." }, { status: 401 });
   }
   const { operationId } = await context.params;
+  const body = await request.json().catch(() => null);
+  const confirmedAbsent = Boolean(
+    body && typeof body === "object" && Reflect.get(body, "confirmAbsent") === true,
+  );
   try {
     const operation = await createPostgresIntegrationRepository()
-      .retryOperationWithAudit({ actorEmail: access.email, operationId });
+      .retryOperationWithAudit({
+        actorEmail: access.email,
+        ...(confirmedAbsent ? { confirmedAbsent: true } : {}),
+        operationId,
+      });
     after(() => wakeIntegrationProcessor(operation.id).catch(() => undefined));
     return integrationJson(
       { operationId: operation.id, status: operation.state },

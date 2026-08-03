@@ -313,31 +313,49 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       ]);
     },
 
-    async retryOperation(operationId: string, now = new Date()) {
+    async retryOperation(
+      operationId: string,
+      now = new Date(),
+      confirmedAbsent = false,
+    ) {
       return requiredRow<IntegrationOperation>(
-        await sql.query("retryOperation", [operationId, now.toISOString()]),
+        await sql.query("retryOperation", [
+          operationId,
+          now.toISOString(),
+          confirmedAbsent,
+        ]),
         "Integration operation is not ready for manual retry.",
       );
     },
 
     async retryOperationWithAudit({
       actorEmail,
+      confirmedAbsent = false,
       operationId,
       now = new Date(),
     }: {
       actorEmail: string;
+      confirmedAbsent?: boolean;
       operationId: string;
       now?: Date;
     }) {
       return sql.transaction(async (transaction) => {
         const repository = createIntegrationRepository(transaction);
-        const operation = await repository.retryOperation(operationId, now);
+        const operation = await repository.retryOperation(
+          operationId,
+          now,
+          confirmedAbsent,
+        );
         await repository.appendAudit({
           actorEmail,
-          eventType: "integration_operation_retry_requested",
+          eventType: confirmedAbsent
+            ? "integration_operation_absence_confirmed_retry_requested"
+            : "integration_operation_retry_requested",
           operationId,
           operatorAction: "retry",
-          outcome: "retrying",
+          outcome: confirmedAbsent
+            ? "retrying_after_absence_confirmed"
+            : "retrying",
           requestId: operation.requestId,
         });
         return operation;
@@ -643,7 +661,11 @@ class PostgresIntegrationSql implements IntegrationSql {
         );
       }
       case "retryOperation": {
-        const [operationId, changedAt] = values as [string, string];
+        const [operationId, changedAt, confirmedAbsent] = values as [
+          string,
+          string,
+          boolean,
+        ];
         return this.operations(
           this.sql`
             with retried as (
@@ -665,6 +687,10 @@ class PostgresIntegrationSql implements IntegrationSql {
                 worker_id = null,
                 leased_at = null,
                 lease_expires_at = null,
+                requires_reconciliation = case
+                  when ${confirmedAbsent} then false
+                  else requires_reconciliation
+                end,
                 updated_at = ${changedAt}
               from retried
               where step.operation_id = retried.id

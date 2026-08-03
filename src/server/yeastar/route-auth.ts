@@ -8,8 +8,19 @@ import {
 
 export function cronAuthorized(request: Request) {
   const secret =
-    process.env.INTEGRATION_CRON_SECRET?.trim() ||
-    process.env.CRON_SECRET?.trim();
+    process.env.CRON_SECRET?.trim() ||
+    process.env.INTEGRATION_CRON_SECRET?.trim();
+  return authorizedWithSecret(request, secret);
+}
+
+export function integrationCronAuthorized(request: Request) {
+  return authorizedWithSecret(
+    request,
+    process.env.INTEGRATION_CRON_SECRET?.trim(),
+  );
+}
+
+function authorizedWithSecret(request: Request, secret?: string) {
   const authorization = request.headers.get("authorization");
   if (!secret || !authorization) return false;
 

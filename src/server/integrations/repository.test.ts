@@ -227,7 +227,11 @@ function fakeSql() {
         return [step];
       }
       if (name === "retryOperation") {
-        const [operationId, changedAt] = values as [string, string];
+        const [operationId, changedAt, confirmedAbsent] = values as [
+          string,
+          string,
+          boolean,
+        ];
         const target = operations.find((operation) => operation.id === operationId);
         if (!target || target.state !== "review_required") {
           return [];
@@ -239,6 +243,7 @@ function fakeSql() {
           if (step.state !== "review_required") continue;
           step.leaseExpiresAt = undefined;
           step.nextAttemptAt = changedAt;
+          if (confirmedAbsent) step.requiresReconciliation = false;
           step.state = "retrying";
           step.updatedAt = changedAt;
         }
@@ -625,6 +630,22 @@ describe("integration repository", () => {
     expect(fake.steps[1]).toMatchObject({
       leaseToken: "active-lease",
       state: "processing",
+    });
+  });
+
+  it("clears reconciliation only after an operator confirms the provider record is absent", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+    created.state = "review_required";
+    fake.steps[0]!.state = "review_required";
+    fake.steps[0]!.requiresReconciliation = true;
+
+    await repository.retryOperation(created.id, new Date(), true);
+
+    expect(fake.steps[0]).toMatchObject({
+      requiresReconciliation: false,
+      state: "retrying",
     });
   });
 

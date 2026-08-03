@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cronAuthorized } from "@/server/yeastar/route-auth";
+import { integrationCronAuthorized } from "@/server/yeastar/route-auth";
 import { createConfiguredIntegrationWorker } from "@/server/integrations/runtime";
 
 import { POST } from "./route";
 
-vi.mock("@/server/yeastar/route-auth", () => ({ cronAuthorized: vi.fn() }));
+vi.mock("@/server/yeastar/route-auth", () => ({ integrationCronAuthorized: vi.fn() }));
 vi.mock("@/server/integrations/runtime", () => ({
   createConfiguredIntegrationWorker: vi.fn(),
 }));
 
-const authorized = vi.mocked(cronAuthorized);
+const authorized = vi.mocked(integrationCronAuthorized);
 const createWorker = vi.mocked(createConfiguredIntegrationWorker);
 const processDue = vi.fn();
 const countDueSteps = vi.fn();

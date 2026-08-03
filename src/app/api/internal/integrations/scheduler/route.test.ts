@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { configureIntegrationScheduler } from "@/server/integrations/scheduler";
-import { cronAuthorized } from "@/server/yeastar/route-auth";
+import { integrationCronAuthorized } from "@/server/yeastar/route-auth";
 
 import { POST } from "./route";
 
 vi.mock("@/server/integrations/scheduler", () => ({
   configureIntegrationScheduler: vi.fn(),
 }));
-vi.mock("@/server/yeastar/route-auth", () => ({ cronAuthorized: vi.fn() }));
+vi.mock("@/server/yeastar/route-auth", () => ({ integrationCronAuthorized: vi.fn() }));
 
-const authorized = vi.mocked(cronAuthorized);
+const authorized = vi.mocked(integrationCronAuthorized);
 const configure = vi.mocked(configureIntegrationScheduler);
 
 describe("integration scheduler route", () => {

@@ -110,6 +110,27 @@ describe("Work Log disposition runtime", () => {
     });
   });
 
+  it("publishes an approved completion solution to the request and customer conversation", async () => {
+    const dependencies = createDependencies();
+    const runtime = createWorklogDispositionRuntime(dependencies);
+
+    await runtime.applyDisposition({
+      ...base,
+      disposition: "complete",
+      solution: "Replaced the failed switch and confirmed labels print normally.",
+    });
+
+    expect(dependencies.mspClient.setRequestResolution).toHaveBeenCalledWith({
+      content: "Replaced the failed switch and confirmed labels print normally.",
+      requestId: "request-1",
+    });
+    expect(dependencies.mspClient.addRequestNote).toHaveBeenCalledWith({
+      description: "Replaced the failed switch and confirmed labels print normally.",
+      requestId: "request-1",
+      visibility: "customer",
+    });
+  });
+
   it("books forward with one replacement Outlook event and schedule", async () => {
     const dependencies = createDependencies();
     const runtime = createWorklogDispositionRuntime(dependencies);
@@ -183,9 +204,11 @@ function createDependencies() {
       updateEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
     },
     mspClient: {
+      addRequestNote: vi.fn(),
       addRequestWorklog: vi.fn(),
       assignRequest: vi.fn(),
       clearRequestSchedule: vi.fn(),
+      setRequestResolution: vi.fn(),
       updateRequestSchedule: vi.fn(),
       updateRequestStatus: vi.fn(),
     },

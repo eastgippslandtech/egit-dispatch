@@ -52,6 +52,7 @@ export type WorklogDispositionCommand = {
   idempotencyKey: string;
   requestId: string;
   scheduled: boolean;
+  solution?: string;
   startedAt: string;
   transfer?: WorklogTransfer;
   visibility: WorklogVisibility;
@@ -71,6 +72,7 @@ export function validateWorklogDispositionCommand(
     idempotencyKey: clean(input.idempotencyKey),
     requestId: clean(input.requestId),
     scheduled: input.scheduled === true,
+    solution: cleanOptional(input.solution),
     startedAt: clean(input.startedAt),
     transfer: input.transfer,
     visibility: validVisibility(input.visibility),

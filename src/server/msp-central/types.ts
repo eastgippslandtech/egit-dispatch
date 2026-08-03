@@ -155,6 +155,11 @@ export type MspCentralListRequestsParams = {
 };
 
 export type MspCentralClient = {
+  addRequestNote?(input: {
+    description: string;
+    requestId: string;
+    visibility: "customer" | "internal";
+  }): Promise<void>;
   addRequestWorklog?(input: {
     description: string;
     durationMinutes: number;
@@ -170,6 +175,14 @@ export type MspCentralClient = {
     technicianName: string;
   }): Promise<void>;
   clearRequestSchedule(input: { requestId: string }): Promise<void>;
+  createRequest?(input: {
+    customer?: string;
+    description?: string;
+    priority: "Critical" | "High" | "Medium" | "Low";
+    requesterEmail?: string;
+    site?: string;
+    subject: string;
+  }): Promise<{ id: string; requestNumber: string }>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
   getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
@@ -182,6 +195,10 @@ export type MspCentralClient = {
     parentRequestId: string;
   }): Promise<void>;
   refreshAccessToken(): Promise<string>;
+  setRequestResolution?(input: {
+    content: string;
+    requestId: string;
+  }): Promise<void>;
   updateRequestSchedule(input: {
     requestId: string;
     scheduledEnd: string;

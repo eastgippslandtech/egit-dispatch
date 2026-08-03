@@ -36,6 +36,10 @@ const MSP_REQUEST_PAGE_SIZE = 100;
 const MSP_REQUEST_MAX_PAGES = 100;
 
 type MspCentralActionResponse = {
+  request?: {
+    id?: string | number | null;
+    request_number?: string | null;
+  };
   response_status?:
     | { status?: string | null }
     | Array<{ status?: string | null }>;
@@ -160,6 +164,31 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   });
 
   return {
+    async addRequestNote(input) {
+      assertConfigured();
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/notes`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request_note: {
+                add_to_linked_requests: false,
+                description: input.description,
+                mark_first_response: false,
+                notify_technician: false,
+                show_to_requester: input.visibility === "customer",
+              },
+            }),
+          }),
+          method: "POST",
+        },
+      );
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central communication save failed.",
+        );
+      }
+    },
     async addRequestWorklog(input) {
       assertConfigured();
       const durationMinutes = roundWorklogMinutes(input.durationMinutes);
@@ -192,6 +221,36 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           "MSP Central Work Log save failed.",
         );
       }
+    },
+    async createRequest(input) {
+      assertConfigured();
+      const request = {
+        ...(input.customer ? { account: { name: input.customer } } : {}),
+        ...(input.description ? { description: input.description } : {}),
+        priority: { name: input.priority },
+        ...(input.requesterEmail
+          ? { requester: { email_id: input.requesterEmail } }
+          : {}),
+        ...(input.site ? { site: { name: input.site } } : {}),
+        subject: input.subject,
+      };
+      const payload = await requestJson<MspCentralActionResponse>(apiRoot + "/requests", {
+        body: new URLSearchParams({
+          input_data: JSON.stringify({ request }),
+        }),
+        method: "POST",
+      });
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError("MSP Central request creation failed.");
+      }
+      const id = String(payload.request?.id ?? "").trim();
+      const requestNumber = String(payload.request?.request_number ?? id).trim();
+      if (!id) {
+        throw new MspCentralConfigurationError(
+          "MSP Central created the request but did not return its ID.",
+        );
+      }
+      return { id, requestNumber };
     },
     async assignRequest(input) {
       assertConfigured();
@@ -414,6 +473,27 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           method: "PUT",
         },
       );
+    },
+    async setRequestResolution(input) {
+      assertConfigured();
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request: {
+                resolution: { content: input.content },
+              },
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central solution save failed.",
+        );
+      }
     },
     async updateRequestStatus(input) {
       assertConfigured();

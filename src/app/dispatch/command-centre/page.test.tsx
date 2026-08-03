@@ -16,7 +16,10 @@ import type { DispatchRequest } from "@/server/dispatch/types";
 import CommandCentrePage from "./page";
 import {
   bookingCardPriorityClass,
+  CommandCentrePrototype,
+  reconcileDashboardWithPendingWritebacks,
   requestNotesSummary,
+  safeRequestContentParts,
   ScheduleConfirmModal,
   toastAutoDismissMs,
 } from "./prototype";
@@ -72,7 +75,7 @@ test("renders the locked Command Centre prototype with shared mock data", async 
     screen.getByRole("heading", { level: 1, name: "Command Centre" }),
   ).toBeInTheDocument();
   expect(screen.getByText("Dispatch Health")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Unscheduled/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Unscheduled 2" })).toBeInTheDocument();
   expect(screen.getByText("SLA Risk")).toBeInTheDocument();
   expect(screen.getByText("Double Bookings")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /More Health/ })).toBeInTheDocument();
@@ -84,8 +87,7 @@ test("renders the locked Command Centre prototype with shared mock data", async 
     "/wallboard",
   );
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
-  expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
+  expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-y-auto");
 });
 
 test("live scheduling lets the dispatcher choose the booking type", () => {
@@ -438,7 +440,7 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
   expect(within(drawer).getByRole("button", { name: "Reschedule" })).toBeDisabled();
   expect(within(drawer).getByRole("button", { name: "Reschedule" })).toHaveAttribute(
     "title",
-    "MSP Central API access is not configured yet.",
+    "Outlook-only bookings cannot be rescheduled from Command Centre.",
   );
   expect(
     within(drawer).getByRole("button", {
@@ -492,7 +494,7 @@ test("keeps the Helpdesk link available for a completed request calendar booking
   );
 });
 
-test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {
+test("opens a Work Log modal from the drawer with latest job information", async () => {
   render(await CommandCentrePage());
 
   const drawer = screen.getByTestId("command-centre-drawer");
@@ -516,18 +518,18 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   expect(within(dialog).getByText("Contact")).toBeInTheDocument();
   expect(within(dialog).getByText("Site/address")).toBeInTheDocument();
   expect(within(dialog).getByText("Job description")).toBeInTheDocument();
-  expect(within(dialog).getByLabelText("Customer-facing")).toBeChecked();
-  expect(within(dialog).getByLabelText("Internal")).not.toBeChecked();
+  expect(within(dialog).queryByText("Visibility")).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Customer-facing")).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Internal")).not.toBeInTheDocument();
   expect(within(dialog).getByLabelText("Work Log notes")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Time spent")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
   expect(within(dialog).queryByRole("checkbox", { name: "Billable" })).not.toBeInTheDocument();
-  expect(within(dialog).getByLabelText("Internal")).toBeDisabled();
   expect(within(dialog).queryByText("Outcome")).not.toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
 });
 
-test("keeps Work Log billing and visibility combinations valid", async () => {
+test("keeps customer communication out of the Work Log flow", async () => {
   render(await CommandCentrePage());
 
   fireEvent.click(
@@ -537,23 +539,84 @@ test("keeps Work Log billing and visibility combinations valid", async () => {
   );
 
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
-  const workType = within(dialog).getByLabelText("Work type");
-  const customerFacing = within(dialog).getByLabelText("Customer-facing");
-  const internal = within(dialog).getByLabelText("Internal");
-
-  expect(customerFacing).toBeChecked();
-  expect(internal).toBeDisabled();
-
-  fireEvent.change(workType, { target: { value: "internal" } });
-  expect(internal).toBeChecked();
-  expect(customerFacing).toBeDisabled();
-
-  fireEvent.change(workType, { target: { value: "non_billable" } });
-  expect(customerFacing).not.toBeDisabled();
-  expect(internal).not.toBeDisabled();
+  expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
+  expect(within(dialog).queryByText("Visibility")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("Customer-facing")).not.toBeInTheDocument();
 });
 
-test("loads the latest job description and customer responses into a live Work Log", async () => {
+test("opens Work Log against the exact selected appointment", async () => {
+  const data = getDispatchDesignMockData();
+  const first = data.appointments.find((appointment) => appointment.id === "appt-1");
+  if (!first?.requestId) throw new Error("Expected appt-1 fixture.");
+  const second = {
+    ...first,
+    end: "15:00",
+    id: "appt-1-second",
+    start: "14:00",
+    title: "Follow-up visit",
+  };
+
+  render(
+    <CommandCentrePrototype
+      data={{ ...data, appointments: [...data.appointments, second] }}
+    />,
+  );
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1-second"));
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(within(dialog).getByText("14:00-15:00")).toBeInTheDocument();
+});
+
+test("preserves optimistic schedules while refreshed server data is still stale", () => {
+  const incoming = getDispatchDesignMockData();
+  const request = incoming.requests[0];
+  const optimisticRequest = {
+    ...request,
+    scheduledEnd: "2026-07-08T11:00:00.000Z",
+    scheduledStart: "2026-07-08T10:00:00.000Z",
+    status: "Scheduled" as const,
+    technicianId: "tech-simeon",
+  };
+  const optimisticAppointment = {
+    customer: request.customer,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "pending-live-refresh-test",
+    requestId: request.id,
+    source: "linked" as const,
+    start: "10:00",
+    status: "confirmed" as const,
+    technicianId: "tech-simeon",
+    title: request.subject,
+  };
+  const current = {
+    ...incoming,
+    appointments: [...incoming.appointments, optimisticAppointment],
+    requests: incoming.requests.map((candidate) =>
+      candidate.id === request.id ? optimisticRequest : candidate,
+    ),
+  };
+
+  const reconciled = reconcileDashboardWithPendingWritebacks(
+    current,
+    incoming,
+    new Set([request.id]),
+  );
+
+  expect(
+    reconciled.appointments.find((appointment) => appointment.id === optimisticAppointment.id),
+  ).toEqual(optimisticAppointment);
+  expect(
+    reconciled.requests.find((candidate) => candidate.id === request.id),
+  ).toEqual(optimisticRequest);
+});
+
+test("keeps customer communications separate from a live Work Log", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();
   const selectedRequest = data.requests[0];
@@ -619,14 +682,8 @@ test("loads the latest job description and customer responses into a live Work L
       "The Zebra label printer is offline after a power outage.",
     ),
   ).toBeInTheDocument();
-  expect(within(dialog).getByText("Customer responses")).toBeInTheDocument();
-  expect(
-    within(dialog).getByText("Labels are no longer printing at all."),
-  ).toBeInTheDocument();
-  expect(within(dialog).getByText("Internal notes")).toBeInTheDocument();
-  expect(
-    within(dialog).getByText("Confirm access before dispatch."),
-  ).toBeInTheDocument();
+  expect(within(dialog).queryByText("Customer responses")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("Internal notes")).not.toBeInTheDocument();
   expect(within(dialog).getByText("Previous work logs")).toBeInTheDocument();
   expect(
     within(dialog).getByText(
@@ -656,6 +713,8 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
   });
   expect(within(dialog).getByRole("button", { name: "Choose an outcome" })).toBeDisabled();
   fireEvent.click(within(dialog).getByLabelText("Complete ticket"));
+  expect(within(dialog).getByLabelText("Use Work Log as solution")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByLabelText("Use Work Log as solution"));
   fireEvent.click(
     within(dialog).getByRole("button", { name: "Save Work Log and complete ticket" }),
   );
@@ -694,16 +753,11 @@ test("shows the required conditional fields for book forward and transfer", asyn
   expect(within(dialog).queryByLabelText("Forward date")).not.toBeInTheDocument();
 });
 
-test("retries server data while the MSP Central unavailable warning is visible", async () => {
-  const data = getDispatchDesignMockData();
-  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
-    ...data,
-    calendarError:
-      "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.",
-  });
-
+test("refreshes live queue data while Command Centre remains open", async () => {
   render(await CommandCentrePage());
-  await vi.advanceTimersByTimeAsync(30_000);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
 
   expect(routerRefreshMock).toHaveBeenCalledOnce();
 });
@@ -790,28 +844,13 @@ test("merges the queue duplicate into a searched surviving parent after confirma
   expect(screen.getByText("REQ-100284 merged into REQ-100301.")).toBeInTheDocument();
 });
 
-test("renders overlapping timeline appointments as an inspectable stack", async () => {
+test("renders overlapping timeline appointments in separate visible lanes", async () => {
   render(await CommandCentrePage());
 
-  const stack = screen.getByRole("button", {
-    name: /2 overlapping appointments/,
-  });
-
-  expect(stack).toHaveTextContent("+1");
-  expect(stack).toHaveTextContent("Overlap");
-
-  fireEvent.mouseEnter(stack);
-
-  const reveal = screen.getByTestId("timeline-overlap-reveal");
-  expect(within(reveal).getByText("Practice management update")).toBeInTheDocument();
-  expect(within(reveal).getByText("Outlook busy: supplier call")).toBeInTheDocument();
-  expect(within(reveal).getByText("11:15-12:30")).toBeInTheDocument();
-
-  fireEvent.click(
-    within(reveal).getByRole("button", {
-      name: /Outlook busy: supplier call/,
-    }),
-  );
+  expect(screen.queryByRole("button", { name: /overlapping appointments/ })).not.toBeInTheDocument();
+  expect(screen.getByText("Practice management update")).toBeInTheDocument();
+  expect(screen.getByText("Outlook busy: supplier call")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Outlook busy: supplier call/ }));
 
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(
@@ -819,6 +858,137 @@ test("renders overlapping timeline appointments as an inspectable stack", async 
       name: "Outlook busy: supplier call",
     }),
   ).toBeInTheDocument();
+});
+
+test("switches the queue between unscheduled and assigned jobs", async () => {
+  render(await CommandCentrePage());
+
+  expect(screen.getByRole("button", { name: "Unscheduled queue" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Assigned jobs" }));
+
+  expect(screen.getByRole("heading", { name: "Assigned Jobs" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Assigned jobs" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(within(screen.getByTestId("request-queue")).getAllByRole("article").length).toBeGreaterThan(0);
+});
+
+test("opens a queue ticket in the full ticket workspace", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  expect(within(dialog).getByRole("tab", { name: "Details" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Work Log" })).toBeInTheDocument();
+});
+
+test("shows customer emails and clickable external links in Comms", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central" as const,
+    })),
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      json: async () => ({
+        customerResponses: [
+          {
+            author: "Mel Harris",
+            body: 'Please use <a href="https://jobs.example.com/123">Go to job</a>.',
+            id: "response-1",
+          },
+        ],
+        internalNotes: [],
+        request: selectedRequest,
+        worklogs: [],
+      }),
+      ok: true,
+    }),
+  );
+
+  render(await CommandCentrePage());
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Comms" }));
+
+  expect(await within(dialog).findByText("Mel Harris")).toBeInTheDocument();
+  expect(within(dialog).getByRole("link", { name: "Go to job" })).toHaveAttribute(
+    "href",
+    "https://jobs.example.com/123",
+  );
+  expect(within(dialog).getByRole("button", { name: "Send to customer" })).toBeInTheDocument();
+});
+
+test("creates a new live Helpdesk request from the queue", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+  });
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({ request: { id: "456", requestNumber: "REQ-456" } }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Create request" });
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Description"), {
+    target: { value: "Printer cannot reach the network." },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Requester email"), {
+    target: { value: "user@example.com" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/internal/msp-central/requests",
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+  expect(await screen.findByText("REQ-456 created in MSP Central.")).toBeInTheDocument();
+});
+
+test("turns safe external links in request content into clickable links", () => {
+  expect(
+    safeRequestContentParts(
+      'Open <a href="https://jobs.example.com/123">Go to job</a> or https://portal.example.com.',
+    ),
+  ).toEqual([
+    { text: "Open " },
+    { href: "https://jobs.example.com/123", text: "Go to job" },
+    { text: " or " },
+    { href: "https://portal.example.com/", text: "https://portal.example.com" },
+    { text: "." },
+  ]);
 });
 
 test("keeps health cards focused on label and count", async () => {
@@ -893,7 +1063,7 @@ test("filters the board from Dispatch Health cards", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   fireEvent.click(screen.getByRole("button", { name: /Double Bookings/ }));
   expect(within(queue).getByText("Practice management update")).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "match",
   );
@@ -910,7 +1080,7 @@ test("health filters cover sync, travel, out-of-hours, and More Health records",
 
   fireEvent.click(screen.getByRole("button", { name: /Sync Issues/ }));
   expect(within(queue).getByText("Practice management update")).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "match",
   );
@@ -999,7 +1169,7 @@ test("filters the queue with top search and dims nonmatching appointments", asyn
     "data-search-state",
     "match",
   );
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "dimmed",
   );

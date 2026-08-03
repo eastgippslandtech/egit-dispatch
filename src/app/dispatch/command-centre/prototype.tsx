@@ -12,6 +12,7 @@ import {
   Filter,
   Frown,
   GitMerge,
+  Inbox,
   LogOut,
   MailWarning,
   Maximize2,
@@ -2773,7 +2774,7 @@ async function publishLiveSchedule(event: {
   };
 }
 
-async function publishMspCentralRequestMerge(event: {
+export async function publishMspCentralRequestMerge(event: {
   childRequestId: string;
   idempotencyKey: string;
   parentRequestId: string;
@@ -2799,7 +2800,7 @@ async function publishMspCentralRequestMerge(event: {
   return body ?? {};
 }
 
-async function publishMspCentralWorklog(
+export async function publishMspCentralWorklog(
   event: import("@/server/worklogs/disposition").WorklogDispositionCommand,
 ) {
   const response = await fetch("/api/internal/msp-central/worklogs", {
@@ -3020,7 +3021,7 @@ function technicianMspCentralId(
     ?.mspCentralTechnicianId ?? undefined;
 }
 
-function MergeRequestModal({
+export function MergeRequestModal({
   childRequest,
   onCancel,
   onConfirm,
@@ -3600,7 +3601,7 @@ export function ScheduleConfirmModal({
   );
 }
 
-function CreateRequestModal({
+export function CreateRequestModal({
   onCancel,
   onCreated,
 }: {
@@ -3751,12 +3752,13 @@ function CreateRequestModal({
   );
 }
 
-function TicketWorkspaceModal({
+export function TicketWorkspaceModal({
   appointment,
   appointments,
   liveWriteback,
   onClose,
   onOpenWorkLog,
+  onSchedule,
   onSaved,
   request,
 }: {
@@ -3765,6 +3767,7 @@ function TicketWorkspaceModal({
   liveWriteback: boolean;
   onClose: () => void;
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
+  onSchedule?: (requestId: string) => void;
   onSaved: (result: IntegrationOperationReceipt) => void;
   request?: DispatchRequest;
 }) {
@@ -3879,6 +3882,16 @@ function TicketWorkspaceModal({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {onSchedule ? (
+              <button
+                className="flex items-center gap-2 rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-cc-orange"
+                type="button"
+                onClick={() => onSchedule(request.id)}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Schedule
+              </button>
+            ) : null}
             {!appointment && appointments.length > 0 ? (
               <label className="text-xs font-semibold text-slate-300">
                 Booking for Work Log
@@ -3942,7 +3955,7 @@ function TicketWorkspaceModal({
               type="button"
               onClick={() => setTab(value)}
             >
-              {value === "details" ? "Details" : "Comms"}
+              {value === "details" ? "Overview" : "Comms"}
             </button>
           ))}
         </div>
@@ -4166,7 +4179,7 @@ function decodeHtml(value: string) {
     .replace(/&#0?39;/gi, "'");
 }
 
-function WorkLogModal({
+export function WorkLogModal({
   appointment,
   liveWriteback,
   onCancel,
@@ -4981,6 +4994,13 @@ function CommandHeader({
               </Link>
             </>
           ) : null}
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/dispatch/queue"
+          >
+            <Inbox className="h-4 w-4" />
+            Dispatch Queue
+          </Link>
           <Link
             className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
             href="/calls"

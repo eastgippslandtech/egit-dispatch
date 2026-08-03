@@ -89,6 +89,10 @@ test("renders the locked Command Centre prototype with shared mock data", async 
     "href",
     "/wallboard",
   );
+  expect(screen.getByRole("link", { name: "Dispatch Queue" })).toHaveAttribute(
+    "href",
+    "/dispatch/queue",
+  );
   expect(screen.getByRole("link", { name: "Integrations" })).toHaveAttribute(
     "href",
     "/integrations",
@@ -1222,7 +1226,7 @@ test("opens a queue ticket in the full ticket workspace", async () => {
   );
 
   const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
-  expect(within(dialog).getByRole("tab", { name: "Details" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("tab", { name: "Overview" })).toBeInTheDocument();
   expect(within(dialog).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Work Log" })).toBeInTheDocument();
 });

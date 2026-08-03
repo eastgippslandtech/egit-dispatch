@@ -32,6 +32,14 @@ describe("durable integration schema", () => {
     )?.[1];
     expect(auditTable).toBeDefined();
     expect(auditTable!).not.toMatch(/\b(?:details|payload)\s+jsonb\b/);
+    expect(auditTable!).not.toMatch(/\bexternal_record_id\b/);
+    expect(auditTable!).not.toMatch(/\bexternal_version\b/);
+
+    const stepTable = sql.match(
+      /create table public\.integration_operation_steps \(([\s\S]*?)\n\);/,
+    )?.[1];
+    expect(stepTable).toBeDefined();
+    expect(stepTable).toContain("result jsonb");
 
     for (const column of [
       "request_id varchar(128) not null",
@@ -42,8 +50,6 @@ describe("durable integration schema", () => {
       "http_status integer",
       "duration_ms integer",
       "step_key varchar(64)",
-      "external_record_id varchar(128)",
-      "external_version varchar(64)",
     ]) {
       expect(auditTable).toContain(column);
     }
@@ -57,8 +63,6 @@ describe("durable integration schema", () => {
       "http_status is null or http_status between 100 and 599",
       "duration_ms is null or duration_ms between 0 and 86400000",
       "step_key is null or step_key ~ '^[a-z][a-z0-9_.-]{0,63}$'",
-      "external_record_id is null or external_record_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'",
-      "external_version is null or external_version ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$'",
     ]) {
       expect(auditTable).toContain(constraint);
     }

@@ -61,10 +61,6 @@ create table public.integration_audit_events (
     check (duration_ms is null or duration_ms between 0 and 86400000),
   step_key varchar(64)
     check (step_key is null or step_key ~ '^[a-z][a-z0-9_.-]{0,63}$'),
-  external_record_id varchar(128)
-    check (external_record_id is null or external_record_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
-  external_version varchar(64)
-    check (external_version is null or external_version ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$'),
   connector varchar(32)
     check (connector is null or connector in ('command_centre','msp_central','outlook','zoho_crm','msp_endpoint','zoho_survey','push','email')),
   created_at timestamptz not null default now()

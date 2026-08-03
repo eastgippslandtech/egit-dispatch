@@ -225,13 +225,17 @@ function fakeSql() {
         return [target];
       }
       if (name === "listOperations") return operations;
+      if (name === "getOperation") {
+        return operations.filter((operation) => operation.id === values[0]);
+      }
       if (name === "getHealth") return [...health.values()];
       if (name === "recordConnectorRead") {
-        const [connector, succeeded, error, checkedAt] = values as [
+        const [connector, succeeded, error, checkedAt, requestedStatus] = values as [
           IntegrationConnectorHealth["connector"],
           boolean,
           string | undefined,
           string,
+          IntegrationConnectorHealth["status"] | undefined,
         ];
         const current = health.get(connector);
         health.set(connector, {
@@ -239,7 +243,7 @@ function fakeSql() {
           consecutiveFailures: succeeded ? 0 : (current?.consecutiveFailures ?? 0) + 1,
           lastCheckedAt: checkedAt,
           ...(succeeded ? { lastSuccessAt: checkedAt } : { lastError: error, lastFailureAt: checkedAt }),
-          status: succeeded ? "healthy" : "degraded",
+          status: requestedStatus ?? (succeeded ? "healthy" : "degraded"),
         });
         return [];
       }
@@ -372,6 +376,34 @@ describe("integration repository", () => {
         stepId: claimed!.id,
       }),
     ).resolves.toMatchObject({ result: { provider: "ok" }, state: "succeeded" });
+  });
+
+  it("loads an operation by id for processor audit context", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+
+    await expect(repository.getOperation(created.id)).resolves.toBe(created);
+  });
+
+  it("records an explicit connector authentication state", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+
+    await repository.recordConnectorRead({
+      connector: "msp_central",
+      error: "Refresh token rejected",
+      now: new Date("2026-08-03T10:30:00.000Z"),
+      status: "authentication_required",
+      succeeded: false,
+    });
+
+    await expect(repository.getHealth()).resolves.toContainEqual(
+      expect.objectContaining({
+        connector: "msp_central",
+        status: "authentication_required",
+      }),
+    );
   });
 
   it("clears stale step and operation errors when all steps succeed", async () => {

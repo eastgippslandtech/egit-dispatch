@@ -99,5 +99,13 @@ export type IntegrationConnectorHealth = {
   lastError?: string;
   lastFailureAt?: string;
   lastSuccessAt?: string;
-  status: string;
+  status: IntegrationConnectorHealthStatus;
 };
+
+export type IntegrationConnectorHealthStatus =
+  | "authentication_required"
+  | "degraded"
+  | "healthy"
+  | "stale"
+  | "unavailable"
+  | "unknown";

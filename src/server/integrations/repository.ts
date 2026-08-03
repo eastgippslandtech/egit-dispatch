@@ -8,6 +8,7 @@ import type {
   IntegrationAuditEvent,
   IntegrationConnector,
   IntegrationConnectorHealth,
+  IntegrationConnectorHealthStatus,
   IntegrationOperation,
   IntegrationOperationStep,
 } from "./types";
@@ -18,6 +19,7 @@ type IntegrationQueryName =
   | "claimDueSteps"
   | "expireExpiredLeases"
   | "findOperationByKey"
+  | "getOperation"
   | "getHealth"
   | "insertOperation"
   | "insertStep"
@@ -92,7 +94,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
           const conflicted = (await transaction.query("findOperationByKey", [
             input.idempotencyKey,
           ])) as IntegrationOperation[];
-          const replay = requiredRow(
+          const replay = requiredRow<IntegrationOperation>(
             conflicted,
             "Integration operation could not be stored.",
           );
@@ -109,6 +111,13 @@ export function createIntegrationRepository(sql: IntegrationSql) {
 
     async getHealth(): Promise<IntegrationConnectorHealth[]> {
       return (await sql.query("getHealth", [])) as IntegrationConnectorHealth[];
+    },
+
+    async getOperation(operationId: string) {
+      return requiredRow<IntegrationOperation>(
+        await sql.query("getOperation", [operationId]),
+        "Integration operation was not found.",
+      );
     },
 
     async listOperations({ limit = 50 }: { limit?: number } = {}) {
@@ -169,11 +178,13 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       connector,
       error,
       now = new Date(),
+      status,
       succeeded,
     }: {
       connector: IntegrationConnector;
       error?: string;
       now?: Date;
+      status?: IntegrationConnectorHealthStatus;
       succeeded: boolean;
     }) {
       await sql.query("recordConnectorRead", [
@@ -181,6 +192,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
         succeeded,
         error ? safeError(error) : undefined,
         now.toISOString(),
+        status,
       ]);
     },
 
@@ -533,13 +545,26 @@ class PostgresIntegrationSql implements IntegrationSql {
           `,
         );
       }
+      case "getOperation": {
+        const [operationId] = values as [string];
+        return this.operations(
+          this.sql`
+            select ${this.sql.unsafe(operationColumns)}
+            from public.integration_operations
+            where id = ${operationId}::uuid
+            limit 1
+          `,
+        );
+      }
       case "recordConnectorRead": {
-        const [connector, succeeded, error, checkedAt] = values as [
+        const [connector, succeeded, error, checkedAt, requestedStatus] = values as [
           IntegrationConnector,
           boolean,
-          string | undefined,
+          IntegrationConnectorHealthStatus | undefined,
           string,
+          string | undefined,
         ];
+        const status = requestedStatus ?? (succeeded ? "healthy" : "degraded");
         await this.sql`
           insert into public.integration_connector_health (
             connector,
@@ -551,7 +576,7 @@ class PostgresIntegrationSql implements IntegrationSql {
             last_error
           ) values (
             ${connector},
-            ${succeeded ? "healthy" : "degraded"},
+            ${status},
             ${checkedAt},
             ${succeeded ? checkedAt : null},
             ${succeeded ? null : checkedAt},
@@ -788,8 +813,8 @@ function getSql(databaseUrl?: string) {
   return getSharedPostgresClient(databaseUrl);
 }
 
-function requiredRow<T>(rows: T[], message: string): T {
-  const row = rows[0];
+function requiredRow<T>(rows: readonly unknown[], message: string): T {
+  const row = rows[0] as T | undefined;
   if (!row) throw new Error(message);
   return row;
 }

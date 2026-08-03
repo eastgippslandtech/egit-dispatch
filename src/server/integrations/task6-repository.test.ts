@@ -48,6 +48,22 @@ describe("integration recovery repository", () => {
     });
   });
 
+  it("does not report or audit cancellation when the operation is in flight", async () => {
+    const { audits, repository, transaction } = harness("syncing", {
+      cancelOperation: [],
+    });
+
+    await expect(
+      repository.cancelOperationWithAudit({
+        actorEmail: "simeon@egit.com.au",
+        operationId: "operation-1",
+      }),
+    ).rejects.toThrow("not cancellable");
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(audits).toEqual([]);
+  });
+
   it("maps due counts, review counts, and step results without exposing payloads", async () => {
     const { repository } = harness("review_required", {
       countDueSteps: [{ count: 3 }],

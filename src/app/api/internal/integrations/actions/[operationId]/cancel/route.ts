@@ -19,17 +19,23 @@ export async function POST(
       .cancelOperationWithAudit({ actorEmail: access.email, operationId });
     return integrationJson({ operationId: operation.id, status: operation.state });
   } catch (error) {
+    const conflict = isConflict(error);
     return integrationJson(
       {
-        error: isConflict(error)
-          ? "Synced or unknown actions cannot be cancelled."
+        error: conflict
+          ? "This action is currently syncing, already synced, or otherwise not cancellable."
           : "The integration action could not be cancelled.",
       },
-      { status: isConflict(error) ? 409 : 503 },
+      { status: conflict ? 409 : 503 },
     );
   }
 }
 
 function isConflict(error: unknown) {
-  return error instanceof Error && /already synced|not found|synced/i.test(error.message);
+  return (
+    error instanceof Error &&
+    /in flight|not cancellable|already synced|not found|syncing|processing/i.test(
+      error.message,
+    )
+  );
 }

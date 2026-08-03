@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { getCommandCentreAccess, isApprovedStaffAccess } from "@/server/auth/session";
 import {
   findStaffForZohoLogin,
@@ -8,8 +10,14 @@ export function cronAuthorized(request: Request) {
   const secret =
     process.env.INTEGRATION_CRON_SECRET?.trim() ||
     process.env.CRON_SECRET?.trim();
-  if (!secret) return false;
-  return request.headers.get("authorization") === `Bearer ${secret}`;
+  const authorization = request.headers.get("authorization");
+  if (!secret || !authorization) return false;
+
+  const actual = Buffer.from(authorization, "utf8");
+  const expected = Buffer.from(`Bearer ${secret}`, "utf8");
+  if (actual.length !== expected.length) return false;
+
+  return timingSafeEqual(actual, expected);
 }
 
 export async function staffRouteAccess() {

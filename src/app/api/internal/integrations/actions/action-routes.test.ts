@@ -80,6 +80,22 @@ describe("integration operator action routes", () => {
     cancelOperationWithAudit.mockRejectedValue(new Error("already synced"));
     const response = await cancel(request("cancel"), context());
     expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "This action is currently syncing, already synced, or otherwise not cancellable.",
+    });
+  });
+
+  it("rejects cancellation of in-flight work without reporting false success", async () => {
+    cancelOperationWithAudit.mockRejectedValue(
+      new Error("Integration operation is in flight and not cancellable."),
+    );
+
+    const response = await cancel(request("cancel"), context());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "This action is currently syncing, already synced, or otherwise not cancellable.",
+    });
   });
 
   it("requires dispatch/admin access for both actions", async () => {

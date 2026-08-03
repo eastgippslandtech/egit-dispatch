@@ -85,7 +85,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
     async cancelOperation(operationId: string, now = new Date()) {
       return requiredRow<IntegrationOperation>(
         await sql.query("cancelOperation", [operationId, now.toISOString()]),
-        "Integration operation was not found or is already synced.",
+        "Integration operation is in flight, already synced, or not cancellable.",
       );
     },
 
@@ -649,28 +649,42 @@ class PostgresIntegrationSql implements IntegrationSql {
         const [operationId, changedAt] = values as [string, string];
         return this.operations(
           this.sql`
-            with cancelled as (
-              update public.integration_operations
+            with locked_steps as materialized (
+              select step.id, step.state, step.lease_token
+              from public.integration_operation_steps step
+              where step.operation_id = ${operationId}::uuid
+              for update
+            ), cancellable as (
+              select operation.id
+              from public.integration_operations operation
+              where operation.id = ${operationId}::uuid
+                and operation.state in ('queued', 'retrying', 'review_required')
+                and not exists (
+                  select 1
+                  from locked_steps
+                  where state = 'processing'
+                    or lease_token is not null
+                )
+              for update
+            ), cancelled as (
+              update public.integration_operations operation
               set
                 state = 'cancelled',
                 cancelled_at = ${changedAt},
                 updated_at = ${changedAt}
-              where id = ${operationId}::uuid
-                and state <> 'synced'
-              returning *
+              from cancellable
+              where operation.id = cancellable.id
+              returning operation.*
             ), cancelled_steps as (
               update public.integration_operation_steps step
               set
                 state = 'cancelled',
                 next_attempt_at = null,
-                lease_token = null,
-                worker_id = null,
-                leased_at = null,
-                lease_expires_at = null,
                 updated_at = ${changedAt}
               from cancelled
               where step.operation_id = cancelled.id
-                and step.state not in ('succeeded', 'cancelled')
+                and step.state in ('queued', 'retrying', 'review_required')
+                and step.lease_token is null
             )
             select ${this.sql.unsafe(operationColumnsFromCancelled)}
             from cancelled

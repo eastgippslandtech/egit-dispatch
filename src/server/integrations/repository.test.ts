@@ -226,26 +226,46 @@ function fakeSql() {
         step.updatedAt = changedAt;
         return [step];
       }
-      if (name === "retryOperation" || name === "cancelOperation") {
+      if (name === "retryOperation") {
         const [operationId, changedAt] = values as [string, string];
         const target = operations.find((operation) => operation.id === operationId);
-        if (!target || (name === "retryOperation" && target.state !== "review_required")) {
+        if (!target || target.state !== "review_required") {
           return [];
         }
-        target.cancelledAt = name === "cancelOperation" ? changedAt : undefined;
-        target.state = name === "retryOperation" ? "retrying" : "cancelled";
+        target.cancelledAt = undefined;
+        target.state = "retrying";
         target.updatedAt = changedAt;
         for (const step of steps.filter((step) => step.operationId === operationId)) {
-          if (
-            name === "retryOperation"
-              ? step.state !== "review_required"
-              : ["succeeded", "cancelled"].includes(step.state)
-          ) {
+          if (step.state !== "review_required") continue;
+          step.leaseExpiresAt = undefined;
+          step.nextAttemptAt = changedAt;
+          step.state = "retrying";
+          step.updatedAt = changedAt;
+        }
+        return [target];
+      }
+      if (name === "cancelOperation") {
+        const [operationId, changedAt] = values as [string, string];
+        const target = operations.find((operation) => operation.id === operationId);
+        const operationSteps = steps.filter((step) => step.operationId === operationId);
+        if (
+          !target ||
+          !["queued", "retrying", "review_required"].includes(target.state) ||
+          operationSteps.some(
+            (step) => step.state === "processing" || Boolean(step.leaseToken),
+          )
+        ) {
+          return [];
+        }
+        target.cancelledAt = changedAt;
+        target.state = "cancelled";
+        target.updatedAt = changedAt;
+        for (const step of operationSteps) {
+          if (!["queued", "retrying", "review_required"].includes(step.state)) {
             continue;
           }
-          step.leaseExpiresAt = undefined;
-          step.nextAttemptAt = name === "retryOperation" ? changedAt : undefined;
-          step.state = name === "retryOperation" ? "retrying" : "cancelled";
+          step.nextAttemptAt = undefined;
+          step.state = "cancelled";
           step.updatedAt = changedAt;
         }
         return [target];
@@ -300,6 +320,17 @@ describe("integration repository", () => {
 
     expect(source).toMatch(
       /claimed as \([\s\S]*update public\.integration_operation_steps[\s\S]*parents as \([\s\S]*update public\.integration_operations operation[\s\S]*state = 'syncing'[\s\S]*select operation_id from claimed/,
+    );
+  });
+
+  it("locks operation steps before cancellation and never cancels active leases", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+
+    expect(source).toMatch(
+      /case "cancelOperation"[\s\S]*locked_steps as materialized \([\s\S]*for update[\s\S]*state in \('queued', 'retrying', 'review_required'\)[\s\S]*not exists \([\s\S]*state = 'processing'[\s\S]*lease_token is not null/,
+    );
+    expect(source).not.toMatch(
+      /case "cancelOperation"[\s\S]*set[\s\S]*lease_token = null[\s\S]*from cancelled/,
     );
   });
 
@@ -563,7 +594,7 @@ describe("integration repository", () => {
     ).resolves.toMatchObject({ requiresReconciliation: false });
   });
 
-  it("retries only review-required steps and cancels outstanding operation steps", async () => {
+  it("retries only review-required steps and refuses cancellation while a step is processing", async () => {
     const fake = fakeSql();
     const repository = createIntegrationRepository(fake.sql);
     const { operation: created } = await repository.enqueue(operation());
@@ -586,10 +617,31 @@ describe("integration repository", () => {
       leaseToken: "active-lease",
       state: "processing",
     });
+    await expect(repository.cancelOperation(created.id)).rejects.toThrow(
+      "not cancellable",
+    );
+    expect(created.state).toBe("retrying");
+    expect(fake.steps[0]).toMatchObject({ state: "retrying" });
+    expect(fake.steps[1]).toMatchObject({
+      leaseToken: "active-lease",
+      state: "processing",
+    });
+  });
+
+  it("cancels only safe non-processing operation steps", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+    created.state = "retrying";
+    fake.steps[0]!.state = "retrying";
+
     await expect(repository.cancelOperation(created.id)).resolves.toMatchObject({
       state: "cancelled",
     });
-    expect(fake.steps[0]).toMatchObject({ state: "cancelled" });
+    expect(fake.steps).toEqual([
+      expect.objectContaining({ state: "cancelled" }),
+      expect.objectContaining({ state: "cancelled" }),
+    ]);
   });
 
   it("rejects manual retry while an operation is processing or synced", async () => {

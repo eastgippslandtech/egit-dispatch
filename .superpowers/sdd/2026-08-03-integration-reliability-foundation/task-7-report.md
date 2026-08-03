@@ -45,3 +45,13 @@ Commit: this commit (`feat: add integration health and recovery console`)
 - The Integrations console uses a monotonic refresh sequence so an older response cannot overwrite a newer snapshot.
 - Request integration warnings use one case-insensitive normalizer, preventing duplicate Review required badges in the drawer.
 - Fix Round 1 verification: 132 files and 818 tests passed; ESLint passed; production build passed; `git diff --check` passed.
+
+## Fix Round 2
+
+- Approved non-dispatch staff can read only integration operations owned by their normalized signed-in Zoho email.
+- Actor ownership is enforced in repository queries with trimmed, case-insensitive email matching; another technician's operation returns the same generic not-found response without metadata.
+- Dispatch/admin staff retain full operation status, failed-action listing, Retry, and Cancel access.
+- Technician hydration returns only their own active operations and exposes only operation ID, request ID, and state. Failed-action management, audit data, provider errors, and other actors remain hidden.
+- Dispatch reload and freshly enqueued operation flows continue polling owned pending operations every three seconds, clear synced/cancelled state, and preserve review-required state.
+- Fix Round 2 focused ownership and UI suite: 5 files and 31 tests passed.
+- Fix Round 2 full verification: 132 files and 823 tests passed; ESLint passed; production build passed; `git diff --check` passed.

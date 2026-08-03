@@ -115,7 +115,7 @@ test("global integration state is non-actionable without recovery permission", a
   expect(screen.queryByRole("link", { name: "Integrations connected" })).not.toBeInTheDocument();
 });
 
-test("reload hydration restores durable operations and clears them after terminal sync", async () => {
+test("a technician reload restores their durable operation and clears it after terminal sync", async () => {
   vi.useFakeTimers();
   const fetchMock = vi
     .fn()
@@ -261,7 +261,7 @@ test("stale hydration cannot resurrect an operation already observed as terminal
   expect(screen.getByRole("button", { name: "clear" })).toBeInTheDocument();
 });
 
-test("pending operations poll every three seconds and clear after syncing", async () => {
+test("a technician-enqueued operation polls every three seconds and clears after syncing", async () => {
   vi.useFakeTimers();
   const fetchMock = vi
     .fn()

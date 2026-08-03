@@ -3,7 +3,10 @@ import {
   safeIntegrationSummary,
 } from "@/server/integrations/http";
 import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
-import { dispatchRouteAccess } from "@/server/yeastar/route-auth";
+import {
+  canManageIntegrationRecovery,
+  staffRouteAccess,
+} from "@/server/yeastar/route-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,15 +15,17 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ operationId: string }> },
 ) {
-  if (!(await dispatchRouteAccess())) {
+  const access = await staffRouteAccess();
+  if (!access?.email) {
     return integrationJson({ error: "Unauthorized." }, { status: 401 });
   }
 
   const { operationId } = await context.params;
   try {
-    const operation = await createPostgresIntegrationRepository().getOperation(
-      operationId,
-    );
+    const repository = createPostgresIntegrationRepository();
+    const operation = canManageIntegrationRecovery(access.email)
+      ? await repository.getOperation(operationId)
+      : await repository.getOperationForActor(operationId, access.email);
     return integrationJson({
       operation: {
         actionType: operation.actionType,

@@ -33,8 +33,12 @@ export async function adminRouteAccess() {
 export async function dispatchRouteAccess() {
   const access = await staffRouteAccess();
   if (!access?.email) return null;
-  const profile = findStaffForZohoLogin(access.email);
-  return profile?.dispatchEnabled || isAdminStaffEmail(access.email)
+  return canManageIntegrationRecovery(access.email)
     ? access
     : null;
+}
+
+export function canManageIntegrationRecovery(email: string) {
+  const profile = findStaffForZohoLogin(email);
+  return Boolean(profile?.dispatchEnabled || isAdminStaffEmail(email));
 }

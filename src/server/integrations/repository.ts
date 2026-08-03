@@ -21,12 +21,14 @@ type IntegrationQueryName =
   | "expireExpiredLeases"
   | "findOperationByKey"
   | "getOperation"
+  | "getOperationForActor"
   | "getHealth"
   | "getOperationCounts"
   | "getStepResults"
   | "insertOperation"
   | "insertStep"
   | "listActiveOperations"
+  | "listActiveOperationsForActor"
   | "listActionableOperations"
   | "listOperations"
   | "markStepFailed"
@@ -45,7 +47,7 @@ export type IntegrationRepository = ReturnType<typeof createIntegrationRepositor
 export function createIntegrationRepository(sql: IntegrationSql) {
   async function enqueueInCurrentTransaction(input: EnqueueIntegrationOperation) {
     const inputFingerprint = fingerprintOperationInput(input);
-    const actorEmail = normalizeEmail(input.actorEmail);
+    const actorEmail = normalizeIntegrationActorEmail(input.actorEmail);
     const existing = (await sql.query("findOperationByKey", [
       input.idempotencyKey,
     ])) as IntegrationOperation[];
@@ -171,6 +173,16 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       );
     },
 
+    async getOperationForActor(operationId: string, actorEmail: string) {
+      return requiredRow<IntegrationOperation>(
+        await sql.query("getOperationForActor", [
+          operationId,
+          normalizeIntegrationActorEmail(actorEmail),
+        ]),
+        "Integration operation was not found.",
+      );
+    },
+
     async getStepResults(operationId: string) {
       const rows = (await sql.query("getStepResults", [operationId])) as Array<{
         result: Record<string, unknown>;
@@ -185,6 +197,19 @@ export function createIntegrationRepository(sql: IntegrationSql) {
 
     async listActiveOperations({ limit = 50 }: { limit?: number } = {}) {
       return (await sql.query("listActiveOperations", [limit])) as IntegrationOperation[];
+    },
+
+    async listActiveOperationsForActor({
+      actorEmail,
+      limit = 50,
+    }: {
+      actorEmail: string;
+      limit?: number;
+    }) {
+      return (await sql.query("listActiveOperationsForActor", [
+        normalizeIntegrationActorEmail(actorEmail),
+        limit,
+      ])) as IntegrationOperation[];
     },
 
     async listActionableOperations({ limit = 50 }: { limit?: number } = {}) {
@@ -719,6 +744,19 @@ class PostgresIntegrationSql implements IntegrationSql {
           `,
         );
       }
+      case "listActiveOperationsForActor": {
+        const [actorEmail, limit] = values as [string, number];
+        return this.operations(
+          this.sql`
+            select ${this.sql.unsafe(operationColumns)}
+            from public.integration_operations
+            where state in ('queued', 'syncing', 'retrying', 'review_required')
+              and lower(btrim(actor_email)) = ${actorEmail}
+            order by updated_at desc
+            limit ${limit}
+          `,
+        );
+      }
       case "listActionableOperations": {
         const [limit] = values as [number];
         return this.operations(
@@ -773,6 +811,18 @@ class PostgresIntegrationSql implements IntegrationSql {
             select ${this.sql.unsafe(operationColumns)}
             from public.integration_operations
             where id = ${operationId}::uuid
+            limit 1
+          `,
+        );
+      }
+      case "getOperationForActor": {
+        const [operationId, actorEmail] = values as [string, string];
+        return this.operations(
+          this.sql`
+            select ${this.sql.unsafe(operationColumns)}
+            from public.integration_operations
+            where id = ${operationId}::uuid
+              and lower(btrim(actor_email)) = ${actorEmail}
             limit 1
           `,
         );
@@ -1024,7 +1074,7 @@ function assertMatchingInput(
 function fingerprintOperationInput(input: EnqueueIntegrationOperation) {
   return fingerprintPayload({
     actionType: input.actionType,
-    actorEmail: normalizeEmail(input.actorEmail),
+    actorEmail: normalizeIntegrationActorEmail(input.actorEmail),
     payload: input.payload,
     requestId: input.requestId ?? null,
     sourceVersion: input.sourceVersion ?? null,
@@ -1037,7 +1087,7 @@ function fingerprintOperationInput(input: EnqueueIntegrationOperation) {
   });
 }
 
-function normalizeEmail(value: string) {
+export function normalizeIntegrationActorEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
@@ -1078,7 +1128,9 @@ function safeError(value: string) {
 
 function sanitizeAuditEvent(input: IntegrationAuditEvent): IntegrationAuditEvent {
   return {
-    ...(input.actorEmail ? { actorEmail: normalizeEmail(input.actorEmail) } : {}),
+    ...(input.actorEmail
+      ? { actorEmail: normalizeIntegrationActorEmail(input.actorEmail) }
+      : {}),
     ...(input.operationId ? { operationId: input.operationId } : {}),
     ...(input.operatorAction ? { operatorAction: input.operatorAction } : {}),
     ...(input.outcome ? { outcome: input.outcome } : {}),

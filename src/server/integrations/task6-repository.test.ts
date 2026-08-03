@@ -82,6 +82,45 @@ describe("integration recovery repository", () => {
       "outlook:lead": { externalId: "event-1" },
     });
   });
+
+  it("normalizes actor email for ownership-scoped operation reads", async () => {
+    const owned = {
+      actionType: "schedule.booking",
+      actorEmail: "jervy@egit.com.au",
+      attemptCount: 1,
+      createdAt: "2026-08-03T00:00:00.000Z",
+      id: "operation-owned",
+      idempotencyKey: "schedule-owned",
+      inputFingerprint: "b".repeat(64),
+      payload: {},
+      requestId: "REQ-2",
+      state: "syncing" as const,
+      updatedAt: "2026-08-03T00:00:00.000Z",
+    };
+    const { query, repository } = harness("review_required", {
+      getOperationForActor: [owned],
+      listActiveOperationsForActor: [owned],
+    });
+
+    await expect(
+      repository.getOperationForActor("operation-owned", "  Jervy@EGIT.com.au "),
+    ).resolves.toBe(owned);
+    await expect(
+      repository.listActiveOperationsForActor({
+        actorEmail: " JERVY@egit.com.au ",
+        limit: 25,
+      }),
+    ).resolves.toEqual([owned]);
+
+    expect(query).toHaveBeenCalledWith("getOperationForActor", [
+      "operation-owned",
+      "jervy@egit.com.au",
+    ]);
+    expect(query).toHaveBeenCalledWith("listActiveOperationsForActor", [
+      "jervy@egit.com.au",
+      25,
+    ]);
+  });
 });
 
 function harness(
@@ -127,6 +166,7 @@ function harness(
   Object.assign(sql, { query, transaction });
   return {
     audits,
+    query,
     repository: createIntegrationRepository(sql),
     transaction,
   };

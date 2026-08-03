@@ -39,11 +39,11 @@ describe("cron authorization", () => {
     expect(integrationCronAuthorized(request("short"))).toBe(false);
   });
 
-  it("keeps legacy cron authorization separate from integration recovery", () => {
+  it("keeps legacy cron routes compatible with either server-side scheduler secret", () => {
     vi.stubEnv("INTEGRATION_CRON_SECRET", "primary-secret");
     vi.stubEnv("CRON_SECRET", "fallback-secret");
     expect(cronAuthorized(request("fallback-secret"))).toBe(true);
-    expect(cronAuthorized(request("primary-secret"))).toBe(false);
+    expect(cronAuthorized(request("primary-secret"))).toBe(true);
 
     expect(integrationCronAuthorized(request("primary-secret"))).toBe(true);
     expect(integrationCronAuthorized(request("fallback-secret"))).toBe(false);

@@ -7,10 +7,15 @@ import {
 } from "@/server/staff/profiles";
 
 export function cronAuthorized(request: Request) {
-  const secret =
-    process.env.CRON_SECRET?.trim() ||
-    process.env.INTEGRATION_CRON_SECRET?.trim();
-  return authorizedWithSecret(request, secret);
+  const legacyAuthorized = authorizedWithSecret(
+    request,
+    process.env.CRON_SECRET?.trim(),
+  );
+  const integrationAuthorized = authorizedWithSecret(
+    request,
+    process.env.INTEGRATION_CRON_SECRET?.trim(),
+  );
+  return legacyAuthorized || integrationAuthorized;
 }
 
 export function integrationCronAuthorized(request: Request) {

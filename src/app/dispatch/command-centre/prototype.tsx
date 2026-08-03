@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
+  ClipboardList,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -45,6 +46,16 @@ import type {
   WorklogType,
 } from "@/server/worklogs/disposition";
 import { roundWorklogMinutes } from "@/server/worklogs/time";
+import {
+  applyTicketTemplate,
+  classifyTicketTemplate,
+  evaluateClosureGuardrails,
+  serviceTicketTemplates,
+  updateTrackItem,
+  type RequestTrackItem,
+  type RequestWorkflow,
+  type TrackItemStatus,
+} from "@/server/dispatch/service-workflow";
 
 import type {
   Appointment,
@@ -2844,6 +2855,41 @@ async function loadMspCentralRequestContext(requestId: string) {
   return body;
 }
 
+async function loadRequestWorkflow(requestId: string) {
+  const response = await fetch(
+    `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/workflow`,
+    { cache: "no-store" },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; workflow?: RequestWorkflow | null }
+    | null;
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Ticket workflow could not be loaded.");
+  }
+  return body.workflow ?? null;
+}
+
+async function publishRequestWorkflowAction(
+  requestId: string,
+  action: Record<string, unknown>,
+) {
+  const response = await fetch(
+    `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/workflow`,
+    {
+      body: JSON.stringify(action),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; workflow?: RequestWorkflow }
+    | null;
+  if (!response.ok || !body?.workflow) {
+    throw new Error(body?.error ?? "Ticket workflow could not be saved.");
+  }
+  return body.workflow;
+}
+
 async function publishMspCentralCommunication(input: {
   idempotencyKey: string;
   message: string;
@@ -3771,7 +3817,7 @@ export function TicketWorkspaceModal({
   onSaved: (result: IntegrationOperationReceipt) => void;
   request?: DispatchRequest;
 }) {
-  const [tab, setTab] = useState<"comms" | "details">("details");
+  const [tab, setTab] = useState<"comms" | "details" | "tracks">("details");
   const [context, setContext] = useState<MspCentralRequestContext>();
   const [loading, setLoading] = useState(liveWriteback);
   const [error, setError] = useState<string>();
@@ -3779,6 +3825,16 @@ export function TicketWorkspaceModal({
   const [message, setMessage] = useState("");
   const [visibility, setVisibility] = useState<"customer" | "internal">("customer");
   const [sending, setSending] = useState(false);
+  const [workflow, setWorkflow] = useState<RequestWorkflow | null>();
+  const [workflowStatus, setWorkflowStatus] = useState<
+    "loading" | "loaded" | "saving"
+  >(liveWriteback ? "loading" : "loaded");
+  const [workflowError, setWorkflowError] = useState<string>();
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    () => classifyTicketTemplate(request ?? { subject: "" })?.templateId ?? "general-support",
+  );
+  const [trackReasons, setTrackReasons] = useState<Record<string, string>>({});
+  const [trackValues, setTrackValues] = useState<Record<string, string>>({});
   const [bookingChoiceId, setBookingChoiceId] = useState(appointment?.id ?? "");
   const pendingCommunication = useRef<{
     idempotencyKey: string;
@@ -3816,6 +3872,49 @@ export function TicketWorkspaceModal({
     };
   }, [liveWriteback, request?.id]);
 
+  useEffect(() => {
+    if (tab !== "tracks" || !request?.id || workflowStatus !== "loading") return;
+    if (!liveWriteback) return;
+    let active = true;
+    loadRequestWorkflow(request.id)
+      .then(async (stored) => {
+        if (!active) return;
+        if (stored) return stored;
+        const classification = classifyTicketTemplate(request);
+        if (!classification) return null;
+        return publishRequestWorkflowAction(request.id, {
+          action: "apply_template",
+          automatic: true,
+          request: {
+            category: request.category,
+            item: request.item,
+            notes: request.notes,
+            subcategory: request.subcategory,
+            subject: request.subject,
+          },
+          templateId: classification.templateId,
+        });
+      })
+      .then((stored) => {
+        if (!active) return;
+        setWorkflow(stored);
+        if (stored) setSelectedTemplateId(stored.templateId);
+        setWorkflowStatus("loaded");
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        setWorkflowError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Ticket workflow could not be loaded.",
+        );
+        setWorkflowStatus("loaded");
+      });
+    return () => {
+      active = false;
+    };
+  }, [liveWriteback, request, tab, workflowStatus]);
+
   if (!request) return null;
   const latestRequest = context?.request ?? request;
   const chosenAppointment =
@@ -3825,6 +3924,78 @@ export function TicketWorkspaceModal({
     : latestRequest.scheduledStart
       ? `${formatTime(latestRequest.scheduledStart)}-${formatTime(latestRequest.scheduledEnd ?? latestRequest.scheduledStart)}`
       : "Not scheduled";
+  const suggestedClassification = classifyTicketTemplate(latestRequest);
+
+  async function applySelectedTemplate() {
+    const template = serviceTicketTemplates.find(
+      (candidate) => candidate.id === selectedTemplateId,
+    );
+    if (!template || workflowStatus === "saving") return;
+    setWorkflowError(undefined);
+    setWorkflowStatus("saving");
+    try {
+      const next = liveWriteback
+        ? await publishRequestWorkflowAction(latestRequest.id, {
+            action: "apply_template",
+            templateId: template.id,
+          })
+        : applyTicketTemplate({
+            actorEmail: "mock@command-centre.local",
+            classification: {
+              confidence: 1,
+              reason: "Dispatcher selected the template.",
+              source: "manual",
+              templateId: template.id,
+            },
+            requestId: latestRequest.id,
+            template,
+          });
+      setWorkflow(next);
+    } catch (saveError) {
+      setWorkflowError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Ticket template could not be applied.",
+      );
+    } finally {
+      setWorkflowStatus("loaded");
+    }
+  }
+
+  async function saveTrackItem(
+    item: RequestTrackItem,
+    status: TrackItemStatus,
+  ) {
+    if (!workflow || workflowStatus === "saving") return;
+    setWorkflowError(undefined);
+    setWorkflowStatus("saving");
+    try {
+      const update = {
+        action: "update_track_item",
+        itemId: item.id,
+        notApplicableReason: trackReasons[item.id],
+        status,
+        value: trackValues[item.id] ?? item.value,
+      };
+      const next = liveWriteback
+        ? await publishRequestWorkflowAction(latestRequest.id, update)
+        : updateTrackItem(workflow, item.id, {
+            actorEmail: "mock@command-centre.local",
+            notApplicableReason: trackReasons[item.id],
+            status,
+            value: trackValues[item.id] ?? item.value,
+          });
+      setWorkflow(next);
+    } catch (saveError) {
+      setWorkflowError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Track item could not be saved.",
+      );
+    } finally {
+      setWorkflowStatus("loaded");
+    }
+  }
 
   async function sendCommunication() {
     const nextMessage = message.trim();
@@ -3942,7 +4113,7 @@ export function TicketWorkspaceModal({
           </div>
         </header>
         <div className="flex shrink-0 gap-1 border-b border-white/10 px-5 pt-2" role="tablist">
-          {(["details", "comms"] as const).map((value) => (
+          {(["details", "comms", "tracks"] as const).map((value) => (
             <button
               key={value}
               aria-selected={tab === value}
@@ -3955,7 +4126,7 @@ export function TicketWorkspaceModal({
               type="button"
               onClick={() => setTab(value)}
             >
-              {value === "details" ? "Overview" : "Comms"}
+              {value === "details" ? "Overview" : value === "comms" ? "Comms" : "Tracks"}
             </button>
           ))}
         </div>
@@ -3981,7 +4152,7 @@ export function TicketWorkspaceModal({
                 </div>
               </section>
             </div>
-          ) : (
+          ) : tab === "comms" ? (
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
               <div className="grid min-w-0 gap-4">
                 <CommunicationThread
@@ -4043,6 +4214,26 @@ export function TicketWorkspaceModal({
                 ) : null}
               </section>
             </div>
+          ) : (
+            <TrackWorkspace
+              error={workflowError}
+              loading={workflowStatus === "loading"}
+              saving={workflowStatus === "saving"}
+              selectedTemplateId={selectedTemplateId}
+              suggestedClassification={suggestedClassification}
+              trackReasons={trackReasons}
+              trackValues={trackValues}
+              workflow={workflow}
+              onApply={applySelectedTemplate}
+              onReasonChange={(itemId, value) =>
+                setTrackReasons((current) => ({ ...current, [itemId]: value }))
+              }
+              onStatusChange={saveTrackItem}
+              onTemplateChange={setSelectedTemplateId}
+              onValueChange={(itemId, value) =>
+                setTrackValues((current) => ({ ...current, [itemId]: value }))
+              }
+            />
           )}
           {loading ? <p className="mt-4 text-xs text-slate-400">Refreshing ticket...</p> : null}
           {refreshWarning ? (
@@ -4090,6 +4281,226 @@ function CommunicationThread({
       )}
     </section>
   );
+}
+
+function TrackWorkspace({
+  error,
+  loading,
+  onApply,
+  onReasonChange,
+  onStatusChange,
+  onTemplateChange,
+  onValueChange,
+  saving,
+  selectedTemplateId,
+  suggestedClassification,
+  trackReasons,
+  trackValues,
+  workflow,
+}: {
+  error?: string;
+  loading: boolean;
+  onApply: () => void;
+  onReasonChange: (itemId: string, value: string) => void;
+  onStatusChange: (item: RequestTrackItem, status: TrackItemStatus) => void;
+  onTemplateChange: (templateId: string) => void;
+  onValueChange: (itemId: string, value: string) => void;
+  saving: boolean;
+  selectedTemplateId: string;
+  suggestedClassification: ReturnType<typeof classifyTicketTemplate>;
+  trackReasons: Record<string, string>;
+  trackValues: Record<string, string>;
+  workflow?: RequestWorkflow | null;
+}) {
+  if (loading) {
+    return <p className="text-sm text-slate-400">Loading ticket template and Track...</p>;
+  }
+  const items = workflow?.track?.items ?? [];
+  const resolvedCount = items.filter((item) => item.status !== "pending").length;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+      <aside className="h-fit rounded-md border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="h-5 w-5 text-cc-orange" />
+          <h3 className="text-sm font-semibold">Ticket template</h3>
+        </div>
+        {suggestedClassification && !workflow ? (
+          <p className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-xs text-emerald-50">
+            High-confidence match: {serviceTicketTemplates.find((template) => template.id === suggestedClassification.templateId)?.name}
+          </p>
+        ) : !workflow ? (
+          <p className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+            Needs classification. Choose the service workflow that fits this request.
+          </p>
+        ) : null}
+        {workflow ? (
+          <div className="mt-3 rounded-md border border-cc-orange/25 bg-cc-orange/[0.06] p-3">
+            <p className="font-semibold text-slate-50">{workflow.templateName}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Version {workflow.templateVersion} · {workflow.classification.source} · {Math.round(workflow.classification.confidence * 100)}%
+            </p>
+          </div>
+        ) : null}
+        <label className="mt-4 block text-xs font-semibold text-slate-300">
+          {workflow ? "Replace template" : "Template"}
+          <select
+            aria-label="Ticket template"
+            className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+            value={selectedTemplateId}
+            onChange={(event) => onTemplateChange(event.target.value)}
+          >
+            {serviceTicketTemplates.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="mt-3 w-full rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+          disabled={saving}
+          type="button"
+          onClick={onApply}
+        >
+          {saving ? "Saving..." : workflow ? "Replace Track" : "Apply ticket template"}
+        </button>
+        <p className="mt-3 text-xs leading-5 text-slate-400">
+          Replacing a Track starts the selected version with fresh checklist items. The change is recorded in ticket history.
+        </p>
+      </aside>
+
+      <section className="min-w-0 rounded-md border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">{workflow?.track?.name ?? "Track"}</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Mandatory items must be completed or marked N/A with a reason before closure.
+            </p>
+          </div>
+          {workflow?.track ? (
+            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs font-semibold tabular-nums">
+              {resolvedCount}/{items.length}
+            </span>
+          ) : null}
+        </div>
+
+        {!workflow?.track ? (
+          <div className="mt-5 grid min-h-44 place-items-center rounded-md border border-dashed border-white/10 text-sm text-slate-500">
+            Apply a ticket template to start its Track.
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-2">
+            {items.map((item, index) => (
+              <article
+                key={item.id}
+                className={`rounded-md border p-3 ${
+                  item.status === "completed"
+                    ? "border-emerald-300/25 bg-emerald-300/[0.06]"
+                    : item.status === "not_applicable"
+                      ? "border-slate-400/20 bg-slate-400/[0.05]"
+                      : "border-white/10 bg-[#111d30]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase text-slate-500">Step {index + 1} · {trackItemTypeLabel(item.type)}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">{item.label}</p>
+                    {item.status === "not_applicable" ? (
+                      <p className="mt-1 text-xs text-slate-400">N/A: {item.notApplicableReason}</p>
+                    ) : null}
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${
+                    item.status === "completed"
+                      ? "bg-emerald-300/15 text-emerald-100"
+                      : item.status === "not_applicable"
+                        ? "bg-slate-300/10 text-slate-300"
+                        : "bg-amber-300/10 text-amber-100"
+                  }`}>
+                    {item.status === "not_applicable" ? "N/A" : item.status}
+                  </span>
+                </div>
+                {trackItemNeedsValue(item) ? (
+                  item.type === "choice" ? (
+                    <select
+                      aria-label={`${item.label} value`}
+                      className="mt-3 w-full rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-sm"
+                      value={trackValues[item.id] ?? item.value ?? ""}
+                      onChange={(event) => onValueChange(item.id, event.target.value)}
+                    >
+                      <option value="">Choose...</option>
+                      {item.options?.map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label={`${item.label} value`}
+                      className="mt-3 w-full rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-sm"
+                      placeholder={trackItemPlaceholder(item.type)}
+                      type={item.type === "date_time" ? "datetime-local" : "text"}
+                      value={trackValues[item.id] ?? item.value ?? ""}
+                      onChange={(event) => onValueChange(item.id, event.target.value)}
+                    />
+                  )
+                ) : null}
+                <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(160px,1fr)_auto_auto]">
+                  <input
+                    aria-label={`${item.label} not applicable reason`}
+                    className="rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-xs"
+                    placeholder="Reason if not applicable"
+                    value={trackReasons[item.id] ?? item.notApplicableReason ?? ""}
+                    onChange={(event) => onReasonChange(item.id, event.target.value)}
+                  />
+                  <button
+                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold disabled:opacity-40"
+                    disabled={saving}
+                    type="button"
+                    onClick={() => onStatusChange(item, "not_applicable")}
+                  >
+                    Not applicable
+                  </button>
+                  <button
+                    className={`rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-40 ${
+                      item.status === "completed"
+                        ? "border border-white/10 bg-white/5 text-slate-200"
+                        : "bg-emerald-400 text-[#071423]"
+                    }`}
+                    disabled={saving}
+                    type="button"
+                    onClick={() => onStatusChange(item, item.status === "completed" ? "pending" : "completed")}
+                  >
+                    {item.status === "completed" ? "Reopen" : "Complete"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">{error}</p>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function trackItemNeedsValue(item: RequestTrackItem) {
+  return item.type !== "checkbox" && item.type !== "approval";
+}
+
+function trackItemTypeLabel(type: RequestTrackItem["type"]) {
+  return {
+    approval: "Approval",
+    asset: "Asset",
+    checkbox: "Check",
+    choice: "Choice",
+    date_time: "Date/time",
+    evidence: "Evidence",
+    text: "Required text",
+  }[type];
+}
+
+function trackItemPlaceholder(type: RequestTrackItem["type"]) {
+  if (type === "asset") return "Asset name or identifier";
+  if (type === "evidence") return "Evidence or attachment reference";
+  return "Required detail";
 }
 
 function SafeRequestContent({ className, value }: { className?: string; value: string }) {
@@ -4255,6 +4666,10 @@ export function WorkLogModal({
     "idle" | "loading" | "loaded" | "failed"
   >(liveWriteback ? "loading" : "idle");
   const [contextError, setContextError] = useState<string>();
+  const [closureWorkflow, setClosureWorkflow] = useState<RequestWorkflow | null>();
+  const [closureWorkflowStatus, setClosureWorkflowStatus] = useState<
+    "idle" | "loading" | "loaded" | "failed"
+  >(liveWriteback ? "loading" : "loaded");
 
   useEffect(() => {
     let active = true;
@@ -4285,6 +4700,22 @@ export function WorkLogModal({
     };
   }, [liveWriteback, request?.id]);
 
+  useEffect(() => {
+    let active = true;
+    if (!liveWriteback || !request?.id) return () => { active = false; };
+    loadRequestWorkflow(request.id)
+      .then((stored) => {
+        if (!active) return;
+        setClosureWorkflow(stored);
+        setClosureWorkflowStatus("loaded");
+      })
+      .catch(() => {
+        if (!active) return;
+        setClosureWorkflowStatus("failed");
+      });
+    return () => { active = false; };
+  }, [liveWriteback, request?.id]);
+
   if (!request) {
     return null;
   }
@@ -4304,7 +4735,7 @@ export function WorkLogModal({
   const selectedTransferTechnician = technicians.find(
     (candidate) => candidate.id === transferTargetId,
   );
-  const outcomeComplete =
+  const baseOutcomeComplete =
     !scheduled ||
     (disposition === "book_forward"
       ? Boolean(
@@ -4317,6 +4748,19 @@ export function WorkLogModal({
       : disposition === "transfer_escalate"
         ? Boolean(selectedTransferTechnician && transferReason.trim())
         : Boolean(disposition));
+  const closureGuardrails = evaluateClosureGuardrails({
+    disposition,
+    solution: disposition === "complete" && useAsSolution ? notes.trim() : undefined,
+    track: closureWorkflow?.track,
+    workflow: closureWorkflow,
+    worklogDescription: notes,
+    worklogMinutes: Number(minutes),
+  });
+  const outcomeComplete =
+    baseOutcomeComplete &&
+    (disposition !== "complete" ||
+      ((!liveWriteback || closureWorkflowStatus === "loaded") &&
+        closureGuardrails.canClose));
 
   async function submitWorklog() {
     if (!outcomeComplete || submitting) return;
@@ -4659,19 +5103,45 @@ export function WorkLogModal({
           ) : null}
 
           {disposition === "complete" ? (
-            <label className="flex items-start gap-3 rounded-md border border-sky-300/20 bg-sky-400/[0.08] p-3 text-sm text-slate-200">
-              <input
-                aria-label="Use Work Log as solution"
-                checked={useAsSolution}
-                className="mt-0.5 h-4 w-4 accent-[#ff823a]"
-                type="checkbox"
-                onChange={(event) => setUseAsSolution(event.target.checked)}
-              />
-              <span>
-                <strong className="block text-slate-50">Use as solution</strong>
-                Writes these notes as the ticket resolution and includes them in the customer completion response.
-              </span>
-            </label>
+            <div className="grid gap-3">
+              <label className="flex items-start gap-3 rounded-md border border-sky-300/20 bg-sky-400/[0.08] p-3 text-sm text-slate-200">
+                <input
+                  aria-label="Use Work Log as solution"
+                  checked={useAsSolution}
+                  className="mt-0.5 h-4 w-4 accent-[#ff823a]"
+                  type="checkbox"
+                  onChange={(event) => setUseAsSolution(event.target.checked)}
+                />
+                <span>
+                  <strong className="block text-slate-50">
+                    Use as solution{closureWorkflow?.requiresSolution ? " · Required" : ""}
+                  </strong>
+                  Writes these notes as the ticket resolution and includes them in the customer completion response.
+                </span>
+              </label>
+              {closureWorkflowStatus === "loading" ? (
+                <p className="rounded-md border border-white/10 bg-white/5 p-3 text-xs text-slate-300">
+                  Checking closure requirements...
+                </p>
+              ) : closureWorkflowStatus === "failed" ? (
+                <p className="rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+                  Closure requirements could not be loaded. Completion remains blocked until they can be checked.
+                </p>
+              ) : closureGuardrails.blockers.length > 0 ? (
+                <div className="rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+                  <strong className="block">Before completing</strong>
+                  <ul className="mt-2 list-disc space-y-1 pl-4">
+                    {closureGuardrails.blockers.map((blocker) => (
+                      <li key={blocker.code}>{blocker.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="flex items-center gap-2 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-xs font-semibold text-emerald-50">
+                  <CheckCircle2 className="h-4 w-4" /> Closure requirements complete
+                </p>
+              )}
+            </div>
           ) : null}
 
         </div>

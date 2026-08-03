@@ -7,6 +7,7 @@ import {
 } from "@/server/auth/session";
 import { getConfiguredPresenceOverrideRepository } from "@/server/presence/repository";
 import { getWallboardSnapshot } from "@/server/presence/service";
+import { getDeploymentVersion } from "@/app/wallboard/deployment-version";
 
 export async function GET() {
   const access = await approvedWallboardAccess();
@@ -106,6 +107,7 @@ function noStoreJson(body: unknown, init?: ResponseInit) {
     ...init,
     headers: {
       "Cache-Control": "no-store",
+      "X-Command-Centre-Version": getDeploymentVersion(),
       ...init?.headers,
     },
   });

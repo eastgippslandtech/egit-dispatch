@@ -1228,6 +1228,7 @@ test("opens a queue ticket in the full ticket workspace", async () => {
   const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
   expect(within(dialog).getByRole("tab", { name: "Overview" })).toBeInTheDocument();
   expect(within(dialog).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("tab", { name: "Tracks" })).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Work Log" })).toBeInTheDocument();
 });
 

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AccessNotApproved } from "@/app/auth/auth-screen";
 import { getWallboardAccess } from "@/server/auth/session";
 import { getWallboardSnapshot } from "@/server/presence/service";
+import { getDeploymentVersion } from "./deployment-version";
 import { WallboardScreen } from "./wallboard-screen";
 
 export async function ProtectedWallboardScreen() {
@@ -22,6 +23,7 @@ export async function ProtectedWallboardScreen() {
         access.accessLevel === "staff" ? access.authDisabled : undefined
       }
       canAccessDispatch={access.accessLevel === "staff"}
+      deploymentVersion={getDeploymentVersion()}
       initialSnapshot={await getWallboardSnapshot()}
     />
   );

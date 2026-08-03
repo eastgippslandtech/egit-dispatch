@@ -5,6 +5,8 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
+import { evaluateClosureGuardrails } from "@/server/dispatch/service-workflow";
+import { getConfiguredRequestWorkflowRepository } from "@/server/dispatch/service-workflow-repository";
 import { fingerprintPayload } from "@/server/integrations/fingerprint";
 import { integrationRouteErrorStatus } from "@/server/integrations/http";
 import { worklogOperation } from "@/server/integrations/operations";
@@ -27,6 +29,28 @@ export async function POST(request: Request) {
   try {
     const command = validateWorklogDispositionCommand(await request.json());
     const config = readDispatchConfig();
+    if (command.disposition === "complete") {
+      const workflowRepository = getConfiguredRequestWorkflowRepository(
+        config.databaseUrl,
+      );
+      const workflow = workflowRepository
+        ? await workflowRepository.get(command.requestId)
+        : null;
+      const guardrails = evaluateClosureGuardrails({
+        disposition: command.disposition,
+        solution: command.solution,
+        track: workflow?.track,
+        workflow,
+        worklogDescription: command.description,
+        worklogMinutes: command.durationMinutes,
+      });
+      if (!guardrails.canClose) {
+        return NextResponse.json(
+          { blockers: guardrails.blockers, error: "Closure requirements are not complete.", ok: false },
+          { headers: { "Cache-Control": "no-store" }, status: 409 },
+        );
+      }
+    }
     const mspClient = createMspCentralClient(config);
     const owner = await resolveMspCentralWorklogOwner({
       email: access.email,

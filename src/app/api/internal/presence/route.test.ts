@@ -63,11 +63,23 @@ describe("internal presence API", () => {
   });
 
   it("returns a no-store wallboard snapshot", async () => {
+    const previousVercelUrl = process.env.VERCEL_URL;
+    process.env.VERCEL_URL = "egit-dispatch-current.vercel.app";
+
     const response = await GET();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-command-centre-version")).toBe(
+      "egit-dispatch-current.vercel.app",
+    );
     await expect(response.json()).resolves.toEqual(snapshot);
+
+    if (previousVercelUrl === undefined) {
+      delete process.env.VERCEL_URL;
+    } else {
+      process.env.VERCEL_URL = previousVercelUrl;
+    }
   });
 
   it("returns the wallboard snapshot for a signed wallboard session", async () => {

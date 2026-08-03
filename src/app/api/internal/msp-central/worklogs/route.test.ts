@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  applyTicketTemplate,
+  serviceTicketTemplates,
+  updateTrackItem,
+} from "@/server/dispatch/service-workflow";
+import { getConfiguredRequestWorkflowRepository } from "@/server/dispatch/service-workflow-repository";
 import { createPostgresWorklogMigrationCoordinator } from "@/server/worklogs/migration";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
@@ -21,6 +27,10 @@ vi.mock("@/server/integrations/wake", () => ({
   wakeIntegrationProcessor: vi.fn(),
 }));
 
+vi.mock("@/server/dispatch/service-workflow-repository", () => ({
+  getConfiguredRequestWorkflowRepository: vi.fn(),
+}));
+
 vi.mock("@/server/msp-central/client", () => ({
   createMspCentralClient: vi.fn(() => ({})),
 }));
@@ -38,6 +48,9 @@ vi.mock("@/server/worklogs/migration", () => ({
 }));
 
 const getAccessMock = vi.mocked(getCommandCentreAccess);
+const getWorkflowRepositoryMock = vi.mocked(
+  getConfiguredRequestWorkflowRepository,
+);
 const createMigrationCoordinatorMock = vi.mocked(
   createPostgresWorklogMigrationCoordinator,
 );
@@ -66,6 +79,10 @@ describe("MSP Central Work Log route", () => {
       },
     ]);
     createOutcomeStoreMock.mockReturnValue({ listCalendarAssignments } as never);
+    getWorkflowRepositoryMock.mockReturnValue({
+      get: vi.fn().mockResolvedValue(null),
+      save: vi.fn(),
+    } as never);
     migrate.mockImplementation(async ({ command: submitted, createOperation }) => {
       enqueued.push(createOperation(submitted, false));
       return {
@@ -158,7 +175,83 @@ describe("MSP Central Work Log route", () => {
     });
     expect(enqueued).toEqual([]);
   });
+
+  it("blocks completion while mandatory Track items are unresolved", async () => {
+    const workflow = requestWorkflow();
+    getWorkflowRepositoryMock.mockReturnValue({
+      get: vi.fn().mockResolvedValue(workflow),
+      save: vi.fn(),
+    } as never);
+
+    const response = await POST(requestWith({ ...command(), solution: "Fixed and tested." }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      blockers: [expect.objectContaining({ code: "track_incomplete" })],
+      ok: false,
+    });
+    expect(migrate).not.toHaveBeenCalled();
+  });
+
+  it("blocks a template completion without its required customer solution", async () => {
+    getWorkflowRepositoryMock.mockReturnValue({
+      get: vi.fn().mockResolvedValue(completedRequestWorkflow()),
+      save: vi.fn(),
+    } as never);
+
+    const response = await POST(requestWith(command()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      blockers: [expect.objectContaining({ code: "solution_required" })],
+      ok: false,
+    });
+  });
+
+  it("queues completion after the Track and solution guardrails pass", async () => {
+    getWorkflowRepositoryMock.mockReturnValue({
+      get: vi.fn().mockResolvedValue(completedRequestWorkflow()),
+      save: vi.fn(),
+    } as never);
+
+    const response = await POST(
+      requestWith({ ...command(), solution: "Fixed and tested with the customer." }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(migrate).toHaveBeenCalledOnce();
+  });
 });
+
+function requestWorkflow() {
+  const template = serviceTicketTemplates[0];
+  return applyTicketTemplate({
+    actorEmail: "simeon@egit.com.au",
+    classification: {
+      confidence: 1,
+      reason: "Manual",
+      source: "manual",
+      templateId: template.id,
+    },
+    requestId: "request-1",
+    template,
+  });
+}
+
+function completedRequestWorkflow() {
+  let workflow = requestWorkflow();
+  for (const item of workflow.track!.items) {
+    workflow = updateTrackItem(workflow, item.id, {
+      actorEmail: "simeon@egit.com.au",
+      status: "completed",
+      value:
+        item.type === "checkbox" || item.type === "approval"
+          ? undefined
+          : "Captured detail",
+    });
+  }
+  return workflow;
+}
 
 function command() {
   return {

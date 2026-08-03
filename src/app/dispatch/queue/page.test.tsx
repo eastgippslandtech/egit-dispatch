@@ -70,8 +70,38 @@ test("opens the shared ticket workspace and hands scheduling to the board", asyn
   const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
   expect(within(workspace).getByRole("tab", { name: "Overview" })).toBeInTheDocument();
   expect(within(workspace).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
+  expect(within(workspace).getByRole("tab", { name: "Tracks" })).toBeInTheDocument();
   fireEvent.click(within(workspace).getByRole("button", { name: "Schedule" }));
   expect(routerPush).toHaveBeenCalledWith("/dispatch?requestId=100284");
+});
+
+test("applies a ticket template and resolves Track items in the workspace", async () => {
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Packhouse label printer offline/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Open workspace" }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("tab", { name: "Tracks" }));
+  fireEvent.click(within(workspace).getByRole("button", { name: "Apply ticket template" }));
+
+  expect(within(workspace).getByText("General support Track")).toBeInTheDocument();
+  expect(within(workspace).getByText("0/3")).toBeInTheDocument();
+  const firstStep = within(workspace)
+    .getByText("Confirm the requested outcome")
+    .closest("article");
+  if (!firstStep) throw new Error("Expected first Track step.");
+  fireEvent.change(within(firstStep).getByLabelText(/Confirm the requested outcome value/), {
+    target: { value: "Printer returns to normal operation" },
+  });
+  fireEvent.click(within(firstStep).getByRole("button", { name: "Complete" }));
+  expect(within(workspace).getByText("1/3")).toBeInTheDocument();
+
+  const secondStep = within(workspace)
+    .getByText("Complete and test the technical work")
+    .closest("article");
+  if (!secondStep) throw new Error("Expected second Track step.");
+  fireEvent.click(within(secondStep).getByRole("button", { name: "Not applicable" }));
+  expect(within(workspace).getByText(/reason is required/i)).toBeInTheDocument();
 });
 
 test("collapses the request preview before it can clip queue actions", async () => {

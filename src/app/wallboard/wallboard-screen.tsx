@@ -36,6 +36,7 @@ import type {
 } from "@/server/presence/types";
 
 import { getWallboardDateAfterRefresh } from "./auto-advance";
+import { shouldReloadForDeployment } from "./deployment-version";
 import { formatTalkTime } from "@/server/yeastar/talk-time";
 
 const STATUS_STYLE: Record<PresenceStatus, string> = {
@@ -63,10 +64,12 @@ const STATUS_ICON_STYLE: Record<PresenceStatus, string> = {
 export function WallboardScreen({
   authDisabled = false,
   canAccessDispatch,
+  deploymentVersion,
   initialSnapshot,
 }: {
   authDisabled?: boolean;
   canAccessDispatch: boolean;
+  deploymentVersion: string;
   initialSnapshot: WallboardSnapshot;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
@@ -104,6 +107,15 @@ export function WallboardScreen({
           cache: "no-store",
         });
         if (!response.ok) throw new Error("Wallboard refresh failed.");
+        if (
+          shouldReloadForDeployment(
+            deploymentVersion,
+            response.headers.get("x-command-centre-version"),
+          )
+        ) {
+          window.location.reload();
+          return;
+        }
         const next = (await response.json()) as WallboardSnapshot;
         if (!stopped) {
           setSnapshot(next);
@@ -124,7 +136,7 @@ export function WallboardScreen({
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [deploymentVersion]);
 
   const presences = useMemo(
     () =>

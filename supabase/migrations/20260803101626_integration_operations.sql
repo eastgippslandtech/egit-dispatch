@@ -45,28 +45,33 @@ create table public.integration_operation_steps (
 create table public.integration_audit_events (
   id uuid primary key default gen_random_uuid(),
   operation_id uuid references public.integration_operations(id) on delete set null,
-  request_id text not null,
-  event_type text not null,
-  actor text,
-  connector text
+  request_id varchar(128) not null
+    check (request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
+  event_type varchar(64) not null
+    check (event_type ~ '^[a-z][a-z0-9_.-]{0,63}$'),
+  outcome varchar(32)
+    check (outcome is null or outcome ~ '^[a-z][a-z0-9_.-]{0,31}$'),
+  error_code varchar(64)
+    check (error_code is null or error_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$'),
+  attempt_count integer
+    check (attempt_count is null or attempt_count between 0 and 1000),
+  http_status integer
+    check (http_status is null or http_status between 100 and 599),
+  duration_ms integer
+    check (duration_ms is null or duration_ms between 0 and 86400000),
+  step_key varchar(64)
+    check (step_key is null or step_key ~ '^[a-z][a-z0-9_.-]{0,63}$'),
+  external_record_id varchar(128)
+    check (external_record_id is null or external_record_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
+  external_version varchar(64)
+    check (external_version is null or external_version ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$'),
+  connector varchar(32)
     check (connector is null or connector in ('command_centre','msp_central','outlook','zoho_crm','msp_endpoint','zoho_survey','push','email')),
-  details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  constraint integration_audit_events_details_keys_check check (
-    jsonb_typeof(details) = 'object'
-    and details - ARRAY['event', 'outcome', 'error_code', 'attempt_count', 'http_status', 'duration_ms', 'step_key'] = '{}'::jsonb
-    and coalesce(jsonb_typeof(details -> 'event'), 'null') in ('null', 'string')
-    and coalesce(jsonb_typeof(details -> 'outcome'), 'null') in ('null', 'string')
-    and coalesce(jsonb_typeof(details -> 'error_code'), 'null') in ('null', 'string')
-    and coalesce(jsonb_typeof(details -> 'attempt_count'), 'null') in ('null', 'number')
-    and coalesce(jsonb_typeof(details -> 'http_status'), 'null') in ('null', 'number')
-    and coalesce(jsonb_typeof(details -> 'duration_ms'), 'null') in ('null', 'number')
-    and coalesce(jsonb_typeof(details -> 'step_key'), 'null') in ('null', 'string')
-  )
+  created_at timestamptz not null default now()
 );
 
-comment on column public.integration_audit_events.details is
-  'Safe audit summary only. Allowed top-level keys: event, outcome, error_code, attempt_count, http_status, duration_ms, step_key. Provider payloads, authorization headers, tokens, and other sensitive data are prohibited.';
+comment on table public.integration_audit_events is
+  'Bounded audit summary only. Provider payloads, authorization headers, tokens, and arbitrary JSON are not stored.';
 
 create table public.integration_connector_health (
   connector text primary key

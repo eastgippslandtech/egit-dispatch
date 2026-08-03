@@ -26,19 +26,41 @@ describe("durable integration schema", () => {
     expect(sql).toContain("create table public.integration_audit_events");
     expect(sql).toContain("create table public.integration_connector_health");
     expect(sql).toContain("check (connector in ('command_centre','msp_central','outlook','zoho_crm','msp_endpoint','zoho_survey','push','email'))");
-    expect(sql).toContain("details - ARRAY['event', 'outcome', 'error_code', 'attempt_count', 'http_status', 'duration_ms', 'step_key'] = '{}'::jsonb");
-    expect(sql).toContain("Allowed top-level keys: event, outcome, error_code, attempt_count, http_status, duration_ms, step_key.");
 
-    for (const sensitiveKey of [
-      "authorization",
-      "authorization_header",
-      "headers",
-      "token",
-      "access_token",
-      "refresh_token",
-      "provider_payload",
+    const auditTable = sql.match(
+      /create table public\.integration_audit_events \(([\s\S]*?)\n\);/,
+    )?.[1];
+    expect(auditTable).toBeDefined();
+    expect(auditTable!).not.toMatch(/\b(?:details|payload)\s+jsonb\b/);
+
+    for (const column of [
+      "request_id varchar(128) not null",
+      "event_type varchar(64) not null",
+      "outcome varchar(32)",
+      "error_code varchar(64)",
+      "attempt_count integer",
+      "http_status integer",
+      "duration_ms integer",
+      "step_key varchar(64)",
+      "external_record_id varchar(128)",
+      "external_version varchar(64)",
     ]) {
-      expect(sql).not.toContain(`'${sensitiveKey}'`);
+      expect(auditTable).toContain(column);
+    }
+
+    for (const constraint of [
+      "request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'",
+      "event_type ~ '^[a-z][a-z0-9_.-]{0,63}$'",
+      "outcome is null or outcome ~ '^[a-z][a-z0-9_.-]{0,31}$'",
+      "error_code is null or error_code ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$'",
+      "attempt_count is null or attempt_count between 0 and 1000",
+      "http_status is null or http_status between 100 and 599",
+      "duration_ms is null or duration_ms between 0 and 86400000",
+      "step_key is null or step_key ~ '^[a-z][a-z0-9_.-]{0,63}$'",
+      "external_record_id is null or external_record_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'",
+      "external_version is null or external_version ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$'",
+    ]) {
+      expect(auditTable).toContain(constraint);
     }
 
     expect(sql).toContain("create index integration_operation_steps_due_idx");

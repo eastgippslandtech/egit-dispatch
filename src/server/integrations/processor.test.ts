@@ -9,7 +9,10 @@ import {
 } from "./errors";
 import { createIntegrationProcessor } from "./processor";
 import type { IntegrationRepository } from "./repository";
-import { createIntegrationAdapterRegistry } from "./registry";
+import {
+  createIntegrationAdapterRegistry,
+  type IntegrationStepAdapter,
+} from "./registry";
 import type {
   IntegrationAuditEvent,
   IntegrationOperation,
@@ -28,7 +31,9 @@ describe("classifyIntegrationError", () => {
     [Object.assign(new Error("invalid input"), { status: 400 }), "permanent"],
     [Object.assign(new Error("version conflict"), { status: 409 }), "conflict"],
   ])("classifies provider failures", (error, code) => {
-    expect(classifyIntegrationError(error).code).toBe(code);
+    expect(
+      classifyIntegrationError(error, { writeSafety: "idempotent" }).code,
+    ).toBe(code);
   });
 
   it("treats an uncertain non-idempotent timeout as ambiguous", () => {
@@ -42,19 +47,35 @@ describe("classifyIntegrationError", () => {
   });
 
   it("preserves explicit integration error classes", () => {
-    expect(classifyIntegrationError(new RetryableIntegrationError("again"))).toBeInstanceOf(
-      RetryableIntegrationError,
-    );
     expect(
-      classifyIntegrationError(new AuthenticationIntegrationError("reauthorize")),
+      classifyIntegrationError(new RetryableIntegrationError("again"), {
+        writeSafety: "idempotent",
+      }),
+    ).toBeInstanceOf(RetryableIntegrationError);
+    expect(
+      classifyIntegrationError(new AuthenticationIntegrationError("reauthorize"), {
+        writeSafety: "idempotent",
+      }),
     ).toBeInstanceOf(AuthenticationIntegrationError);
-    expect(classifyIntegrationError(new PermanentIntegrationError("invalid"))).toBeInstanceOf(
-      PermanentIntegrationError,
-    );
+    expect(
+      classifyIntegrationError(new PermanentIntegrationError("invalid"), {
+        writeSafety: "idempotent",
+      }),
+    ).toBeInstanceOf(PermanentIntegrationError);
   });
 });
 
 describe("integration processor", () => {
+  it("rejects an adapter whose write safety is not declared", () => {
+    expect(() =>
+      createIntegrationAdapterRegistry({
+        "outlook.unsafe": {
+          execute: vi.fn(),
+        } as unknown as IntegrationStepAdapter,
+      }),
+    ).toThrow("writeSafety");
+  });
+
   it("records a successful result, connector health, and bounded audit event", async () => {
     const step = makeStep();
     const harness = createHarness([step]);
@@ -67,7 +88,7 @@ describe("integration processor", () => {
       clock: () => now,
       jitter: (delay) => delay,
       registry: createIntegrationAdapterRegistry({
-        "outlook.upsert": { execute },
+        "outlook.upsert": { execute, writeSafety: "idempotent" },
       }),
       repository: harness.repository,
       workerId: "worker-a",
@@ -127,6 +148,7 @@ describe("integration processor", () => {
       registry: createIntegrationAdapterRegistry({
         "outlook.upsert": {
           execute: vi.fn().mockRejectedValue(new RetryableIntegrationError("try again", 503)),
+          writeSafety: "idempotent",
         },
       }),
       repository: harness.repository,
@@ -144,12 +166,16 @@ describe("integration processor", () => {
       reviewRequired: false,
       stepId: "step-1",
     });
+    expect(harness.health[0]).toMatchObject({
+      status: "degraded",
+      succeeded: false,
+    });
   });
 
   it.each([
     [new AuthenticationIntegrationError("refresh token rejected", 401), "authentication_required"],
-    [new PermanentIntegrationError("validation failed", 400), "degraded"],
-    [Object.assign(new Error("version conflict"), { status: 409 }), "degraded"],
+    [new PermanentIntegrationError("validation failed", 400), undefined],
+    [Object.assign(new Error("version conflict"), { status: 409 }), undefined],
     [new AmbiguousIntegrationError("write outcome unknown"), "degraded"],
   ])("moves non-retryable failures to review", async (failure, healthStatus) => {
     const harness = createHarness([makeStep()]);
@@ -157,7 +183,10 @@ describe("integration processor", () => {
       clock: () => now,
       jitter: (delay) => delay,
       registry: createIntegrationAdapterRegistry({
-        "outlook.upsert": { execute: vi.fn().mockRejectedValue(failure) },
+        "outlook.upsert": {
+          execute: vi.fn().mockRejectedValue(failure),
+          writeSafety: "idempotent",
+        },
       }),
       repository: harness.repository,
       workerId: "worker-a",
@@ -170,7 +199,14 @@ describe("integration processor", () => {
       nextAttemptAt: undefined,
       reviewRequired: true,
     });
-    expect(harness.health[0]).toMatchObject({ status: healthStatus, succeeded: false });
+    if (healthStatus) {
+      expect(harness.health[0]).toMatchObject({
+        status: healthStatus,
+        succeeded: false,
+      });
+    } else {
+      expect(harness.health).toEqual([]);
+    }
   });
 
   it("never automatically retries a timeout from a non-idempotent adapter", async () => {
@@ -228,11 +264,12 @@ describe("integration processor", () => {
       registry: createIntegrationAdapterRegistry({
         "outlook.upsert": {
           execute: vi.fn().mockRejectedValue(
-            new PermanentIntegrationError(
+            new RetryableIntegrationError(
               "Authorization: Bearer secret-token refresh_token=refresh-secret",
-              400,
+              503,
             ),
           ),
+          writeSafety: "idempotent",
         },
       }),
       repository: harness.repository,
@@ -268,12 +305,14 @@ describe("integration processor", () => {
             executionOrder.push("first");
             throw new PermanentIntegrationError("bad request", 400);
           }),
+          writeSafety: "idempotent",
         },
         "outlook.ok": {
           execute: vi.fn(async () => {
             executionOrder.push("second");
             return { externalId: "event-2" };
           }),
+          writeSafety: "idempotent",
         },
       }),
       repository: harness.repository,
@@ -295,7 +334,7 @@ describe("integration processor", () => {
       clock: () => now,
       jitter: (delay) => delay,
       registry: createIntegrationAdapterRegistry({
-        "outlook.upsert": { execute },
+        "outlook.upsert": { execute, writeSafety: "idempotent" },
       }),
       repository: harness.repository,
       workerId: "worker-a",
@@ -330,8 +369,14 @@ describe("integration processor", () => {
       clock: () => now,
       jitter: (delay) => delay,
       registry: createIntegrationAdapterRegistry({
-        "outlook.first": { execute: vi.fn().mockResolvedValue({ externalId: "event-1" }) },
-        "outlook.second": { execute: secondExecute },
+        "outlook.first": {
+          execute: vi.fn().mockResolvedValue({ externalId: "event-1" }),
+          writeSafety: "idempotent",
+        },
+        "outlook.second": {
+          execute: secondExecute,
+          writeSafety: "idempotent",
+        },
       }),
       repository: harness.repository,
       workerId: "worker-a",

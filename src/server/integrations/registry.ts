@@ -8,7 +8,7 @@ export type IntegrationStepResult = Record<string, unknown> & {
 
 export type IntegrationStepAdapter = {
   execute(step: IntegrationOperationStep): Promise<IntegrationStepResult>;
-  writeSafety?: "idempotent" | "non_idempotent";
+  writeSafety: "idempotent" | "non_idempotent";
 };
 
 export type IntegrationAdapterRegistry = ReturnType<
@@ -18,6 +18,16 @@ export type IntegrationAdapterRegistry = ReturnType<
 export function createIntegrationAdapterRegistry(
   adapters: Record<string, IntegrationStepAdapter>,
 ) {
+  for (const [action, adapter] of Object.entries(adapters)) {
+    if (
+      adapter.writeSafety !== "idempotent" &&
+      adapter.writeSafety !== "non_idempotent"
+    ) {
+      throw new Error(
+        `Integration adapter ${action} must declare writeSafety as idempotent or non_idempotent.`,
+      );
+    }
+  }
   const registered = new Map(Object.entries(adapters));
   return {
     get(action: string) {
@@ -31,4 +41,3 @@ export function createIntegrationAdapterRegistry(
     },
   };
 }
-

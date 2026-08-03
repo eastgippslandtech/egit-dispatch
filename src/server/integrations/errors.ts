@@ -73,7 +73,7 @@ export type ClassifiedIntegrationError =
 
 export function classifyIntegrationError(
   error: unknown,
-  { writeSafety = "idempotent" }: { writeSafety?: "idempotent" | "non_idempotent" } = {},
+  { writeSafety }: { writeSafety: "idempotent" | "non_idempotent" },
 ): ClassifiedIntegrationError {
   if (error instanceof IntegrationError) {
     if (writeSafety === "non_idempotent" && error.code === "retryable") {

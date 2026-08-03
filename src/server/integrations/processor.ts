@@ -70,7 +70,7 @@ export function createIntegrationProcessor({
       adapter = registry.get(step.action);
     } catch (error) {
       const failure = classifyIntegrationError(error, {
-        writeSafety: adapter?.writeSafety,
+        writeSafety: "non_idempotent",
       });
       return handleFailure(step, operation.requestId, failure, startedAt);
     }
@@ -135,16 +135,18 @@ export function createIntegrationProcessor({
       reviewRequired: !retrying,
       stepId: step.id,
     });
-    await repository.recordConnectorRead({
-      connector: step.connector,
-      error: failureSummary,
-      now: failedAt,
-      status:
-        failure.code === "authentication_required"
-          ? "authentication_required"
-          : "degraded",
-      succeeded: false,
-    });
+    if (affectsConnectorHealth(failure)) {
+      await repository.recordConnectorRead({
+        connector: step.connector,
+        error: failureSummary,
+        now: failedAt,
+        status:
+          failure.code === "authentication_required"
+            ? "authentication_required"
+            : "degraded",
+        succeeded: false,
+      });
+    }
     await repository.appendAudit({
       attemptCount: step.attemptCount,
       connector: step.connector,
@@ -206,4 +208,8 @@ function safeFailureSummary(message: string) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 500);
+}
+
+function affectsConnectorHealth(failure: ClassifiedIntegrationError) {
+  return failure.code !== "permanent" && failure.code !== "conflict";
 }

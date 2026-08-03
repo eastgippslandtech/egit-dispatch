@@ -153,6 +153,13 @@ function fakeSql() {
           step.state = "processing";
           step.updatedAt = claimNow;
           step.workerId = workerId;
+          const parent = operations.find(
+            (operation) => operation.id === step.operationId,
+          );
+          if (parent && ["queued", "retrying", "syncing"].includes(parent.state)) {
+            parent.state = "syncing";
+            parent.updatedAt = claimNow;
+          }
         }
         return claimed;
       }
@@ -269,6 +276,22 @@ describe("integration repository", () => {
     expect(source).toContain("for update of step skip locked");
   });
 
+  it("atomically moves parent operations to syncing when steps are claimed", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+
+    expect(source).toMatch(
+      /claimed as \([\s\S]*update public\.integration_operation_steps[\s\S]*parents as \([\s\S]*update public\.integration_operations operation[\s\S]*state = 'syncing'[\s\S]*select operation_id from claimed/,
+    );
+  });
+
+  it("keeps connector error and health status tuple types in storage order", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+
+    expect(source).toMatch(
+      /const \[connector, succeeded, error, checkedAt, requestedStatus\] = values as \[\s*IntegrationConnector,\s*boolean,\s*string \| undefined,\s*string,\s*IntegrationConnectorHealthStatus \| undefined,/,
+    );
+  });
+
   it("excludes the changed step while deciding whether an operation is synced", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
     const checks = source.match(
@@ -361,6 +384,7 @@ describe("integration repository", () => {
       state: "processing",
       workerId: "worker-a",
     });
+    expect(fake.operations[0]).toMatchObject({ state: "syncing" });
   });
 
   it("marks a leased step as succeeded", async () => {

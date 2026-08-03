@@ -318,20 +318,31 @@ class PostgresIntegrationSql implements IntegrationSql {
               order by step.next_attempt_at nulls first, step.created_at
               for update of step skip locked
               limit ${limit}
+            ), claimed as (
+              update public.integration_operation_steps step
+              set
+                state = 'processing',
+                attempt_count = step.attempt_count + 1,
+                lease_token = gen_random_uuid(),
+                worker_id = ${workerId},
+                leased_at = ${now},
+                lease_expires_at = ${leaseExpiresAt},
+                started_at = coalesce(step.started_at, ${now}),
+                updated_at = ${now}
+              from due
+              where step.id = due.id
+              returning step.*
+            ), parents as (
+              update public.integration_operations operation
+              set
+                state = 'syncing',
+                updated_at = ${now}
+              where operation.id in (select operation_id from claimed)
+                and operation.state in ('queued', 'retrying', 'syncing')
+              returning operation.id
             )
-            update public.integration_operation_steps step
-            set
-              state = 'processing',
-              attempt_count = step.attempt_count + 1,
-              lease_token = gen_random_uuid(),
-              worker_id = ${workerId},
-              leased_at = ${now},
-              lease_expires_at = ${leaseExpiresAt},
-              started_at = coalesce(step.started_at, ${now}),
-              updated_at = ${now}
-            from due
-            where step.id = due.id
-            returning ${this.sql.unsafe(stepColumns)}
+            select ${this.sql.unsafe(stepColumnsFromClaimed)}
+            from claimed
           `,
         );
       }
@@ -560,9 +571,9 @@ class PostgresIntegrationSql implements IntegrationSql {
         const [connector, succeeded, error, checkedAt, requestedStatus] = values as [
           IntegrationConnector,
           boolean,
-          IntegrationConnectorHealthStatus | undefined,
-          string,
           string | undefined,
+          string,
+          IntegrationConnectorHealthStatus | undefined,
         ];
         const status = requestedStatus ?? (succeeded ? "healthy" : "degraded");
         await this.sql`
@@ -726,6 +737,7 @@ const operationColumns = thisOperationColumns();
 const operationColumnsFromRetried = thisOperationColumns("retried");
 const operationColumnsFromCancelled = thisOperationColumns("cancelled");
 const stepColumns = thisStepColumns();
+const stepColumnsFromClaimed = thisStepColumns("claimed");
 const stepColumnsFromChanged = thisStepColumns("changed");
 
 function thisOperationColumns(table?: string) {

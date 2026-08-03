@@ -93,12 +93,20 @@ export type MspCentralRequestNoteListResponse = {
 };
 
 export type MspCentralRawWorklog = {
-  created_by?: { email_id?: string | null; name?: string | null } | null;
+  created_by?: {
+    email_id?: string | null;
+    id?: string | number | null;
+    name?: string | null;
+  } | null;
   description?: string | null;
   end_time?: MspCentralTimestamp | null;
   id?: string | number | null;
   is_billable?: boolean | null;
-  owner?: { email_id?: string | null; name?: string | null } | null;
+  owner?: {
+    email_id?: string | null;
+    id?: string | number | null;
+    name?: string | null;
+  } | null;
   recorded_time?: MspCentralTimestamp | null;
   start_time?: MspCentralTimestamp | null;
   time_spent?: {
@@ -176,6 +184,7 @@ export type MspCentralClient = {
   }): Promise<void>;
   clearRequestSchedule(input: { requestId: string }): Promise<void>;
   createRequest?(input: {
+    commandFingerprint?: string;
     customer?: string;
     description?: string;
     priority: "Critical" | "High" | "Medium" | "Low";
@@ -183,11 +192,20 @@ export type MspCentralClient = {
     site?: string;
     subject: string;
   }): Promise<{ id: string; requestNumber: string }>;
+  findRequestByCommandFingerprint?(
+    commandFingerprint: string,
+  ): Promise<{ id: string; requestNumber: string } | undefined>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
   getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
   listCustomers(): Promise<Array<{ id: string; name: string }>>;
+  listRequestNotes?(
+    requestId: string,
+  ): Promise<MspCentralRawRequestNote[]>;
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;
+  listRequestWorklogs?(
+    requestId: string,
+  ): Promise<MspCentralRawWorklog[]>;
   listSites(): Promise<Array<{ id: string; name: string }>>;
   listTechnicians(): Promise<Technician[]>;
   mergeRequests(input: {

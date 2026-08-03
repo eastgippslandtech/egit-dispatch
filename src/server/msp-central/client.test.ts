@@ -913,6 +913,97 @@ describe("MSP Central live client", () => {
     });
   });
 
+  it("adds a hidden deterministic marker and can find the created request", async () => {
+    const marker = "a".repeat(64);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: { id: "456", request_number: "REQ-456" },
+          response_status: { status: "success" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          requests: [
+            {
+              description: `Printer issue.\n<!-- command-centre:${marker} -->`,
+              id: "456",
+              request_number: "REQ-456",
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "marker-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "marker-refresh-token",
+      }),
+    );
+
+    await client.createRequest?.({
+      commandFingerprint: marker,
+      description: "Printer issue.",
+      priority: "Medium",
+      subject: "Printer offline",
+    });
+    await expect(
+      client.findRequestByCommandFingerprint?.(marker),
+    ).resolves.toEqual({ id: "456", requestNumber: "REQ-456" });
+
+    const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
+      request: {
+        description: `Printer issue.\n<!-- command-centre:${marker} -->`,
+      },
+    });
+  });
+
+  it("rejects an HTTP 200 status update when MSP Central reports failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response_status: { status: "failed" },
+          }),
+        }),
+    );
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "status-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "status-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.updateRequestStatus?.({ requestId: "123", status: "Resolved" }),
+    ).rejects.toThrow("MSP Central status update failed.");
+  });
+
   it("writes a completion solution onto the request", async () => {
     const fetchMock = vi
       .fn()

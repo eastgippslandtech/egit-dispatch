@@ -107,6 +107,91 @@ describe("integration operation builders", () => {
     });
   });
 
+  it("reuses technician event IDs from previous assignments during reschedule", () => {
+    const operation = scheduleOperation({
+      actorEmail: "dispatcher@egit.com.au",
+      appointmentId: "appointment-42",
+      crew: [
+        {
+          technicianId: "tech-jervy",
+          userPrincipalName: "jervy@egit.com.au",
+        },
+      ],
+      date: "2026-08-04",
+      end: "11:00",
+      idempotencyKey: "schedule:request-42:v4",
+      lead: { ...lead, eventId: undefined },
+      previousAssignments: [
+        {
+          eventId: "existing-simeon-event",
+          technicianId: "tech-simeon",
+          userPrincipalName: "simeon@egit.com.au",
+        },
+        {
+          eventId: "existing-jervy-event",
+          technicianId: "tech-jervy",
+          userPrincipalName: "jervy@egit.com.au",
+        },
+      ],
+      requestId: "request-42",
+      requestNumber: "REQ-42",
+      start: "10:00",
+      subject: "Printer offline",
+    });
+
+    expect(operation.steps[1].payload.eventId).toBe("existing-simeon-event");
+    expect(operation.steps[2].payload.eventId).toBe("existing-jervy-event");
+  });
+
+  it.each([
+    ["2026-04-04", "+11:00"],
+    ["2026-04-05", "+10:00"],
+    ["2026-10-03", "+10:00"],
+    ["2026-10-04", "+11:00"],
+  ])("uses the real Melbourne offset on %s", (date, offset) => {
+    const operation = scheduleOperation({
+      actorEmail: "dispatcher@egit.com.au",
+      appointmentId: `appointment-${date}`,
+      date,
+      end: "11:07",
+      idempotencyKey: `schedule:${date}`,
+      lead,
+      requestId: `request-${date}`,
+      requestNumber: `REQ-${date}`,
+      start: "10:07",
+      subject: "DST-safe booking",
+    });
+
+    expect(operation.steps[0].payload).toMatchObject({
+      scheduledEnd: `${date}T11:15:00${offset}`,
+      scheduledStart: `${date}T10:15:00${offset}`,
+    });
+    expect(operation.steps[1].payload).toMatchObject({
+      end: `${date}T11:15:00`,
+      start: `${date}T10:15:00`,
+    });
+  });
+
+  it("rounds a schedule across midnight without producing a zero duration", () => {
+    const operation = scheduleOperation({
+      actorEmail: "dispatcher@egit.com.au",
+      appointmentId: "appointment-midnight",
+      date: "2026-08-04",
+      end: "00:07",
+      idempotencyKey: "schedule:midnight",
+      lead,
+      requestId: "request-midnight",
+      requestNumber: "REQ-MIDNIGHT",
+      start: "23:58",
+      subject: "After-hours cutover",
+    });
+
+    expect(operation.steps[0].payload).toMatchObject({
+      scheduledEnd: "2026-08-05T00:15:00+10:00",
+      scheduledStart: "2026-08-05T00:00:00+10:00",
+    });
+  });
+
   it("keeps the Work Log before every disposition write and rounds time up", () => {
     const operation = worklogOperation({
       actorEmail: "simeon@egit.com.au",
@@ -137,6 +222,51 @@ describe("integration operation builders", () => {
     expect(operation.steps[0]).toMatchObject({
       action: "msp.add_worklog",
       payload: { durationMinutes: 30 },
+    });
+  });
+
+  it("rounds Book Forward start and end to the next 15-minute boundary", () => {
+    const operation = worklogOperation({
+      actorEmail: "simeon@egit.com.au",
+      command: {
+        booking: {
+          bookingType: "Remote",
+          date: "2026-10-04",
+          end: "11:07",
+          requestNumber: "REQ-42",
+          start: "10:07",
+          subject: "Continue diagnostics",
+          technicianId: "tech-simeon",
+          technicianName: "Simeon",
+          userPrincipalName: "simeon@egit.com.au",
+        },
+        description: "Initial diagnostics complete.",
+        disposition: "book_forward",
+        durationMinutes: 15,
+        endedAt: "2026-08-04T10:15:00+10:00",
+        idempotencyKey: "worklog:request-42:forward",
+        requestId: "request-42",
+        scheduled: true,
+        startedAt: "2026-08-04T10:00:00+10:00",
+        visibility: "external",
+        workType: "billable",
+      },
+      ownerId: "msp-simeon",
+    });
+    const schedule = operation.steps.find(
+      (step) => step.stepKey === "msp:book-forward",
+    );
+    const outlook = operation.steps.find(
+      (step) => step.stepKey === "outlook:book-forward",
+    );
+
+    expect(schedule?.payload).toMatchObject({
+      scheduledEnd: "2026-10-04T11:15:00+11:00",
+      scheduledStart: "2026-10-04T10:15:00+11:00",
+    });
+    expect(outlook?.payload).toMatchObject({
+      end: "2026-10-04T11:15:00",
+      start: "2026-10-04T10:15:00",
     });
   });
 

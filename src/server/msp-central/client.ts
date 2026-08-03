@@ -812,7 +812,7 @@ function mspCentralActionSucceeded(payload: MspCentralActionResponse) {
       ? [payload.response_status]
       : [];
 
-  return statuses.some(
+  return statuses.length > 0 && statuses.every(
     (status) => status.status?.trim().toLowerCase() === "success",
   );
 }

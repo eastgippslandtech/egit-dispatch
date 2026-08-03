@@ -110,6 +110,77 @@ describe("MSP Central integration adapters", () => {
     ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
   });
 
+  it("pre-reconciles a retried Work Log and never repeats the provider write", async () => {
+    const addRequestWorklog = vi.fn().mockResolvedValue(undefined);
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestWorklog,
+        listRequestWorklogs: vi.fn().mockResolvedValue([
+          {
+            description: "Completed diagnostics.",
+            end_time: { value: "1785802500000" },
+            id: "worklog-existing",
+            is_billable: false,
+            owner: { id: "msp-simeon" },
+            start_time: { value: "1785801600000" },
+            time_spent: { hours: "0", minutes: "15" },
+          },
+        ]),
+      }),
+    });
+
+    await expect(
+      adapters["msp.add_worklog"].execute(
+        step(
+          "msp.add_worklog",
+          {
+            description: "Completed diagnostics.",
+            durationMinutes: 15,
+            endedAt: new Date(1785802500000).toISOString(),
+            ownerId: "msp-simeon",
+            requestId: "request-42",
+            startedAt: new Date(1785801600000).toISOString(),
+            worklogType: "internal",
+          },
+          2,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      externalId: "worklog-existing",
+      reconciled: true,
+    });
+    expect(addRequestWorklog).not.toHaveBeenCalled();
+  });
+
+  it("blocks a retried Work Log when reconciliation cannot prove success", async () => {
+    const addRequestWorklog = vi.fn().mockResolvedValue(undefined);
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestWorklog,
+        listRequestWorklogs: vi.fn().mockResolvedValue([]),
+      }),
+    });
+
+    await expect(
+      adapters["msp.add_worklog"].execute(
+        step(
+          "msp.add_worklog",
+          {
+            description: "Completed diagnostics.",
+            durationMinutes: 15,
+            endedAt: "2026-08-04T10:15:00+10:00",
+            ownerId: "msp-simeon",
+            requestId: "request-42",
+            startedAt: "2026-08-04T10:00:00+10:00",
+            worklogType: "internal",
+          },
+          2,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
+    expect(addRequestWorklog).not.toHaveBeenCalled();
+  });
+
   it("reconciles customer Comms using content and requester visibility", async () => {
     const adapters = createMspCentralAdapters({
       client: client({
@@ -213,18 +284,18 @@ describe("MSP Central integration adapters", () => {
     ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
   });
 
-  it("reconciles a timed-out merge only when the child is gone and parent remains", async () => {
-    const getRequest = vi.fn(async (requestId: string) =>
-      requestId === "parent-7"
-        ? ({ id: "parent-7", requestNumber: "REQ-7" } as never)
-        : undefined,
-    );
+  it("does not infer merge success merely because the child is missing", async () => {
+    const mergeRequests = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }));
     const adapters = createMspCentralAdapters({
       client: client({
-        getRequest,
-        mergeRequests: vi
-          .fn()
-          .mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        getRequest: vi.fn(async (requestId: string) =>
+          requestId === "parent-7"
+            ? ({ id: "parent-7", requestNumber: "REQ-7" } as never)
+            : undefined,
+        ),
+        mergeRequests,
       }),
     });
 
@@ -235,7 +306,26 @@ describe("MSP Central integration adapters", () => {
           parentRequestId: "parent-7",
         }),
       ),
-    ).resolves.toMatchObject({ reconciled: true });
+    ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
+    expect(mergeRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("never repeats a merge write during retry without provider merge proof", async () => {
+    const mergeRequests = vi.fn().mockResolvedValue(undefined);
+    const adapters = createMspCentralAdapters({
+      client: client({ mergeRequests }),
+    });
+
+    await expect(
+      adapters["msp.merge_requests"].execute(
+        step(
+          "msp.merge_requests",
+          { childRequestId: "duplicate-42", parentRequestId: "parent-7" },
+          2,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
+    expect(mergeRequests).not.toHaveBeenCalled();
   });
 
   it("reconciles ambiguous request creation by its deterministic marker", async () => {
@@ -268,12 +358,50 @@ describe("MSP Central integration adapters", () => {
     });
     expect(findRequestByCommandFingerprint).toHaveBeenCalledWith("a".repeat(64));
   });
+
+  it("pre-reconciles retried request creation without creating a duplicate", async () => {
+    const createRequest = vi.fn().mockResolvedValue({
+      id: "duplicate",
+      requestNumber: "REQ-DUPLICATE",
+    });
+    const adapters = createMspCentralAdapters({
+      client: client({
+        createRequest,
+        findRequestByCommandFingerprint: vi.fn().mockResolvedValue({
+          id: "request-existing",
+          requestNumber: "REQ-EXISTING",
+        }),
+      }),
+    });
+
+    await expect(
+      adapters["msp.create_request"].execute(
+        step(
+          "msp.create_request",
+          {
+            commandFingerprint: "b".repeat(64),
+            priority: "High",
+            subject: "Printer offline",
+          },
+          2,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      externalId: "request-existing",
+      reconciled: true,
+    });
+    expect(createRequest).not.toHaveBeenCalled();
+  });
 });
 
-function step(action: string, payload: Record<string, unknown>): IntegrationOperationStep {
+function step(
+  action: string,
+  payload: Record<string, unknown>,
+  attemptCount = 1,
+): IntegrationOperationStep {
   return {
     action,
-    attemptCount: 1,
+    attemptCount,
     connector: "msp_central",
     createdAt: "2026-08-04T00:00:00.000Z",
     id: `step-${action}`,

@@ -1004,6 +1004,42 @@ describe("MSP Central live client", () => {
     ).rejects.toThrow("MSP Central status update failed.");
   });
 
+  it("rejects mixed MSP action statuses even when one entry says success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response_status: [
+              { status: "success" },
+              { status: "failed" },
+            ],
+          }),
+        }),
+    );
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "mixed-status-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "mixed-status-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.updateRequestStatus?.({ requestId: "123", status: "Resolved" }),
+    ).rejects.toThrow("MSP Central status update failed.");
+  });
+
   it("writes a completion solution onto the request", async () => {
     const fetchMock = vi
       .fn()

@@ -83,26 +83,44 @@ export type MergeOperationInput = {
 export function scheduleOperation(
   input: ScheduleOperationInput,
 ): EnqueueIntegrationOperation {
-  const crew = uniqueTechnicians(input.crew ?? []).sort(byTechnicianId);
+  const previousAssignments = [...(input.previousAssignments ?? [])].sort(
+    byTechnicianId,
+  );
+  const previousAssignmentByTechnician = new Map(
+    previousAssignments.map((assignment) => [assignment.technicianId, assignment]),
+  );
+  const lead = inheritPreviousEventId(
+    input.lead,
+    previousAssignmentByTechnician,
+  );
+  const crew = uniqueTechnicians(input.crew ?? [])
+    .sort(byTechnicianId)
+    .map((technician) =>
+      inheritPreviousEventId(technician, previousAssignmentByTechnician),
+    );
   if (crew.some((member) => member.technicianId === input.lead.technicianId)) {
     throw new Error("The lead technician cannot also be selected as crew.");
   }
 
-  const previousAssignments = [...(input.previousAssignments ?? [])].sort(
-    byTechnicianId,
-  );
   const selectedIds = new Set([
-    input.lead.technicianId,
+    lead.technicianId,
     ...crew.map((member) => member.technicianId),
   ]);
   const obsoleteAssignments = previousAssignments.filter(
     (assignment) => !selectedIds.has(assignment.technicianId),
   );
-  const scheduledStart = withMelbourneOffset(input.date, input.start);
-  const scheduledEnd = withMelbourneOffset(input.date, input.end);
-  const graphStart = `${input.date}T${input.start}:00`;
-  const graphEnd = `${input.date}T${input.end}:00`;
-  const leadStepKey = `outlook:lead:${input.lead.technicianId}`;
+  const scheduleWindow = roundScheduleWindow(input.date, input.start, input.end);
+  const scheduledStart = withMelbourneOffset(
+    scheduleWindow.startDate,
+    scheduleWindow.start,
+  );
+  const scheduledEnd = withMelbourneOffset(
+    scheduleWindow.endDate,
+    scheduleWindow.end,
+  );
+  const graphStart = `${scheduleWindow.startDate}T${scheduleWindow.start}:00`;
+  const graphEnd = `${scheduleWindow.endDate}T${scheduleWindow.end}:00`;
+  const leadStepKey = `outlook:lead:${lead.technicianId}`;
   const crewStepKeys = crew.map(
     (member) => `outlook:crew:${member.technicianId}`,
   );
@@ -111,9 +129,10 @@ export function scheduleOperation(
     bookingType: input.bookingType,
     crew,
     customer: clean(input.customer),
-    date: input.date,
-    end: input.end,
-    lead: input.lead,
+    date: scheduleWindow.startDate,
+    end: scheduleWindow.end,
+    endDate: scheduleWindow.endDate,
+    lead,
     location: clean(input.location),
     previousAssignments,
     priority: input.priority,
@@ -121,7 +140,7 @@ export function scheduleOperation(
     requestNumber: input.requestNumber,
     scheduledEnd,
     scheduledStart,
-    start: input.start,
+    start: scheduleWindow.start,
     subject: input.subject,
   });
   const baseEvent = jsonRecord({
@@ -155,15 +174,15 @@ export function scheduleOperation(
         requestId: input.requestId,
         scheduledEnd,
         scheduledStart,
-        technicianEmail: clean(input.lead.technicianEmail),
-        technicianId: clean(input.lead.mspCentralTechnicianId),
-        technicianName: clean(input.lead.technicianName),
+        technicianEmail: clean(lead.technicianEmail),
+        technicianId: clean(lead.mspCentralTechnicianId),
+        technicianName: clean(lead.technicianName),
       }),
       outlookUpsertStep({
         event: baseEvent,
         idempotencyKey: input.idempotencyKey,
         role: "lead",
-        technician: input.lead,
+        technician: lead,
       }),
       ...crew.map((technician) =>
         outlookUpsertStep({
@@ -403,11 +422,31 @@ function appendDispositionSteps(
 
   if (command.disposition === "book_forward" && command.booking) {
     const booking = command.booking;
+    const scheduleWindow = roundScheduleWindow(
+      booking.date,
+      booking.start,
+      booking.end,
+    );
+    const roundedBooking = {
+      ...booking,
+      date: scheduleWindow.startDate,
+      end: scheduleWindow.end,
+      endDate: scheduleWindow.endDate,
+      start: scheduleWindow.start,
+    };
+    const scheduledStart = withMelbourneOffset(
+      scheduleWindow.startDate,
+      scheduleWindow.start,
+    );
+    const scheduledEnd = withMelbourneOffset(
+      scheduleWindow.endDate,
+      scheduleWindow.end,
+    );
     steps.push(
       step("msp_central", "msp.schedule_request", "msp:book-forward", {
         requestId: command.requestId,
-        scheduledEnd: withMelbourneOffset(booking.date, booking.end),
-        scheduledStart: withMelbourneOffset(booking.date, booking.start),
+        scheduledEnd,
+        scheduledStart,
         technicianEmail: clean(booking.technicianEmail),
         technicianName: booking.technicianName,
       }),
@@ -417,12 +456,12 @@ function appendDispositionSteps(
           `Command-Centre-Booking: book-forward:${command.requestId}`,
           `Request: ${booking.requestNumber}`,
         ].join("\n"),
-        end: `${booking.date}T${booking.end}:00`,
+        end: `${scheduleWindow.endDate}T${scheduleWindow.end}:00`,
         eventId: clean(booking.eventId),
         location: clean(booking.location),
         requestId: command.requestId,
         requestNumber: booking.requestNumber,
-        start: `${booking.date}T${booking.start}:00`,
+        start: `${scheduleWindow.startDate}T${scheduleWindow.start}:00`,
         subject: booking.subject,
         technicianId: booking.technicianId,
         transactionId: `${command.idempotencyKey}:outlook:${booking.technicianId}`,
@@ -443,10 +482,10 @@ function appendDispositionSteps(
         "command_centre.persist_book_forward",
         "command:book-forward",
         jsonRecord({
-          booking,
+          booking: roundedBooking,
           requestId: command.requestId,
-          scheduledEnd: withMelbourneOffset(booking.date, booking.end),
-          scheduledStart: withMelbourneOffset(booking.date, booking.start),
+          scheduledEnd,
+          scheduledStart,
         }),
       ),
     );
@@ -590,10 +629,140 @@ function byTechnicianId(
       : 0;
 }
 
+function inheritPreviousEventId(
+  technician: ScheduleTechnician,
+  previousAssignments: Map<string, PreviousScheduleAssignment>,
+) {
+  if (clean(technician.eventId)) return technician;
+  const previous = previousAssignments.get(technician.technicianId);
+  return previous?.eventId
+    ? { ...technician, eventId: previous.eventId }
+    : technician;
+}
+
+function roundScheduleWindow(date: string, start: string, end: string) {
+  const startMinutes = localDateTimeMinutes(date, start);
+  let endMinutes = localDateTimeMinutes(date, end);
+  if (endMinutes <= startMinutes) endMinutes += 24 * 60;
+
+  const roundedStart = roundUpToQuarterHour(startMinutes);
+  let roundedEnd = roundUpToQuarterHour(endMinutes);
+  if (roundedEnd <= roundedStart) roundedEnd = roundedStart + 15;
+
+  const startParts = localDateTimeParts(roundedStart);
+  const endParts = localDateTimeParts(roundedEnd);
+  return {
+    end: endParts.time,
+    endDate: endParts.date,
+    start: startParts.time,
+    startDate: startParts.date,
+  };
+}
+
+function localDateTimeMinutes(date: string, time: string) {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!dateMatch || !timeMatch) {
+    throw new Error("Schedule date and time must use YYYY-MM-DD and HH:mm.");
+  }
+  const [, year, month, day] = dateMatch;
+  const [, hour, minute] = timeMatch;
+  const values = [year, month, day, hour, minute].map(Number);
+  const [yearValue, monthValue, dayValue, hourValue, minuteValue] = values;
+  if (
+    hourValue > 23 ||
+    minuteValue > 59 ||
+    monthValue < 1 ||
+    monthValue > 12 ||
+    dayValue < 1 ||
+    dayValue > 31
+  ) {
+    throw new Error("Schedule date or time is invalid.");
+  }
+  const timestamp = Date.UTC(
+    yearValue,
+    monthValue - 1,
+    dayValue,
+    hourValue,
+    minuteValue,
+  );
+  const parsed = new Date(timestamp);
+  if (
+    parsed.getUTCFullYear() !== yearValue ||
+    parsed.getUTCMonth() !== monthValue - 1 ||
+    parsed.getUTCDate() !== dayValue
+  ) {
+    throw new Error("Schedule date or time is invalid.");
+  }
+  return timestamp / 60_000;
+}
+
+function roundUpToQuarterHour(minutes: number) {
+  return Math.ceil(minutes / 15) * 15;
+}
+
+function localDateTimeParts(minutes: number) {
+  const value = new Date(minutes * 60_000);
+  return {
+    date: [
+      value.getUTCFullYear(),
+      String(value.getUTCMonth() + 1).padStart(2, "0"),
+      String(value.getUTCDate()).padStart(2, "0"),
+    ].join("-"),
+    time: [
+      String(value.getUTCHours()).padStart(2, "0"),
+      String(value.getUTCMinutes()).padStart(2, "0"),
+    ].join(":"),
+  };
+}
+
 function withMelbourneOffset(date: string, time: string) {
-  const month = Number(date.slice(5, 7));
-  const offset = month >= 4 && month <= 9 ? "+10:00" : "+11:00";
+  const localMinutes = localDateTimeMinutes(date, time);
+  const localMilliseconds = localMinutes * 60_000;
+  let offsetMilliseconds = melbourneOffsetMilliseconds(
+    new Date(localMilliseconds),
+  );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    offsetMilliseconds = melbourneOffsetMilliseconds(
+      new Date(localMilliseconds - offsetMilliseconds),
+    );
+  }
+  const offsetMinutes = Math.round(offsetMilliseconds / 60_000);
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absoluteMinutes / 60)).padStart(
+    2,
+    "0",
+  )}:${String(absoluteMinutes % 60).padStart(2, "0")}`;
   return `${date}T${time}:00${offset}`;
+}
+
+function melbourneOffsetMilliseconds(instant: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+    minute: "2-digit",
+    month: "2-digit",
+    second: "2-digit",
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+  }).formatToParts(instant);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  return (
+    Date.UTC(
+      values.year,
+      values.month - 1,
+      values.day,
+      values.hour,
+      values.minute,
+      values.second,
+    ) - instant.getTime()
+  );
 }
 
 function clean(value?: string) {

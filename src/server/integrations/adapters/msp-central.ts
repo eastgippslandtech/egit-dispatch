@@ -33,6 +33,7 @@ export function createMspCentralAdapters({
         );
       }
       return executeWithReconciliation({
+        step,
         reconcile: async () =>
           reconcileNote(await client.listRequestNotes!(payload.requestId), payload),
         write: async () => {
@@ -53,6 +54,7 @@ export function createMspCentralAdapters({
         );
       }
       return executeWithReconciliation({
+        step,
         reconcile: async () =>
           reconcileWorklog(
             await client.listRequestWorklogs!(payload.requestId),
@@ -90,6 +92,7 @@ export function createMspCentralAdapters({
         );
       }
       return executeWithReconciliation({
+        step,
         reconcile: async () => {
           const found = await client.findRequestByCommandFingerprint!(
             payload.commandFingerprint,
@@ -114,13 +117,8 @@ export function createMspCentralAdapters({
       const childRequestId = requiredString(step.payload, "childRequestId");
       const parentRequestId = requiredString(step.payload, "parentRequestId");
       return executeWithReconciliation({
-        reconcile: async () => {
-          const [child, parent] = await Promise.all([
-            readRequestOrMissing(client, childRequestId),
-            readRequestOrMissing(client, parentRequestId),
-          ]);
-          return !child && parent ? { reconciled: true } : undefined;
-        },
+        step,
+        reconcile: async () => undefined,
         write: async () => {
           await client.mergeRequests({ childRequestId, parentRequestId });
           return {};
@@ -181,11 +179,29 @@ async function mappedWrite(write: () => Promise<void>) {
 
 async function executeWithReconciliation({
   reconcile,
+  step,
   write,
 }: {
   reconcile: () => Promise<IntegrationStepResult | undefined>;
+  step: IntegrationOperationStep;
   write: () => Promise<IntegrationStepResult>;
 }) {
+  if (step.attemptCount > 1) {
+    try {
+      const existing = await reconcile();
+      if (existing) return { ...existing, reconciled: true };
+    } catch (reconciliationError) {
+      throw new AmbiguousIntegrationError(
+        "MSP Central retry could not be reconciled safely.",
+        { cause: reconciliationError },
+      );
+    }
+
+    throw new AmbiguousIntegrationError(
+      "MSP Central retry has an unknown prior outcome; manual review is required before another write.",
+    );
+  }
+
   try {
     return await write();
   } catch (error) {
@@ -355,13 +371,6 @@ function mapMspError(error: unknown) {
     return new RetryableIntegrationError(message, options);
   }
   return new PermanentIntegrationError(message, options);
-}
-
-function readRequestOrMissing(client: MspCentralClient, requestId: string) {
-  return client.getRequest(requestId).catch((error) => {
-    if (errorStatus(error) === 404) return undefined;
-    throw mapMspError(error);
-  });
 }
 
 function errorStatus(error: unknown) {

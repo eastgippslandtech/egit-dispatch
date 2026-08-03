@@ -1,5 +1,8 @@
 import { getCommandCentreAccess, isApprovedStaffAccess } from "@/server/auth/session";
-import { isAdminStaffEmail } from "@/server/staff/profiles";
+import {
+  findStaffForZohoLogin,
+  isAdminStaffEmail,
+} from "@/server/staff/profiles";
 
 export function cronAuthorized(request: Request) {
   const secret =
@@ -17,4 +20,13 @@ export async function staffRouteAccess() {
 export async function adminRouteAccess() {
   const access = await staffRouteAccess();
   return access && isAdminStaffEmail(access.email) ? access : null;
+}
+
+export async function dispatchRouteAccess() {
+  const access = await staffRouteAccess();
+  if (!access?.email) return null;
+  const profile = findStaffForZohoLogin(access.email);
+  return profile?.dispatchEnabled || isAdminStaffEmail(access.email)
+    ? access
+    : null;
 }

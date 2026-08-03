@@ -17,16 +17,21 @@ type IntegrationQueryName =
   | "appendAudit"
   | "cancelOperation"
   | "claimDueSteps"
+  | "countDueSteps"
   | "expireExpiredLeases"
   | "findOperationByKey"
   | "getOperation"
   | "getHealth"
+  | "getOperationCounts"
+  | "getStepResults"
   | "insertOperation"
   | "insertStep"
+  | "listActionableOperations"
   | "listOperations"
   | "markStepFailed"
   | "markStepSucceeded"
   | "recordConnectorRead"
+  | "recordConnectorWrite"
   | "retryOperation";
 
 export type IntegrationSql = {
@@ -80,8 +85,32 @@ export function createIntegrationRepository(sql: IntegrationSql) {
     async cancelOperation(operationId: string, now = new Date()) {
       return requiredRow<IntegrationOperation>(
         await sql.query("cancelOperation", [operationId, now.toISOString()]),
-        "Integration operation was not found.",
+        "Integration operation was not found or is already synced.",
       );
+    },
+
+    async cancelOperationWithAudit({
+      actorEmail,
+      operationId,
+      now = new Date(),
+    }: {
+      actorEmail: string;
+      operationId: string;
+      now?: Date;
+    }) {
+      return sql.transaction(async (transaction) => {
+        const repository = createIntegrationRepository(transaction);
+        const operation = await repository.cancelOperation(operationId, now);
+        await repository.appendAudit({
+          actorEmail,
+          eventType: "integration_operation_cancel_requested",
+          operationId,
+          operatorAction: "cancel",
+          outcome: "cancelled",
+          requestId: operation.requestId,
+        });
+        return operation;
+      });
     },
 
     async claimDueSteps({
@@ -115,8 +144,23 @@ export function createIntegrationRepository(sql: IntegrationSql) {
 
     enqueueInCurrentTransaction,
 
+    async countDueSteps(now = new Date()) {
+      const rows = (await sql.query("countDueSteps", [now.toISOString()])) as Array<{
+        count: number;
+      }>;
+      return Number(rows[0]?.count ?? 0);
+    },
+
     async getHealth(): Promise<IntegrationConnectorHealth[]> {
       return (await sql.query("getHealth", [])) as IntegrationConnectorHealth[];
+    },
+
+    async getOperationCounts() {
+      const rows = (await sql.query("getOperationCounts", [])) as Array<{
+        pending: number;
+        reviewRequired: number;
+      }>;
+      return rows[0] ?? { pending: 0, reviewRequired: 0 };
     },
 
     async getOperation(operationId: string) {
@@ -126,8 +170,20 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       );
     },
 
+    async getStepResults(operationId: string) {
+      const rows = (await sql.query("getStepResults", [operationId])) as Array<{
+        result: Record<string, unknown>;
+        stepKey: string;
+      }>;
+      return Object.fromEntries(rows.map((row) => [row.stepKey, row.result]));
+    },
+
     async listOperations({ limit = 50 }: { limit?: number } = {}) {
       return (await sql.query("listOperations", [limit])) as IntegrationOperation[];
+    },
+
+    async listActionableOperations({ limit = 50 }: { limit?: number } = {}) {
+      return (await sql.query("listActionableOperations", [limit])) as IntegrationOperation[];
     },
 
     async markStepFailed({
@@ -205,11 +261,57 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       ]);
     },
 
+    async recordConnectorWrite({
+      connector,
+      error,
+      now = new Date(),
+      status,
+      succeeded,
+    }: {
+      connector: IntegrationConnector;
+      error?: string;
+      now?: Date;
+      status?: IntegrationConnectorHealthStatus;
+      succeeded: boolean;
+    }) {
+      await sql.query("recordConnectorWrite", [
+        connector,
+        succeeded,
+        error ? safeError(error) : undefined,
+        now.toISOString(),
+        status,
+      ]);
+    },
+
     async retryOperation(operationId: string, now = new Date()) {
       return requiredRow<IntegrationOperation>(
         await sql.query("retryOperation", [operationId, now.toISOString()]),
         "Integration operation is not ready for manual retry.",
       );
+    },
+
+    async retryOperationWithAudit({
+      actorEmail,
+      operationId,
+      now = new Date(),
+    }: {
+      actorEmail: string;
+      operationId: string;
+      now?: Date;
+    }) {
+      return sql.transaction(async (transaction) => {
+        const repository = createIntegrationRepository(transaction);
+        const operation = await repository.retryOperation(operationId, now);
+        await repository.appendAudit({
+          actorEmail,
+          eventType: "integration_operation_retry_requested",
+          operationId,
+          operatorAction: "retry",
+          outcome: "retrying",
+          requestId: operation.requestId,
+        });
+        return operation;
+      });
     },
   };
 }
@@ -354,6 +456,25 @@ class PostgresIntegrationSql implements IntegrationSql {
             from claimed
           `,
         );
+      }
+      case "countDueSteps": {
+        const [now] = values as [string];
+        return this.sql<Array<{ count: number }>>`
+          select count(*)::integer as count
+          from public.integration_operation_steps step
+          join public.integration_operations operation
+            on operation.id = step.operation_id
+          where step.state in ('queued', 'retrying')
+            and operation.state not in ('review_required', 'cancelled', 'synced')
+            and (step.next_attempt_at is null or step.next_attempt_at <= ${now})
+            and not exists (
+              select 1
+              from public.integration_operation_steps predecessor
+              where predecessor.operation_id = step.operation_id
+                and predecessor.step_order < step.step_order
+                and predecessor.state <> 'succeeded'
+            )
+        `;
       }
       case "expireExpiredLeases": {
         const [changedAt] = values as [string];
@@ -567,6 +688,35 @@ class PostgresIntegrationSql implements IntegrationSql {
           `,
         );
       }
+      case "listActionableOperations": {
+        const [limit] = values as [number];
+        return this.operations(
+          this.sql`
+            select ${this.sql.unsafe(operationColumns)}
+            from public.integration_operations
+            where state in ('retrying', 'review_required')
+            order by updated_at desc
+            limit ${limit}
+          `,
+        );
+      }
+      case "getOperationCounts": {
+        return this.sql<Array<{ pending: number; reviewRequired: number }>>`
+          select
+            count(*) filter (where state in ('queued', 'syncing', 'retrying'))::integer as pending,
+            count(*) filter (where state = 'review_required')::integer as "reviewRequired"
+          from public.integration_operations
+        `;
+      }
+      case "getStepResults": {
+        const [operationId] = values as [string];
+        return this.sql<Array<{ result: Record<string, unknown>; stepKey: string }>>`
+          select step_key as "stepKey", result
+          from public.integration_operation_steps
+          where operation_id = ${operationId}::uuid
+            and result is not null
+        `;
+      }
       case "getHealth": {
         return this.health(
           this.sql`
@@ -576,8 +726,10 @@ class PostgresIntegrationSql implements IntegrationSql {
               last_checked_at::text as "lastCheckedAt",
               last_success_at::text as "lastSuccessAt",
               last_failure_at::text as "lastFailureAt",
+              last_read_at::text as "lastReadAt",
               consecutive_failures as "consecutiveFailures",
-              last_error as "lastError"
+              last_error as "lastError",
+              last_write_at::text as "lastWriteAt"
             from public.integration_connector_health
             order by connector
           `,
@@ -594,7 +746,8 @@ class PostgresIntegrationSql implements IntegrationSql {
           `,
         );
       }
-      case "recordConnectorRead": {
+      case "recordConnectorRead":
+      case "recordConnectorWrite": {
         const [connector, succeeded, error, checkedAt, requestedStatus] = values as [
           IntegrationConnector,
           boolean,
@@ -603,6 +756,8 @@ class PostgresIntegrationSql implements IntegrationSql {
           IntegrationConnectorHealthStatus | undefined,
         ];
         const status = requestedStatus ?? (succeeded ? "healthy" : "degraded");
+        const activityColumn =
+          name === "recordConnectorRead" ? "last_read_at" : "last_write_at";
         await this.sql`
           insert into public.integration_connector_health (
             connector,
@@ -610,6 +765,7 @@ class PostgresIntegrationSql implements IntegrationSql {
             last_checked_at,
             last_success_at,
             last_failure_at,
+            ${this.sql.unsafe(activityColumn)},
             consecutive_failures,
             last_error
           ) values (
@@ -618,6 +774,7 @@ class PostgresIntegrationSql implements IntegrationSql {
             ${checkedAt},
             ${succeeded ? checkedAt : null},
             ${succeeded ? null : checkedAt},
+            ${checkedAt},
             ${succeeded ? 0 : 1},
             ${succeeded ? null : error ?? null}
           )
@@ -632,6 +789,7 @@ class PostgresIntegrationSql implements IntegrationSql {
               when ${succeeded} then integration_connector_health.last_failure_at
               else excluded.last_failure_at
             end,
+            ${this.sql.unsafe(activityColumn)} = excluded.${this.sql.unsafe(activityColumn)},
             consecutive_failures = case
               when ${succeeded} then 0
               else integration_connector_health.consecutive_failures + 1
@@ -651,6 +809,8 @@ class PostgresIntegrationSql implements IntegrationSql {
             operation_id,
             request_id,
             event_type,
+            actor_email,
+            operator_action,
             outcome,
             error_code,
             attempt_count,
@@ -662,6 +822,8 @@ class PostgresIntegrationSql implements IntegrationSql {
             ${event.operationId ?? null}::uuid,
             ${event.requestId},
             ${event.eventType},
+            ${event.actorEmail ?? null},
+            ${event.operatorAction ?? null},
             ${event.outcome ?? null},
             ${event.errorCode ?? null},
             ${event.attemptCount ?? null},
@@ -690,7 +852,9 @@ class PostgresIntegrationSql implements IntegrationSql {
       lastCheckedAt: row.lastCheckedAt ?? undefined,
       lastError: row.lastError ?? undefined,
       lastFailureAt: row.lastFailureAt ?? undefined,
+      lastReadAt: row.lastReadAt ?? undefined,
       lastSuccessAt: row.lastSuccessAt ?? undefined,
+      lastWriteAt: row.lastWriteAt ?? undefined,
     }));
   }
 
@@ -752,12 +916,19 @@ type StepRow = Omit<
 
 type HealthRow = Omit<
   IntegrationConnectorHealth,
-  "lastCheckedAt" | "lastError" | "lastFailureAt" | "lastSuccessAt"
+  | "lastCheckedAt"
+  | "lastError"
+  | "lastFailureAt"
+  | "lastReadAt"
+  | "lastSuccessAt"
+  | "lastWriteAt"
 > & {
   lastCheckedAt: string | null;
   lastError: string | null;
   lastFailureAt: string | null;
+  lastReadAt: string | null;
   lastSuccessAt: string | null;
+  lastWriteAt: string | null;
 };
 
 const operationColumns = thisOperationColumns();
@@ -860,12 +1031,25 @@ function requiredRow<T>(rows: readonly unknown[], message: string): T {
 }
 
 function safeError(value: string) {
-  return value.trim().replace(/\s+/g, " ").slice(0, 500);
+  return value
+    .replace(
+      /authorization\s*:\s*(?:bearer\s+)?[^\s,;]+/gi,
+      "Authorization: [REDACTED]",
+    )
+    .replace(
+      /\b(access_token|refresh_token|client_secret)\s*[:=]\s*[^\s,;]+/gi,
+      "$1=[REDACTED]",
+    )
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 500);
 }
 
 function sanitizeAuditEvent(input: IntegrationAuditEvent): IntegrationAuditEvent {
   return {
+    ...(input.actorEmail ? { actorEmail: normalizeEmail(input.actorEmail) } : {}),
     ...(input.operationId ? { operationId: input.operationId } : {}),
+    ...(input.operatorAction ? { operatorAction: input.operatorAction } : {}),
     ...(input.outcome ? { outcome: input.outcome } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
     ...(input.attemptCount !== undefined ? { attemptCount: input.attemptCount } : {}),

@@ -81,6 +81,7 @@ export type IntegrationOperationStep = {
 };
 
 export type IntegrationAuditEvent = {
+  actorEmail?: string;
   attemptCount?: number;
   connector?: IntegrationConnector;
   durationMs?: number;
@@ -88,6 +89,7 @@ export type IntegrationAuditEvent = {
   eventType: string;
   httpStatus?: number;
   operationId?: string;
+  operatorAction?: "cancel" | "retry";
   outcome?: string;
   requestId: string;
   stepKey?: string;
@@ -99,7 +101,9 @@ export type IntegrationConnectorHealth = {
   lastCheckedAt?: string;
   lastError?: string;
   lastFailureAt?: string;
+  lastReadAt?: string;
   lastSuccessAt?: string;
+  lastWriteAt?: string;
   status: IntegrationConnectorHealthStatus;
 };
 

@@ -16,7 +16,8 @@ type ProcessorRepository = Pick<
   | "markStepFailed"
   | "markStepSucceeded"
   | "recordConnectorRead"
->;
+> &
+  Partial<Pick<IntegrationRepository, "recordConnectorWrite">>;
 
 export function createIntegrationProcessor({
   clock = () => new Date(),
@@ -92,7 +93,7 @@ export function createIntegrationProcessor({
       result,
       stepId: step.id,
     });
-    await repository.recordConnectorRead({
+    await recordConnectorWrite({
       connector: step.connector,
       now: completedAt,
       status: "healthy",
@@ -137,7 +138,7 @@ export function createIntegrationProcessor({
       stepId: step.id,
     });
     if (affectsConnectorHealth(failure)) {
-      await repository.recordConnectorRead({
+      await recordConnectorWrite({
         connector: step.connector,
         error: failureSummary,
         now: failedAt,
@@ -163,6 +164,14 @@ export function createIntegrationProcessor({
       stepKey: step.stepKey,
     });
     return retrying ? "retrying" : "reviewRequired";
+  }
+
+  function recordConnectorWrite(
+    input: Parameters<IntegrationRepository["recordConnectorWrite"]>[0],
+  ) {
+    return (repository.recordConnectorWrite ?? repository.recordConnectorRead)(
+      input,
+    );
   }
 }
 

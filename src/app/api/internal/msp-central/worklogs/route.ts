@@ -1,22 +1,22 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import {
   getCommandCentreAccess,
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
-import { createGraphClient } from "@/server/graph/client";
+import { fingerprintPayload } from "@/server/integrations/fingerprint";
+import { integrationRouteErrorStatus } from "@/server/integrations/http";
+import { worklogOperation } from "@/server/integrations/operations";
+import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { createPostgresWorklogMigrationCoordinator } from "@/server/worklogs/migration";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
-import { createWorklogDispositionProcessor } from "@/server/worklogs/processor";
-import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
-import { createWorklogDispositionRuntime } from "@/server/worklogs/runtime";
 
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
-
   if (access.status === "unauthenticated") {
     return json({ error: "Authentication required." }, 401);
   }
@@ -28,43 +28,85 @@ export async function POST(request: Request) {
     const command = validateWorklogDispositionCommand(await request.json());
     const config = readDispatchConfig();
     const mspClient = createMspCentralClient(config);
-    const worklogOwner = await resolveMspCentralWorklogOwner({
+    const owner = await resolveMspCentralWorklogOwner({
       email: access.email,
       mspClient,
     });
-    const runtime = createWorklogDispositionRuntime({
-      graphClient: createGraphClient(config.microsoft),
-      mspClient,
-      outcomeStore: createPostgresWorklogOutcomeStore({
-        databaseUrl: config.databaseUrl,
-      }),
-      worklogOwner,
+    const outcomeStore = createPostgresWorklogOutcomeStore({
+      databaseUrl: config.databaseUrl,
     });
-    const processor = createWorklogDispositionProcessor({
-      applyDisposition: runtime.applyDisposition,
-      repository: createPostgresWorklogDispositionRepository({
-        databaseUrl: config.databaseUrl,
-      }),
-      saveWorklog: runtime.saveWorklog,
+    const storedAssignments = await outcomeStore.listCalendarAssignments({
+      requestId: command.requestId,
     });
-    const result = await processor.process(command);
+    const calendarAssignments = storedAssignments.map((assignment) => ({
+      ...assignment,
+      technicianId:
+        command.currentBooking?.eventId === assignment.eventId &&
+        command.currentBooking.userPrincipalName === assignment.userPrincipalName
+          ? command.currentBooking.technicianId ?? calendarIdentity(assignment)
+          : calendarIdentity(assignment),
+    }));
+    const coordinator = createPostgresWorklogMigrationCoordinator({
+      databaseUrl: config.databaseUrl,
+    });
+    const result = await coordinator.enqueue({
+      command,
+      createOperation: (queuedCommand, worklogAlreadySaved) =>
+        worklogOperation({
+          actorEmail: access.email,
+          calendarAssignments,
+          command: queuedCommand,
+          ownerId: owner.id,
+          worklogAlreadySaved,
+        }),
+    });
+    const operationId =
+      result.kind === "operation" ? result.operation.id : result.operationId;
+    const status =
+      result.kind === "operation" ? result.operation.state : result.status;
+    if (result.kind === "operation") {
+      after(() => bestEffortWake(operationId));
+    }
 
     return json(
-      { ok: result.status === "completed", ...result },
-      result.status === "completed" ? 200 : 202,
+      {
+        idempotencyKey: command.idempotencyKey,
+        ok: true,
+        operationId,
+        status,
+      },
+      status === "synced" ? 200 : 202,
     );
   } catch (error) {
-    console.error("MSP Central Work Log route failed", error);
+    console.error("MSP Central Work Log queue failed", error);
     return json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "MSP Central Work Log save failed.",
+            : "MSP Central Work Log could not be queued.",
         ok: false,
       },
-      400,
+      integrationRouteErrorStatus(error),
     );
+  }
+}
+
+function calendarIdentity(input: {
+  eventId: string;
+  userPrincipalName: string;
+}) {
+  return `calendar:${fingerprintPayload(input).slice(0, 24)}`;
+}
+
+async function bestEffortWake(operationId: string) {
+  try {
+    await wakeIntegrationProcessor(operationId);
+  } catch (error) {
+    console.warn("Work Log remains durably queued after wake-up failure.", {
+      message: error instanceof Error ? error.message : "Unknown wake-up error.",
+      operationId,
+    });
   }
 }
 

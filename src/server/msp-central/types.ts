@@ -101,12 +101,20 @@ export type MspCentralRequestNoteListResponse = {
 };
 
 export type MspCentralRawWorklog = {
-  created_by?: { email_id?: string | null; name?: string | null } | null;
+  created_by?: {
+    email_id?: string | null;
+    id?: string | number | null;
+    name?: string | null;
+  } | null;
   description?: string | null;
   end_time?: MspCentralTimestamp | null;
   id?: string | number | null;
   is_billable?: boolean | null;
-  owner?: { email_id?: string | null; name?: string | null } | null;
+  owner?: {
+    email_id?: string | null;
+    id?: string | number | null;
+    name?: string | null;
+  } | null;
   recorded_time?: MspCentralTimestamp | null;
   start_time?: MspCentralTimestamp | null;
   time_spent?: {
@@ -164,6 +172,11 @@ export type MspCentralListRequestsParams = {
 };
 
 export type MspCentralClient = {
+  addRequestNote?(input: {
+    description: string;
+    requestId: string;
+    visibility: "customer" | "internal";
+  }): Promise<void>;
   addRequestWorklog?(input: {
     description: string;
     durationMinutes: number;
@@ -179,11 +192,29 @@ export type MspCentralClient = {
     technicianName: string;
   }): Promise<void>;
   clearRequestSchedule(input: { requestId: string }): Promise<void>;
+  createRequest?(input: {
+    commandFingerprint?: string;
+    customer?: string;
+    description?: string;
+    priority: "Critical" | "High" | "Medium" | "Low";
+    requesterEmail?: string;
+    site?: string;
+    subject: string;
+  }): Promise<{ id: string; requestNumber: string }>;
+  findRequestByCommandFingerprint?(
+    commandFingerprint: string,
+  ): Promise<{ id: string; requestNumber: string } | undefined>;
   getRequest(requestId: string): Promise<DispatchRequest | undefined>;
   getRequestContext(requestId: string): Promise<MspCentralRequestContext>;
   getTechnician(technicianId: string): Promise<Technician | undefined>;
   listCustomers(): Promise<Array<{ id: string; name: string }>>;
+  listRequestNotes?(
+    requestId: string,
+  ): Promise<MspCentralRawRequestNote[]>;
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;
+  listRequestWorklogs?(
+    requestId: string,
+  ): Promise<MspCentralRawWorklog[]>;
   listSites(): Promise<Array<{ id: string; name: string }>>;
   listTechnicians(): Promise<Technician[]>;
   mergeRequests(input: {
@@ -191,6 +222,10 @@ export type MspCentralClient = {
     parentRequestId: string;
   }): Promise<void>;
   refreshAccessToken(): Promise<string>;
+  setRequestResolution?(input: {
+    content: string;
+    requestId: string;
+  }): Promise<void>;
   updateRequestSchedule(input: {
     requestId: string;
     scheduledEnd: string;

@@ -1,3 +1,5 @@
+import type postgres from "postgres";
+
 import { getSharedPostgresClient } from "@/server/database/client";
 
 import { mockIsoTime } from "./date-scope";
@@ -40,6 +42,23 @@ export type DispatchTimerPayload = {
   technicianName?: string;
 };
 
+type DispatchScheduleRoster = {
+  assignments: Array<{
+    appointmentId: string;
+    outlookEventId?: string;
+    role?: "crew" | "lead";
+    technicianId: string;
+  }>;
+  groupId: string;
+};
+
+type DispatchLiveSyncStatus =
+  | "failed"
+  | "pending"
+  | "retrying"
+  | "review_required"
+  | "synced";
+
 export type DispatchTestSyncEvent = {
   id: string;
   eventType: DispatchTestSyncEventType;
@@ -58,8 +77,14 @@ export type DispatchTestSyncEvent = {
       error?: string;
       outlookEventId?: string;
       outlookWebLink?: string;
-      status: "failed" | "pending" | "synced";
+      status: DispatchLiveSyncStatus;
     };
+    scheduleAssignment?: {
+      assignmentKey: string;
+      groupId: string;
+      role: "crew" | "lead";
+    };
+    scheduleRoster?: DispatchScheduleRoster;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   };
@@ -92,8 +117,14 @@ type DispatchTestSyncRow = {
       error?: string;
       outlookEventId?: string;
       outlookWebLink?: string;
-      status: "failed" | "pending" | "synced";
+      status: DispatchLiveSyncStatus;
     };
+    scheduleAssignment?: {
+      assignmentKey: string;
+      groupId: string;
+      role: "crew" | "lead";
+    };
+    scheduleRoster?: DispatchScheduleRoster;
     timer?: DispatchTimerPayload;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
@@ -140,13 +171,17 @@ export function applyDispatchTestSyncEvents(
   }
 
   const requests = dashboard.requests.map((request) => ({ ...request }));
-  const appointments = dashboard.appointments.map((appointment) => ({
-    ...appointment,
-  }));
-
-  for (const event of [...events].sort((first, second) =>
+  const sortedEvents = [...events].sort((first, second) =>
     first.createdAt.localeCompare(second.createdAt),
-  )) {
+  );
+  const authoritativeRosters = getAuthoritativeScheduleRosters(sortedEvents);
+  const appointments = dashboard.appointments
+    .filter((appointment) =>
+      isRetainedByAuthoritativeRoster(appointment, authoritativeRosters),
+    )
+    .map((appointment) => ({ ...appointment }));
+
+  for (const event of sortedEvents) {
     if (event.eventType === "cancelled") {
       const appointmentIndex = appointments.findIndex((appointment) =>
         appointmentMatchesEvent(appointment, event),
@@ -255,7 +290,7 @@ export function applyDispatchTestSyncEvents(
     const scheduledStart = mockIsoTime(event.date, event.start);
     const scheduledEnd = mockIsoTime(event.date, event.end);
 
-    if (request) {
+    if (request && event.payload?.scheduleAssignment?.role !== "crew") {
       const liveSync = event.payload?.liveSync;
       const liveSyncWarnings =
         liveSync?.status === "failed"
@@ -289,6 +324,12 @@ export function applyDispatchTestSyncEvents(
             ...appointments[appointmentIndex],
             requestId:
               event.requestId ?? appointments[appointmentIndex].requestId,
+            scheduleAssignmentRole:
+              event.payload?.scheduleAssignment?.role ??
+              appointments[appointmentIndex].scheduleAssignmentRole,
+            scheduleGroupId:
+              event.payload?.scheduleAssignment?.groupId ??
+              appointments[appointmentIndex].scheduleGroupId,
             technicianId: event.technicianId,
             date: event.date,
             start: event.start,
@@ -330,6 +371,8 @@ export function applyDispatchTestSyncEvents(
           {
             id: event.appointmentId ?? `test-sync-${request.id}`,
             requestId: request.id,
+            scheduleAssignmentRole: event.payload?.scheduleAssignment?.role,
+            scheduleGroupId: event.payload?.scheduleAssignment?.groupId,
             technicianId: event.technicianId,
             title: request.subject,
             customer: request.customer,
@@ -387,12 +430,13 @@ export async function listDispatchTestSyncEvents() {
 export async function recordDispatchTestSyncEvent(
   input: DispatchTestSyncEventInput,
   createdBy?: string,
+  transactionSql?: postgres.Sql,
 ) {
   const event = normaliseDispatchTestSyncEvent({
     ...input,
     createdBy: input.createdBy ?? createdBy,
   });
-  const sql = await getDispatchTestSyncClient();
+  const sql = transactionSql ?? getDispatchTestSyncClient();
 
   await sql`
     insert into dispatch_test_schedule_events (
@@ -441,8 +485,9 @@ export async function clearDispatchTestSyncEvents() {
   await sql`delete from dispatch_test_schedule_events`;
 }
 
-async function getDispatchTestSyncClient() {
-  const databaseUrl = process.env.DATABASE_URL;
+export function getDispatchTestSyncClient(
+  databaseUrl = process.env.DATABASE_URL,
+) {
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required for dispatcher-to-mobile test sync.");
@@ -452,6 +497,87 @@ async function getDispatchTestSyncClient() {
     databaseUrl,
     shouldUseSsl(databaseUrl) ? "require" : false,
   );
+}
+
+function getAuthoritativeScheduleRosters(events: DispatchTestSyncEvent[]) {
+  const rosters = new Map<string, DispatchScheduleRoster>();
+
+  for (const event of events) {
+    const roster = event.payload?.scheduleRoster;
+    if (!roster) {
+      continue;
+    }
+
+    if (event.payload?.liveSync?.status === "synced") {
+      rosters.delete(roster.groupId);
+    } else {
+      rosters.set(roster.groupId, roster);
+    }
+  }
+
+  return rosters;
+}
+
+function isRetainedByAuthoritativeRoster(
+  appointment: Appointment,
+  rosters: Map<string, DispatchScheduleRoster>,
+) {
+  if (!appointment.scheduleGroupId) {
+    return true;
+  }
+
+  const roster = rosters.get(appointment.scheduleGroupId);
+  if (!roster) {
+    return true;
+  }
+
+  return roster.assignments.some((assignment) => {
+    if (assignment.technicianId !== appointment.technicianId) {
+      return false;
+    }
+
+    if (
+      assignment.role &&
+      assignment.role !== appointment.scheduleAssignmentRole
+    ) {
+      return false;
+    }
+
+    if (assignment.outlookEventId && appointment.outlookEventId) {
+      return assignment.outlookEventId === appointment.outlookEventId;
+    }
+
+    if (assignment.appointmentId === appointment.id) {
+      return true;
+    }
+
+    return !assignment.outlookEventId || !appointment.outlookEventId;
+  });
+}
+
+export async function removeObsoleteDispatchScheduleAssignments(
+  {
+    retainedEventIds,
+    scheduleGroupId,
+  }: {
+    retainedEventIds: string[];
+    scheduleGroupId: string;
+  },
+  transactionSql?: postgres.Sql,
+) {
+  const sql = transactionSql ?? getDispatchTestSyncClient();
+  const legacyCrewPrefix = `${scheduleGroupId}-crew-`;
+
+  await sql`
+    delete from dispatch_test_schedule_events
+     where event_type in ('scheduled', 'rescheduled')
+       and (
+         payload #>> '{scheduleAssignment,groupId}' = ${scheduleGroupId}
+         or appointment_id = ${scheduleGroupId}
+         or left(appointment_id, ${legacyCrewPrefix.length}) = ${legacyCrewPrefix}
+       )
+       and id not in ${sql(retainedEventIds)}
+  `;
 }
 
 function rowToDispatchTestSyncEvent(
@@ -483,12 +609,18 @@ function appointmentMatchesEvent(
   event: DispatchTestSyncEvent,
 ) {
   const syncedOutlookEventId = event.payload?.liveSync?.outlookEventId;
+  const scheduleAssignment = event.payload?.scheduleAssignment;
 
   return Boolean(
     (event.appointmentId && appointment.id === event.appointmentId) ||
-      (event.requestId && appointment.requestId === event.requestId) ||
       (syncedOutlookEventId &&
-        appointment.outlookEventId === syncedOutlookEventId),
+        appointment.outlookEventId === syncedOutlookEventId &&
+        (!event.technicianId ||
+          appointment.technicianId === event.technicianId)) ||
+      (scheduleAssignment &&
+        appointment.scheduleGroupId === scheduleAssignment.groupId &&
+        appointment.technicianId === event.technicianId &&
+        appointment.scheduleAssignmentRole === scheduleAssignment.role),
   );
 }
 

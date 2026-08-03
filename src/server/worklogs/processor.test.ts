@@ -63,6 +63,27 @@ describe("Work Log disposition processor", () => {
     expect(saveWorklog).toHaveBeenCalledTimes(1);
     expect(applyDisposition).toHaveBeenCalledTimes(1);
   });
+
+  it("skips provider writes when the operation migrated to the generic queue", async () => {
+    const repository = createMemoryRepository();
+    const migrated = await repository.begin(command);
+    migrated.executionOwner = "generic";
+    migrated.migratedOperationId = "generic-operation-1";
+    const saveWorklog = vi.fn();
+    const applyDisposition = vi.fn();
+    const processor = createWorklogDispositionProcessor({
+      applyDisposition,
+      repository,
+      saveWorklog,
+    });
+
+    await expect(processor.process(command)).resolves.toMatchObject({
+      status: "migrated",
+      worklogSaved: false,
+    });
+    expect(saveWorklog).not.toHaveBeenCalled();
+    expect(applyDisposition).not.toHaveBeenCalled();
+  });
 });
 
 function createMemoryRepository(): WorklogDispositionRepository {
@@ -74,13 +95,18 @@ function createMemoryRepository(): WorklogDispositionRepository {
       if (existing) return existing;
       const operation: WorklogDispositionOperation = {
         command: nextCommand,
+        executionOwner: "legacy",
         idempotencyKey: nextCommand.idempotencyKey,
         lastError: null,
+        migratedOperationId: undefined,
         requestId: nextCommand.requestId,
         state: "pending",
       };
       operations.set(operation.idempotencyKey, operation);
       return operation;
+    },
+    async find(key) {
+      return operations.get(key);
     },
     async markCompleted(key) {
       update(key, { lastError: null, state: "completed" });

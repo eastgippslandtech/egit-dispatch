@@ -8,6 +8,11 @@ type WorklogOwner = {
 };
 
 type RuntimeMspClient = {
+  addRequestNote?: (input: {
+    description: string;
+    requestId: string;
+    visibility: "customer" | "internal";
+  }) => Promise<void>;
   addRequestWorklog?: (input: {
     description: string;
     durationMinutes: number;
@@ -23,6 +28,10 @@ type RuntimeMspClient = {
     technicianName: string;
   }) => Promise<void>;
   clearRequestSchedule: (input: { requestId: string }) => Promise<void>;
+  setRequestResolution?: (input: {
+    content: string;
+    requestId: string;
+  }) => Promise<void>;
   updateRequestSchedule: (input: {
     requestId: string;
     scheduledEnd: string;
@@ -117,6 +126,20 @@ export function createWorklogDispositionRuntime({
       if (command.disposition === "complete") {
         if (!mspClient.updateRequestStatus) {
           throw new Error("MSP Central status writeback is unavailable.");
+        }
+        if (command.solution) {
+          if (!mspClient.setRequestResolution || !mspClient.addRequestNote) {
+            throw new Error("MSP Central solution writeback is unavailable.");
+          }
+          await mspClient.setRequestResolution({
+            content: command.solution,
+            requestId: command.requestId,
+          });
+          await mspClient.addRequestNote({
+            description: command.solution,
+            requestId: command.requestId,
+            visibility: "customer",
+          });
         }
         await mspClient.updateRequestStatus({
           requestId: command.requestId,

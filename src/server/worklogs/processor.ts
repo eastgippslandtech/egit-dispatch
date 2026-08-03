@@ -8,14 +8,17 @@ export type WorklogDispositionOperationState =
 
 export type WorklogDispositionOperation = {
   command: WorklogDispositionCommand;
+  executionOwner?: "generic" | "legacy";
   idempotencyKey: string;
   lastError: string | null;
+  migratedOperationId?: string;
   requestId: string;
   state: WorklogDispositionOperationState;
 };
 
 export interface WorklogDispositionRepository {
   begin(command: WorklogDispositionCommand): Promise<WorklogDispositionOperation>;
+  find(idempotencyKey: string): Promise<WorklogDispositionOperation | undefined>;
   markCompleted(idempotencyKey: string): Promise<void>;
   markRecoveryRequired(idempotencyKey: string, error: string): Promise<void>;
   markWorklogSaved(idempotencyKey: string): Promise<void>;
@@ -24,7 +27,7 @@ export interface WorklogDispositionRepository {
 export type WorklogDispositionResult = {
   error?: string;
   idempotencyKey: string;
-  status: "completed" | "recovery_required";
+  status: "completed" | "migrated" | "recovery_required";
   worklogSaved: boolean;
 };
 
@@ -42,6 +45,20 @@ export function createWorklogDispositionProcessor({
       command: WorklogDispositionCommand,
     ): Promise<WorklogDispositionResult> {
       const operation = await repository.begin(command);
+
+      if (
+        operation.executionOwner === "generic" ||
+        operation.migratedOperationId
+      ) {
+        return {
+          idempotencyKey: command.idempotencyKey,
+          status: "migrated",
+          worklogSaved:
+            operation.state === "worklog_saved" ||
+            operation.state === "recovery_required" ||
+            operation.state === "completed",
+        };
+      }
 
       if (operation.state === "completed") {
         return completed(command.idempotencyKey);

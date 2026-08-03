@@ -18,6 +18,30 @@ describe("MSP Central request mappers", () => {
   const now = new Date("2026-07-09T09:00:00+10:00");
   const afterHours = new Date("2026-07-09T19:00:00+10:00");
 
+  it("keeps customer-visible technician replies in the customer conversation", () => {
+    const result = mapMspCentralRequestNotes([
+      {
+        created_by: { is_technician: true, name: "Simeon" },
+        description: "The printer is back online.",
+        id: "outbound-1",
+        show_to_requester: true,
+      },
+      {
+        created_by: { is_technician: true, name: "Simeon" },
+        description: "Checked the switch port.",
+        id: "internal-1",
+        show_to_requester: false,
+      },
+    ]);
+
+    expect(result.customerResponses).toEqual([
+      expect.objectContaining({ id: "outbound-1" }),
+    ]);
+    expect(result.internalNotes).toEqual([
+      expect.objectContaining({ id: "internal-1" }),
+    ]);
+  });
+
   it("maps fixture-style requests into Command Centre requests", () => {
     const request = mapMspCentralRequest(
       {

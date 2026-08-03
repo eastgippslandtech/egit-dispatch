@@ -12,11 +12,16 @@ import {
   Filter,
   Frown,
   GitMerge,
+  Inbox,
   LogOut,
   MailWarning,
+  Maximize2,
   Meh,
+  MessageSquare,
   Monitor,
+  PlugZap,
   PhoneCall,
+  Plus,
   RefreshCw,
   Search,
   Smile,
@@ -98,6 +103,12 @@ import {
 } from "@/server/dispatch/current-time";
 import { formatTalkTime } from "@/server/yeastar/talk-time";
 import {
+  GlobalIntegrationStatus,
+  operationStateForRequest,
+  type TrackedIntegrationOperation,
+  useTrackedIntegrationOperations,
+} from "./operation-status";
+import {
   applyTravelToAppointment,
   buildAppointmentTravel,
   getAppointmentBlockedWindow,
@@ -112,11 +123,43 @@ type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
 
+type IntegrationReceiptStatus =
+  | "queued"
+  | "syncing"
+  | "retrying"
+  | "synced"
+  | "review_required";
+
 type LiveScheduleResult = {
   id?: string;
+  operationId?: string;
   queued?: boolean;
+  status?: IntegrationReceiptStatus;
   webLink?: string;
 };
+
+type IntegrationOperationReceipt = {
+  operationId?: string;
+  status?: IntegrationReceiptStatus;
+};
+
+export function integrationReceiptDisposition(
+  status?: IntegrationReceiptStatus,
+): {
+  closeForm: boolean;
+  phase: "pending" | "retrying" | "review_required" | "synced";
+} {
+  if (status === "review_required") {
+    return { closeForm: true, phase: "review_required" };
+  }
+  if (status === "retrying") {
+    return { closeForm: true, phase: "retrying" };
+  }
+  if (status === "synced") {
+    return { closeForm: true, phase: "synced" };
+  }
+  return { closeForm: true, phase: "pending" };
+}
 
 const PRIMARY_HEALTH_KEYS = [
   "unscheduled",
@@ -180,8 +223,120 @@ export function bookingCardPriorityClass(
 
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
+type QueueView = "assigned" | "unscheduled";
 type SearchState = "dimmed" | "match" | "normal";
 type SeenTicketUpdateIds = Set<string>;
+type WorkLogTarget = { appointmentId?: string; requestId: string };
+
+export function resolveWorkLogAppointment(
+  appointments: Appointment[],
+  appointmentId?: string,
+) {
+  if (!appointmentId) return undefined;
+  return appointments.find((appointment) => appointment.id === appointmentId);
+}
+
+export function normalizeIntegrationWarnings(
+  warnings: readonly string[],
+  state?: TrackedIntegrationOperation["state"],
+) {
+  const integrationLabel = state === "review_required"
+    ? "Review required"
+    : state === "queued" || state === "syncing" || state === "retrying"
+      ? "Syncing"
+      : undefined;
+  const normalized = integrationLabel
+    ? warnings.filter((warning) => !["syncing", "review required"].includes(warning.trim().toLowerCase()))
+    : warnings;
+  const unique = new Map<string, string>();
+  for (const warning of normalized) {
+    const value = warning.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (!unique.has(key)) unique.set(key, value);
+  }
+  return integrationLabel ? [integrationLabel, ...unique.values()] : [...unique.values()];
+}
+
+function requestWithIntegrationState(
+  request: DispatchRequest,
+  state?: TrackedIntegrationOperation["state"],
+) {
+  return { ...request, warnings: normalizeIntegrationWarnings(request.warnings, state) };
+}
+
+export function reconcileDashboardWithPendingWritebacks(
+  current: DispatchDashboardData,
+  incoming: DispatchDashboardData,
+  pendingRequestIds: ReadonlySet<string>,
+): DispatchDashboardData {
+  if (pendingRequestIds.size === 0) {
+    return incoming;
+  }
+
+  const pendingRequests = new Map(
+    current.requests
+      .filter((request) => pendingRequestIds.has(request.id))
+      .map((request) => [request.id, request]),
+  );
+  const pendingAppointments = current.appointments.filter(
+    (appointment) =>
+      appointment.requestId && pendingRequestIds.has(appointment.requestId),
+  );
+  const requests = incoming.requests.map(
+    (request) => pendingRequests.get(request.id) ?? request,
+  );
+  for (const request of pendingRequests.values()) {
+    if (!requests.some((candidate) => candidate.id === request.id)) {
+      requests.push(request);
+    }
+  }
+
+  return {
+    ...incoming,
+    appointments: [
+      ...incoming.appointments.filter(
+        (appointment) =>
+          !appointment.requestId || !pendingRequestIds.has(appointment.requestId),
+      ),
+      ...pendingAppointments,
+    ],
+    requests,
+  };
+}
+
+function authoritativeScheduleMatches(
+  current: DispatchDashboardData,
+  incoming: DispatchDashboardData,
+  requestId: string,
+) {
+  const currentRequest = current.requests.find((request) => request.id === requestId);
+  const incomingRequest = incoming.requests.find((request) => request.id === requestId);
+  if (!currentRequest || !incomingRequest) return false;
+  if (
+    currentRequest.scheduledStart !== incomingRequest.scheduledStart ||
+    currentRequest.scheduledEnd !== incomingRequest.scheduledEnd ||
+    currentRequest.technicianId !== incomingRequest.technicianId
+  ) {
+    return false;
+  }
+
+  const currentAppointments = current.appointments.filter(
+    (appointment) => appointment.requestId === requestId,
+  );
+  const incomingAppointments = incoming.appointments.filter(
+    (appointment) => appointment.requestId === requestId,
+  );
+  return currentAppointments.every((appointment) =>
+    incomingAppointments.some(
+      (candidate) =>
+        candidate.date === appointment.date &&
+        candidate.start === appointment.start &&
+        candidate.end === appointment.end &&
+        candidate.technicianId === appointment.technicianId,
+    ),
+  );
+}
 
 const TECHNICIAN_COLUMN_WIDTH_PX = 170;
 const TIMELINE_HEADER_HEIGHT_PX = 40;
@@ -201,6 +356,7 @@ type PendingSchedule =
       bookingType: BookingType;
       crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "request";
       date: string;
       requestId: string;
@@ -212,9 +368,11 @@ type PendingSchedule =
     }
   | {
       appointmentId: string;
+      scheduleGroupId: string;
       bookingType: BookingType;
       crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "appointment";
       date: string;
       oldEnd: string;
@@ -252,15 +410,33 @@ type DispatchTestSyncEventPayload = {
   technicianId?: string;
 };
 
+function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
+  if (anchor.scheduleGroupId) {
+    return candidate.scheduleGroupId === anchor.scheduleGroupId;
+  }
+
+  return (
+    candidate.requestId === anchor.requestId &&
+    candidate.date === anchor.date &&
+    candidate.start === anchor.start &&
+    candidate.end === anchor.end
+  );
+}
+
 export function CommandCentrePrototype({
   authDisabled = false,
   data,
+  showIntegrationStatus = false,
+  showIntegrations = false,
 }: {
   authDisabled?: boolean;
   data: DispatchDashboardData;
+  showIntegrationStatus?: boolean;
+  showIntegrations?: boolean;
 }) {
   const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
+  const pendingWritebackRequestIds = useRef(new Set<string>());
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [now, setNow] = useState(() => new Date());
@@ -272,6 +448,7 @@ export function CommandCentrePrototype({
   const [showMoreHealth, setShowMoreHealth] = useState(false);
   const [topSearch, setTopSearch] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
+  const [queueView, setQueueView] = useState<QueueView>("unscheduled");
   const [queueFilters, setQueueFilters] = useState<QueueFilters>({});
   const [openQueueFilter, setOpenQueueFilter] = useState<QueueFilterKey>();
   const [seenTicketUpdateIds, setSeenTicketUpdateIds] =
@@ -282,8 +459,38 @@ export function CommandCentrePrototype({
     PendingSchedule | undefined
   >();
   const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
-  const [workLogRequestId, setWorkLogRequestId] = useState<string | undefined>();
+  const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
+  const [ticketWorkspaceTarget, setTicketWorkspaceTarget] =
+    useState<WorkLogTarget>();
+  const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
+  const integrationTracker = useTrackedIntegrationOperations({
+    hydrate: showIntegrationStatus,
+  });
+
+  function trackIntegrationReceipt(
+    receipt: { operationId?: string; status?: IntegrationReceiptStatus },
+    target: { appointmentId?: string; requestId?: string } = {},
+  ) {
+    if (!receipt.operationId || !receipt.status || receipt.status === "synced") return;
+    integrationTracker.track({
+      appointmentId: target.appointmentId,
+      operationId: receipt.operationId,
+      requestId: target.requestId,
+      state: receipt.status,
+    });
+  }
+
+  function openWorkLog(requestId: string, appointmentId?: string) {
+    const requestBookings = dashboard.appointments.filter(
+      (appointment) => appointment.requestId === requestId,
+    );
+    if (!appointmentId && requestBookings.length > 0) {
+      setTicketWorkspaceTarget({ requestId });
+      return;
+    }
+    setWorkLogTarget({ appointmentId, requestId });
+  }
 
   useEffect(() => {
     if (!toast) {
@@ -298,13 +505,31 @@ export function CommandCentrePrototype({
   }, [toast]);
 
   useEffect(() => {
-    if (!data.calendarError?.includes("MSP Central is temporarily unavailable")) {
-      return;
-    }
+    setDashboard((current) => {
+      for (const requestId of pendingWritebackRequestIds.current) {
+        if (authoritativeScheduleMatches(current, data, requestId)) {
+          pendingWritebackRequestIds.current.delete(requestId);
+        }
+      }
+      return reconcileDashboardWithPendingWritebacks(
+        current,
+        data,
+        pendingWritebackRequestIds.current,
+      );
+    });
+  }, [data]);
 
-    const retry = window.setInterval(() => router.refresh(), 30_000);
-    return () => window.clearInterval(retry);
-  }, [data.calendarError, router]);
+  useEffect(() => {
+    const refresh = () => router.refresh();
+    const retry = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(retry);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [router]);
 
   const selectedDateLabel = formatSelectedDateLabel(selectedDateKey);
   const weekDays = useMemo(() => getWeekRange(selectedDateKey), [selectedDateKey]);
@@ -389,6 +614,11 @@ export function CommandCentrePrototype({
   const unscheduledRequests = dashboard.requests.filter(
     (request) => !request.scheduledStart && request.status !== "Resolved",
   );
+  const assignedRequests = dashboard.requests.filter(
+    (request) => Boolean(request.technicianId) && request.status !== "Resolved",
+  );
+  const visibleQueueRequests =
+    queueView === "assigned" ? assignedRequests : unscheduledRequests;
   const queueRequests = activeHealth
     ? dashboard.requests.filter((request) =>
         requestMatchesHealthFilter(
@@ -397,7 +627,7 @@ export function CommandCentrePrototype({
           scopedData.appointments,
         ),
       )
-    : unscheduledRequests;
+    : visibleQueueRequests;
   const filteredQueueRequests = queueRequests.filter(
     (request) =>
       requestMatchesSearch(request, queueSearch, dashboard.technicians) &&
@@ -419,6 +649,16 @@ export function CommandCentrePrototype({
     queueSearch,
     topSearch,
   });
+  const displayRequests = useMemo(
+    () =>
+      dashboard.requests.map((request) =>
+        requestWithIntegrationState(
+          request,
+          operationStateForRequest(integrationTracker.operations, request.id),
+        ),
+      ),
+    [dashboard.requests, integrationTracker.operations],
+  );
 
   function clearAllFilters() {
     setTopSearch("");
@@ -458,7 +698,10 @@ export function CommandCentrePrototype({
     markTicketUpdateSeen(appointment.requestId);
   }
 
-  async function mergeRequestIntoParent(parentRequestId: string) {
+  async function mergeRequestIntoParent(
+    parentRequestId: string,
+    idempotencyKey: string,
+  ) {
     const childRequest = dashboard.requests.find(
       (request) => request.id === mergeRequestId,
     );
@@ -470,31 +713,38 @@ export function CommandCentrePrototype({
       throw new Error("The duplicate or surviving request is no longer available.");
     }
 
-    await publishMspCentralRequestMerge({
+    const result = await publishMspCentralRequestMerge({
       childRequestId: childRequest.id,
+      idempotencyKey,
       parentRequestId: parentRequest.id,
     });
-
-    setDashboard((current) => ({
-      ...current,
-      appointments: current.appointments.map((appointment) =>
-        appointment.requestId === childRequest.id
-          ? { ...appointment, requestId: parentRequest.id }
-          : appointment,
-      ),
-      requests: current.requests.filter(
-        (request) => request.id !== childRequest.id,
-      ),
-      selectedRequestId:
-        current.selectedRequestId === childRequest.id
-          ? parentRequest.id
-          : current.selectedRequestId,
-    }));
-    setSelection({ kind: "request", requestId: parentRequest.id });
+    trackIntegrationReceipt(result, { requestId: childRequest.id });
+    const receipt = integrationReceiptDisposition(result.status);
     setMergeRequestId(undefined);
     setToast(
-      `${childRequest.requestNumber} merged into ${parentRequest.requestNumber}.`,
+      receipt.phase === "synced"
+        ? `${childRequest.requestNumber} merged in MSP Central.`
+        : receipt.phase === "review_required"
+          ? `${childRequest.requestNumber} merge saved locally. Provider sync needs review.`
+        : receipt.phase === "retrying"
+          ? `${childRequest.requestNumber} merge queued. MSP Central sync is retrying.`
+          : `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
     );
+    router.refresh();
+  }
+
+  function rescheduleAppointment(appointment: Appointment) {
+    if (appointment.readOnly) {
+      setToast("This Outlook-only booking cannot be rescheduled from Command Centre.");
+      return;
+    }
+    const pending = createPendingSchedule(
+      { kind: "appointment", appointmentId: appointment.id },
+      appointment.technicianId,
+      appointment.start,
+      appointment.date ?? selectedDateKey,
+    );
+    if (pending) setPendingSchedule(pending);
   }
 
   useEffect(() => {
@@ -558,8 +808,8 @@ export function CommandCentrePrototype({
     idempotencyKey,
     minutes,
     notes,
+    solution,
     transfer,
-    visibility,
     workType,
   }: {
     billable: boolean;
@@ -568,17 +818,18 @@ export function CommandCentrePrototype({
     idempotencyKey: string;
     minutes: string;
     notes: string;
+    solution?: string;
     transfer?: WorklogTransfer;
-    visibility: "external" | "internal";
     workType: WorklogType;
   }) {
-    const requestId = workLogRequestId;
+    const requestId = workLogTarget?.requestId;
     if (!requestId) return;
     const selectedWorklogRequest = dashboard.requests.find(
       (candidate) => candidate.id === requestId,
     );
-    const worklogAppointment = dashboard.appointments.find(
-      (candidate) => candidate.requestId === requestId,
+    const worklogAppointment = resolveWorkLogAppointment(
+      dashboard.appointments,
+      workLogTarget?.appointmentId,
     );
     if (!selectedWorklogRequest) return;
 
@@ -594,9 +845,11 @@ export function CommandCentrePrototype({
     }
 
     const updateAt = new Date().toISOString();
+    const visibility = workType === "internal" ? "internal" : "external";
     const liveWorklog =
       dashboard.dispatchDataSource === "msp-central" &&
       selectedWorklogRequest.sourceSystem === "msp-central";
+    let worklogReceiptStatus: IntegrationReceiptStatus | undefined;
     const scheduled = Boolean(
       worklogAppointment || selectedWorklogRequest.scheduledStart,
     );
@@ -633,17 +886,17 @@ export function CommandCentrePrototype({
           idempotencyKey,
           requestId,
           scheduled,
+          solution,
           startedAt,
           transfer,
           visibility,
           workType,
         });
-        if (result.status === "recovery_required") {
-          setToast(
-            `Work Log saved, but the selected outcome still needs recovery: ${result.error ?? "retry the save"}`,
-          );
-          return;
-        }
+        trackIntegrationReceipt(result, {
+          appointmentId: worklogAppointment?.id,
+          requestId,
+        });
+        worklogReceiptStatus = result.status;
       } catch (error) {
         setToast(
           error instanceof Error
@@ -663,10 +916,9 @@ export function CommandCentrePrototype({
         const metadata = [
           `${durationMinutes} min`,
           workTypeLabel(workType),
-          visibility === "external" ? "customer-facing" : "internal",
           billable ? "billable" : "non-billable",
           liveWorklog ? "MSP Central" : "mock/test-sync",
-        ].join(" · ");
+        ].join(" / ");
 
         return {
           ...request,
@@ -779,12 +1031,14 @@ export function CommandCentrePrototype({
     });
 
     markTicketUpdateSeen(requestId);
-    setWorkLogRequestId(undefined);
+    setWorkLogTarget(undefined);
     setToast(
       liveWorklog
-        ? disposition === "complete"
-          ? "Work Log saved and ticket resolved in MSP Central."
-          : "Work Log and outcome saved in MSP Central."
+        ? worklogReceiptStatus === "review_required"
+          ? "Work Log saved locally. Provider sync needs review."
+          : disposition === "complete"
+            ? "Work Log queued. Ticket completion is syncing."
+            : "Work Log and outcome queued for sync."
         : disposition === "complete"
           ? "Work Log saved and ticket resolved locally for test sync."
           : disposition
@@ -916,6 +1170,7 @@ export function CommandCentrePrototype({
         bookingType,
         crewTechnicianIds: [],
         durationMinutes,
+        idempotencyKey: createClientCommandId("schedule"),
         kind: "request",
         date,
         requestId: request.id,
@@ -975,17 +1230,19 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      scheduleGroupId: appointment.scheduleGroupId ?? appointment.id,
       bookingType,
       crewTechnicianIds: request
         ? dashboard.appointments
             .filter(
               (candidate) =>
-                candidate.requestId === request.id &&
+                sameScheduledBooking(candidate, appointment) &&
                 candidate.technicianId !== technicianId,
             )
             .map((candidate) => candidate.technicianId)
         : [],
       durationMinutes,
+      idempotencyKey: createClientCommandId("schedule"),
       kind: "appointment",
       date,
       oldEnd: appointment.end,
@@ -1319,8 +1576,11 @@ export function CommandCentrePrototype({
 
       const liveSchedule = canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
+      const idempotencyKey =
+        pendingSchedule.idempotencyKey ??
+        `schedule:${request.id}:${pendingSchedule.date}:${pendingSchedule.start}:${pendingSchedule.end}:${pendingSchedule.technicianId}`;
       const appointmentId = liveSchedule
-        ? `pending-live-${request.id}-${Date.now()}`
+        ? pendingLiveAppointmentId(request.id, idempotencyKey)
         : `mock-${request.id}-${Date.now()}`;
       const bookingType = pendingSchedule.bookingType;
       const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
@@ -1331,6 +1591,7 @@ export function CommandCentrePrototype({
           ),
           technicianId,
           technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: buildTravel(request, technicianId, bookingType),
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
             technicianId,
@@ -1347,6 +1608,7 @@ export function CommandCentrePrototype({
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
+            idempotencyKey,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
             requestId: request.id,
@@ -1399,6 +1661,25 @@ export function CommandCentrePrototype({
           liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
         );
         return;
+      }
+
+      if (liveSchedule && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId,
+          requestId: request.id,
+        });
+      }
+
+      if (liveSchedule) {
+        pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            `${request.requestNumber} was saved locally, but provider sync needs review.`,
+          );
+        }
       }
 
       const finalAppointmentId = liveEvent?.id
@@ -1476,9 +1757,7 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? liveEvent?.queued
-            ? `${request.requestNumber} scheduled. Syncing with MSP Central and Outlook.`
-            : `${request.requestNumber} scheduled in MSP Central and Outlook.`
+          ? scheduleReceiptMessage(request.requestNumber, liveEvent?.status)
           : `${request.requestNumber} scheduled in mock mode.`,
       );
     } else {
@@ -1497,7 +1776,10 @@ export function CommandCentrePrototype({
       let liveEvent: LiveScheduleResult | undefined;
       const currentTeamAppointments = request
         ? dashboard.appointments.filter(
-            (appointment) => appointment.requestId === request.id,
+            (appointment) =>
+              currentAppointment
+                ? sameScheduledBooking(appointment, currentAppointment)
+                : false,
           )
         : currentAppointment
           ? [currentAppointment]
@@ -1513,6 +1795,9 @@ export function CommandCentrePrototype({
           ),
           technicianId,
           technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: request
+            ? buildTravel(request, technicianId, bookingType)
+            : undefined,
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
             technicianId,
@@ -1537,12 +1822,14 @@ export function CommandCentrePrototype({
       try {
         if (liveSchedule && request) {
           liveEvent = await publishLiveSchedule({
-            appointmentId: pendingSchedule.appointmentId,
+            appointmentId: pendingSchedule.scheduleGroupId,
             bookingType,
             crew,
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
+            idempotencyKey:
+              pendingSchedule.idempotencyKey ?? createClientCommandId("schedule"),
             eventId: leadAppointment?.outlookEventId,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
@@ -1602,9 +1889,31 @@ export function CommandCentrePrototype({
         return;
       }
 
+      if (liveSchedule && request && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId: pendingSchedule.appointmentId,
+          requestId: request.id,
+        });
+      }
+
+      if (liveSchedule && request) {
+        pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            "The move was saved locally, but provider sync needs review.",
+          );
+        }
+      }
+
       let movedAppointments = request
         ? dashboard.appointments.filter(
-            (appointment) => appointment.requestId !== request.id,
+            (appointment) =>
+              !currentTeamAppointments.some(
+                (current) => current.id === appointment.id,
+              ),
           )
         : dashboard.appointments;
       const selectedTechnicianIds = [
@@ -1696,9 +2005,7 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? liveEvent?.queued
-            ? "Appointment moved. Syncing with MSP Central and Outlook."
-            : "Appointment moved in MSP Central and Outlook."
+          ? moveReceiptMessage(liveEvent?.status)
           : "Appointment moved in mock mode.",
       );
     }
@@ -1717,7 +2024,8 @@ export function CommandCentrePrototype({
 
     try {
       const teamAppointments = dashboard.appointments.filter(
-        (appointment) => appointment.requestId === selectedRequest.id,
+        (appointment) =>
+          sameScheduledBooking(appointment, selectedAppointment),
       );
       const leadTechnicianId = teamAppointments.some(
         (appointment) =>
@@ -1747,6 +2055,11 @@ export function CommandCentrePrototype({
             dashboard.technicians,
             appointment.technicianId,
           ),
+          travel: buildTravel(
+            selectedRequest,
+            appointment.technicianId,
+            appointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+          ),
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
             appointment.technicianId,
@@ -1755,6 +2068,7 @@ export function CommandCentrePrototype({
         customer: selectedRequest.customer,
         date: leadAppointment.date ?? selectedDateKey,
         end: leadAppointment.end,
+        idempotencyKey: createClientCommandId("schedule"),
         eventId: leadAppointment.outlookEventId,
         location: selectedRequest.siteAddress ?? selectedRequest.site,
         previousAssignments: teamAppointments.flatMap((appointment) =>
@@ -1795,28 +2109,42 @@ export function CommandCentrePrototype({
           leadTechnicianId,
         ),
       });
+      trackIntegrationReceipt(liveEvent, {
+        appointmentId: selectedAppointment.id,
+        requestId: selectedRequest.id,
+      });
 
-      setDashboard((current) => ({
-        ...current,
-        appointments: current.appointments.map((appointment) =>
-          appointment.requestId === selectedRequest.id
-            ? {
-                ...appointment,
-                outlookEventId:
-                  appointment.technicianId === leadTechnicianId
-                    ? (liveEvent.id ?? appointment.outlookEventId)
-                    : appointment.outlookEventId,
-                outlookWebLink:
-                  appointment.technicianId === leadTechnicianId
-                    ? (liveEvent.webLink ?? appointment.outlookWebLink)
-                    : appointment.outlookWebLink,
-                readOnly: false,
-                status: "confirmed",
-              }
-            : appointment,
-        ),
-      }));
-      setToast(`${selectedRequest.requestNumber} synced to MSP Central and Outlook.`);
+      const receipt = integrationReceiptDisposition(liveEvent.status);
+      if (receipt.phase === "review_required") {
+        setToast(
+          `${selectedRequest.requestNumber} calendar sync needs review.`,
+        );
+        return;
+      }
+
+      if (receipt.phase === "synced") {
+        setDashboard((current) => ({
+          ...current,
+          appointments: current.appointments.map((appointment) =>
+            appointment.requestId === selectedRequest.id
+              ? {
+                  ...appointment,
+                  outlookEventId:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.id ?? appointment.outlookEventId)
+                      : appointment.outlookEventId,
+                  outlookWebLink:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.webLink ?? appointment.outlookWebLink)
+                      : appointment.outlookWebLink,
+                  readOnly: false,
+                  status: "confirmed",
+                }
+              : appointment,
+          ),
+        }));
+      }
+      setToast(manualSyncReceiptMessage(selectedRequest.requestNumber, liveEvent.status));
     } catch (error) {
       setToast(liveScheduleErrorMessage(error));
     }
@@ -1833,6 +2161,9 @@ export function CommandCentrePrototype({
           calendarStatusLabel={dashboard.calendarStatusLabel}
           date={selectedDateLabel}
           dateKey={selectedDateKey}
+          integrationOperations={integrationTracker.operations}
+          showIntegrationStatus={showIntegrationStatus}
+          showIntegrations={showIntegrations}
           technicians={dashboard.technicians}
           timezone={dashboard.timezone}
           viewMode={viewMode}
@@ -1940,15 +2271,46 @@ export function CommandCentrePrototype({
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Queue
               </p>
-              <div className="mt-1 flex items-center justify-between">
+              <div className="mt-1.5 grid grid-cols-2 rounded-md border border-white/10 bg-black/15 p-0.5">
+                {(["unscheduled", "assigned"] as const).map((view) => (
+                  <button
+                    key={view}
+                    aria-label={view === "unscheduled" ? "Unscheduled queue" : "Assigned jobs"}
+                    aria-pressed={queueView === view}
+                    className={`rounded px-2 py-1 text-xs font-semibold transition ${
+                      queueView === view
+                        ? "bg-cc-orange text-cc-surface-1"
+                        : "text-slate-400 hover:text-slate-100"
+                    }`}
+                    type="button"
+                    onClick={() => setQueueView(view)}
+                  >
+                    {view === "unscheduled" ? "Unscheduled" : "Assigned"}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-2">
                 <h2 className="text-base font-semibold">
-                  Unscheduled Requests
+                  {queueView === "assigned" ? "Assigned Jobs" : "Unscheduled Requests"}
                 </h2>
-                <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
-                  {filtersActive
-                    ? `${filteredQueueRequests.length} of ${queueRequests.length}`
-                    : unscheduledRequests.length}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {dashboard.dispatchDataSource === "msp-central" ? (
+                    <button
+                      aria-label="Create request"
+                      className="rounded-md border border-cc-orange/35 bg-cc-orange/10 p-1 text-cc-orange hover:bg-cc-orange/20"
+                      title="Create request"
+                      type="button"
+                      onClick={() => setCreateRequestOpen(true)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                  <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
+                    {filtersActive
+                      ? `${filteredQueueRequests.length} of ${queueRequests.length}`
+                      : visibleQueueRequests.length}
+                  </span>
+                </div>
               </div>
               <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cc-orange/40">
                 <Search className="h-4 w-4" />
@@ -2057,7 +2419,7 @@ export function CommandCentrePrototype({
                   {queueEmptyText}
                 </div>
               ) : null}
-              {filteredQueueRequests.slice(0, 15).map((request) => (
+              {filteredQueueRequests.map((request) => (
                 <RequestQueueCard
                   key={request.id}
                   active={
@@ -2072,13 +2434,19 @@ export function CommandCentrePrototype({
                     request.sourceSystem === "msp-central" ||
                     request.sourceSystem === "msp-central-fixture"
                   }
-                  request={request}
+                  request={requestWithIntegrationState(
+                    request,
+                    integrationTracker.stateForRequest(request.id),
+                  )}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
                     beginDrag({ kind: "request", requestId: request.id })
                   }
                   onMerge={() => setMergeRequestId(request.id)}
+                  onOpenWorkspace={() =>
+                    setTicketWorkspaceTarget({ requestId: request.id })
+                  }
                   onSelect={() => selectRequest(request.id)}
                 />
               ))}
@@ -2112,7 +2480,7 @@ export function CommandCentrePrototype({
               <WeekPlanner
                 appointments={weekAppointments}
                 dragPayload={dragPayload}
-                requests={dashboard.requests}
+                requests={displayRequests}
                 seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
@@ -2140,7 +2508,7 @@ export function CommandCentrePrototype({
                 dropPreview={dropPreview}
                 globalSearch={topSearch}
                 activeHealth={activeHealth}
-                requests={dashboard.requests}
+                requests={displayRequests}
                 seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
@@ -2166,9 +2534,15 @@ export function CommandCentrePrototype({
 
           <DetailDrawer
             appointment={selectedAppointment}
-            calendarWriteEnabled={canUseLiveSchedule(dashboard)}
+            calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
+            integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
             now={now}
-            onOpenWorkLog={(requestId) => setWorkLogRequestId(requestId)}
+            showIntegrations={showIntegrations}
+            onOpenWorkLog={openWorkLog}
+            onOpenWorkspace={(requestId, appointmentId) =>
+              setTicketWorkspaceTarget({ appointmentId, requestId })
+            }
+            onReschedule={rescheduleAppointment}
             onSyncCalendar={syncSelectedCalendarEvent}
             request={selectedRequest}
             selectionKind={selection.kind}
@@ -2195,29 +2569,101 @@ export function CommandCentrePrototype({
             onTechnicianChange={updatePendingTechnician}
           />
         ) : null}
-        {workLogRequestId ? (
+        {workLogTarget ? (
           <WorkLogModal
-            appointment={dashboard.appointments.find(
-              (appointment) => appointment.requestId === workLogRequestId,
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              workLogTarget.appointmentId,
             )}
-            key={workLogRequestId}
+            key={`${workLogTarget.requestId}:${workLogTarget.appointmentId ?? "request"}`}
             liveWriteback={
               dashboard.dispatchDataSource === "msp-central" &&
               dashboard.requests.find(
-                (request) => request.id === workLogRequestId,
+                (request) => request.id === workLogTarget.requestId,
               )?.sourceSystem === "msp-central"
             }
-            onCancel={() => setWorkLogRequestId(undefined)}
+            onCancel={() => setWorkLogTarget(undefined)}
             onSave={saveWorkLog}
             request={dashboard.requests.find(
-              (request) => request.id === workLogRequestId,
+              (request) => request.id === workLogTarget.requestId,
             )}
             technicians={dashboard.technicians}
             technician={technicianLabel(
               dashboard.technicians,
-              dashboard.requests.find((request) => request.id === workLogRequestId)
-                ?.technicianId,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === workLogTarget.appointmentId,
+              )?.technicianId ??
+                dashboard.requests.find(
+                  (request) => request.id === workLogTarget.requestId,
+                )?.technicianId,
             )}
+          />
+        ) : null}
+        {ticketWorkspaceTarget ? (
+          <TicketWorkspaceModal
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              ticketWorkspaceTarget.appointmentId,
+            )}
+            appointments={dashboard.appointments.filter(
+              (appointment) =>
+                appointment.requestId === ticketWorkspaceTarget.requestId,
+            )}
+            liveWriteback={
+              dashboard.dispatchDataSource === "msp-central" &&
+              dashboard.requests.find(
+                (request) => request.id === ticketWorkspaceTarget.requestId,
+              )?.sourceSystem === "msp-central"
+            }
+            request={dashboard.requests.find(
+              (request) => request.id === ticketWorkspaceTarget.requestId,
+            )}
+            onClose={() => setTicketWorkspaceTarget(undefined)}
+            onOpenWorkLog={(requestId, appointmentId) => {
+              setTicketWorkspaceTarget(undefined);
+              openWorkLog(requestId, appointmentId);
+            }}
+            onSaved={(result) => {
+              setTicketWorkspaceTarget(undefined);
+              trackIntegrationReceipt(result, {
+                appointmentId: ticketWorkspaceTarget.appointmentId,
+                requestId: ticketWorkspaceTarget.requestId,
+              });
+              router.refresh();
+              const receipt = integrationReceiptDisposition(result.status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Communication saved in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Communication saved locally. Provider sync needs review."
+                  : receipt.phase === "retrying"
+                    ? "Communication queued. MSP Central sync is retrying."
+                    : "Communication queued. Syncing with MSP Central.",
+              );
+            }}
+          />
+        ) : null}
+        {createRequestOpen ? (
+          <CreateRequestModal
+            onCancel={() => setCreateRequestOpen(false)}
+            onCreated={(result) => {
+              setCreateRequestOpen(false);
+              setQueueView("unscheduled");
+              trackIntegrationReceipt(result, {
+                requestId: result.pendingRequestId,
+              });
+              const receipt = integrationReceiptDisposition(result.status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Request created in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Request saved locally. Provider sync needs review."
+                  : receipt.phase === "retrying"
+                    ? "Request creation queued. MSP Central sync is retrying."
+                    : "Request creation queued. Syncing with MSP Central.",
+              );
+              router.refresh();
+            }}
           />
         ) : null}
         {mergeRequestId ? (
@@ -2274,12 +2720,14 @@ async function publishLiveSchedule(event: {
     technicianEmail?: string;
     technicianId: string;
     technicianName: string;
+    travel?: TravelEstimate;
     userPrincipalName: string;
   }>;
   customer: string;
   date: string;
   end: string;
   eventId?: string;
+  idempotencyKey: string;
   location: string;
   priority?: DispatchRequest["priority"];
   previousAssignments?: Array<{
@@ -2307,7 +2755,12 @@ async function publishLiveSchedule(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; event?: LiveScheduleResult; queued?: boolean }
+    | {
+        error?: string;
+        event?: LiveScheduleResult;
+        operationId?: string;
+        status?: LiveScheduleResult["status"];
+      }
     | null;
 
   if (!response.ok) {
@@ -2316,12 +2769,15 @@ async function publishLiveSchedule(event: {
 
   return {
     ...body?.event,
-    queued: body?.queued,
+    operationId: body?.operationId,
+    queued: body?.status === "queued" || body?.status === "syncing",
+    status: body?.status,
   };
 }
 
-async function publishMspCentralRequestMerge(event: {
+export async function publishMspCentralRequestMerge(event: {
   childRequestId: string;
+  idempotencyKey: string;
   parentRequestId: string;
 }) {
   const response = await fetch("/api/internal/msp-central/merge-requests", {
@@ -2332,15 +2788,20 @@ async function publishMspCentralRequestMerge(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string }
+    | {
+        error?: string;
+        operationId?: string;
+        status?: IntegrationReceiptStatus;
+      }
     | null;
 
   if (!response.ok) {
     throw new Error(body?.error ?? "MSP Central request merge failed.");
   }
+  return body ?? {};
 }
 
-async function publishMspCentralWorklog(
+export async function publishMspCentralWorklog(
   event: import("@/server/worklogs/disposition").WorklogDispositionCommand,
 ) {
   const response = await fetch("/api/internal/msp-central/worklogs", {
@@ -2351,7 +2812,11 @@ async function publishMspCentralWorklog(
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; status?: "completed" | "recovery_required" }
+    | {
+        error?: string;
+        operationId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
     | null;
 
   if (!response.ok) {
@@ -2359,7 +2824,8 @@ async function publishMspCentralWorklog(
   }
   return {
     error: body?.error,
-    status: body?.status ?? ("completed" as const),
+    operationId: body?.operationId,
+    status: body?.status ?? ("queued" as const),
   };
 }
 
@@ -2379,11 +2845,133 @@ async function loadMspCentralRequestContext(requestId: string) {
   return body;
 }
 
+async function publishMspCentralCommunication(input: {
+  idempotencyKey: string;
+  message: string;
+  occurredAt: string;
+  requestId: string;
+  visibility: "customer" | "internal";
+}) {
+  const response = await fetch(
+    `/api/internal/msp-central/requests/${encodeURIComponent(input.requestId)}/communications`,
+    {
+      body: JSON.stringify({
+        idempotencyKey: input.idempotencyKey,
+        message: input.message,
+        occurredAt: input.occurredAt,
+        visibility: input.visibility,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
+    | null;
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Communication could not be saved.");
+  }
+  return body;
+}
+
+async function publishMspCentralRequest(input: {
+  customer: string;
+  description: string;
+  idempotencyKey: string;
+  priority: DispatchRequest["priority"];
+  requesterEmail: string;
+  site: string;
+  subject: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/requests", {
+    body: JSON.stringify(input),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        pendingRequestId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
+    | null;
+  if (!response.ok || !body?.operationId) {
+    throw new Error(body?.error ?? "Request could not be created.");
+  }
+  return body;
+}
+
+function createClientCommandId(prefix: string) {
+  const id = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}:${id}`;
+}
+
+export function pendingLiveAppointmentId(
+  requestId: string,
+  idempotencyKey: string,
+) {
+  return `pending-live-${requestId}-${idempotencyKey}`;
+}
+
 function testSyncErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
 
   return `Mock schedule did not save: ${message}`;
+}
+
+function scheduleReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} scheduled in MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} scheduled locally. Provider sync is retrying.`;
+  }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} scheduled locally. Provider sync needs review.`;
+  }
+  return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
+}
+
+function moveReceiptMessage(status?: IntegrationReceiptStatus) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return "Appointment moved in MSP Central and Outlook.";
+  }
+  if (receipt.phase === "retrying") {
+    return "Appointment moved locally. Provider sync is retrying.";
+  }
+  if (receipt.phase === "review_required") {
+    return "Appointment moved locally. Provider sync needs review.";
+  }
+  return "Appointment moved. Syncing with MSP Central and Outlook.";
+}
+
+function manualSyncReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} synced to MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} sync is queued and retrying.`;
+  }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} sync needs review.`;
+  }
+  return `${requestNumber} sync queued for MSP Central and Outlook.`;
 }
 
 function liveScheduleErrorMessage(error: unknown) {
@@ -2434,7 +3022,7 @@ function technicianMspCentralId(
     ?.mspCentralTechnicianId ?? undefined;
 }
 
-function MergeRequestModal({
+export function MergeRequestModal({
   childRequest,
   onCancel,
   onConfirm,
@@ -2442,7 +3030,7 @@ function MergeRequestModal({
 }: {
   childRequest?: DispatchRequest;
   onCancel: () => void;
-  onConfirm: (parentRequestId: string) => Promise<void>;
+  onConfirm: (parentRequestId: string, idempotencyKey: string) => Promise<void>;
   requests: DispatchRequest[];
 }) {
   const [step, setStep] = useState<"search" | "confirm">("search");
@@ -2450,6 +3038,7 @@ function MergeRequestModal({
   const [parentRequestId, setParentRequestId] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [idempotencyKey] = useState(() => createClientCommandId("merge"));
 
   if (!childRequest) {
     return null;
@@ -2487,7 +3076,7 @@ function MergeRequestModal({
     setError(undefined);
 
     try {
-      await onConfirm(parentRequest.id);
+      await onConfirm(parentRequest.id, idempotencyKey);
     } catch (mergeError) {
       setError(
         mergeError instanceof Error
@@ -3013,7 +3602,585 @@ export function ScheduleConfirmModal({
   );
 }
 
-function WorkLogModal({
+export function CreateRequestModal({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void;
+  onCreated: (result: IntegrationOperationReceipt & { pendingRequestId?: string }) => void;
+}) {
+  const [subject, setSubject] = useState("");
+  const [description, setDescription] = useState("");
+  const [requesterEmail, setRequesterEmail] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [site, setSite] = useState("");
+  const [priority, setPriority] = useState<DispatchRequest["priority"]>("Medium");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const [idempotencyKey] = useState(() => createClientCommandId("request"));
+
+  async function submit() {
+    if (!subject.trim() || saving) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const created = await publishMspCentralRequest({
+        customer: customer.trim(),
+        description: description.trim(),
+        idempotencyKey,
+        priority,
+        requesterEmail: requesterEmail.trim(),
+        site: site.trim(),
+        subject: subject.trim(),
+      });
+      if (!created.operationId) throw new Error("Request was not queued.");
+      onCreated(created);
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Request could not be created.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+      <section
+        aria-label="Create request"
+        aria-modal="true"
+        className="w-full max-w-3xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">MSP Central</p>
+            <h2 className="mt-1 text-xl font-semibold">Create request</h2>
+          </div>
+          <button
+            aria-label="Close create request"
+            className="rounded-md border border-white/10 bg-white/5 p-2"
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Subject
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Requester email
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              type="email"
+              value={requesterEmail}
+              onChange={(event) => setRequesterEmail(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Priority
+            <select
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={priority}
+              onChange={(event) =>
+                setPriority(event.target.value as DispatchRequest["priority"])
+              }
+            >
+              {(["Low", "Medium", "High", "Critical"] as const).map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold">
+            Customer
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={customer}
+              onChange={(event) => setCustomer(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Site
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={site}
+              onChange={(event) => setSite(event.target.value)}
+            />
+          </label>
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Description
+            <textarea
+              className="mt-2 min-h-36 w-full rounded-md border border-white/10 bg-[#111d30] p-3 font-normal"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+        </div>
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+            disabled={!subject.trim() || saving}
+            type="button"
+            onClick={submit}
+          >
+            {saving ? "Creating..." : "Create request"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function TicketWorkspaceModal({
+  appointment,
+  appointments,
+  liveWriteback,
+  onClose,
+  onOpenWorkLog,
+  onSchedule,
+  onSaved,
+  request,
+}: {
+  appointment?: Appointment;
+  appointments: Appointment[];
+  liveWriteback: boolean;
+  onClose: () => void;
+  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
+  onSchedule?: (requestId: string) => void;
+  onSaved: (result: IntegrationOperationReceipt) => void;
+  request?: DispatchRequest;
+}) {
+  const [tab, setTab] = useState<"comms" | "details">("details");
+  const [context, setContext] = useState<MspCentralRequestContext>();
+  const [loading, setLoading] = useState(liveWriteback);
+  const [error, setError] = useState<string>();
+  const [refreshWarning, setRefreshWarning] = useState<string>();
+  const [message, setMessage] = useState("");
+  const [visibility, setVisibility] = useState<"customer" | "internal">("customer");
+  const [sending, setSending] = useState(false);
+  const [bookingChoiceId, setBookingChoiceId] = useState(appointment?.id ?? "");
+  const pendingCommunication = useRef<{
+    idempotencyKey: string;
+    message: string;
+    occurredAt: string;
+    visibility: "customer" | "internal";
+  } | undefined>(undefined);
+
+  useEffect(() => {
+    if (!liveWriteback || !request?.id) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = await loadMspCentralRequestContext(request.id);
+        if (!active) return;
+        setContext(next);
+        setError(undefined);
+        setRefreshWarning(undefined);
+      } catch (refreshError) {
+        if (!active) return;
+        setError(
+          refreshError instanceof Error
+            ? refreshError.message
+            : "Latest ticket information could not be loaded.",
+        );
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(refresh, 20_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [liveWriteback, request?.id]);
+
+  if (!request) return null;
+  const latestRequest = context?.request ?? request;
+  const chosenAppointment =
+    appointment ?? resolveWorkLogAppointment(appointments, bookingChoiceId);
+  const scheduledTime = chosenAppointment
+    ? `${chosenAppointment.start}-${chosenAppointment.end}`
+    : latestRequest.scheduledStart
+      ? `${formatTime(latestRequest.scheduledStart)}-${formatTime(latestRequest.scheduledEnd ?? latestRequest.scheduledStart)}`
+      : "Not scheduled";
+
+  async function sendCommunication() {
+    const nextMessage = message.trim();
+    if (!nextMessage || sending || !request) return;
+    setSending(true);
+    setError(undefined);
+    setRefreshWarning(undefined);
+    try {
+      const current = pendingCommunication.current;
+      const command =
+        current?.message === nextMessage && current.visibility === visibility
+          ? current
+          : {
+              idempotencyKey: createClientCommandId("comms"),
+              message: nextMessage,
+              occurredAt: new Date().toISOString(),
+              visibility,
+            };
+      pendingCommunication.current = command;
+      const result = await publishMspCentralCommunication({
+        idempotencyKey: command.idempotencyKey,
+        message: command.message,
+        occurredAt: command.occurredAt,
+        requestId: request.id,
+        visibility: command.visibility,
+      });
+      pendingCommunication.current = undefined;
+      setMessage("");
+      onSaved(result);
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error
+          ? sendError.message
+          : "Communication could not be saved.",
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 sm:p-4">
+      <section
+        aria-label="Ticket workspace"
+        aria-modal="true"
+        className="flex h-[94vh] w-[94vw] max-w-[1500px] flex-col overflow-hidden rounded-lg border border-cc-orange/25 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+          <div className="min-w-0">
+            <p className="font-mono text-xs text-cc-orange">{latestRequest.requestNumber}</p>
+            <h2 className="mt-1 truncate text-xl font-semibold">{latestRequest.subject}</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {latestRequest.customer} / {latestRequest.site}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {onSchedule ? (
+              <button
+                className="flex items-center gap-2 rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-cc-orange"
+                type="button"
+                onClick={() => onSchedule(request.id)}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Schedule
+              </button>
+            ) : null}
+            {!appointment && appointments.length > 0 ? (
+              <label className="text-xs font-semibold text-slate-300">
+                Booking for Work Log
+                <select
+                  aria-label="Booking for Work Log"
+                  className="ml-2 rounded-md border border-white/10 bg-[#111d30] px-2 py-2 text-xs text-slate-100"
+                  value={bookingChoiceId}
+                  onChange={(event) => setBookingChoiceId(event.target.value)}
+                >
+                  <option value="">Choose booking</option>
+                  {appointments.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.date ?? "Current day"} {candidate.start}-{candidate.end} · {candidate.technicianId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <button
+              className="flex items-center gap-2 rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!appointment && appointments.length > 0 && !chosenAppointment}
+              title={!appointment && appointments.length > 0 && !chosenAppointment ? "Choose the exact booking before recording time." : "Open Work Log for this booking."}
+              type="button"
+              onClick={() => onOpenWorkLog(request.id, chosenAppointment?.id)}
+            >
+              <Clock3 className="h-4 w-4" />
+              Work Log
+            </button>
+            {latestRequest.helpdeskUrl ? (
+              <a
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold"
+                href={latestRequest.helpdeskUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Helpdesk
+              </a>
+            ) : null}
+            <button
+              aria-label="Close ticket workspace"
+              className="rounded-md border border-white/10 bg-white/5 p-2"
+              type="button"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+        <div className="flex shrink-0 gap-1 border-b border-white/10 px-5 pt-2" role="tablist">
+          {(["details", "comms"] as const).map((value) => (
+            <button
+              key={value}
+              aria-selected={tab === value}
+              className={`border-b-2 px-4 py-2 text-sm font-semibold ${
+                tab === value
+                  ? "border-cc-orange text-cc-orange"
+                  : "border-transparent text-slate-400 hover:text-slate-100"
+              }`}
+              role="tab"
+              type="button"
+              onClick={() => setTab(value)}
+            >
+              {value === "details" ? "Overview" : "Comms"}
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {tab === "details" ? (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+              <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+                <h3 className="text-sm font-semibold">Job description</h3>
+                <SafeRequestContent
+                  className="mt-3 text-sm leading-6 text-slate-200"
+                  value={latestRequest.notes ?? "No job description has been recorded."}
+                />
+              </section>
+              <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+                <h3 className="text-sm font-semibold">Request summary</h3>
+                <div className="mt-3 grid gap-2 text-sm">
+                  <DetailInline label="Status" value={latestRequest.status} />
+                  <DetailInline label="Priority" value={latestRequest.priority} />
+                  <DetailInline label="Requester" value={latestRequest.requester} />
+                  <DetailInline label="Contact" value={latestRequest.contact} />
+                  <DetailInline label="Scheduled" value={scheduledTime} />
+                  <DetailInline label="Site" value={latestRequest.siteAddress || latestRequest.site} />
+                </div>
+              </section>
+            </div>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+              <div className="grid min-w-0 gap-4">
+                <CommunicationThread
+                  emptyLabel="No customer emails or replies are recorded."
+                  title="Customer conversation"
+                  updates={context?.customerResponses ?? []}
+                />
+                <CommunicationThread
+                  emptyLabel="No internal notes are recorded."
+                  title="Internal notes"
+                  updates={context?.internalNotes ?? []}
+                />
+              </div>
+              <section className="h-fit rounded-md border border-white/10 bg-white/[0.03] p-4">
+                <h3 className="text-sm font-semibold">New communication</h3>
+                <div className="mt-3 grid grid-cols-2 rounded-md border border-white/10 p-1">
+                  {(["customer", "internal"] as const).map((value) => (
+                    <button
+                      key={value}
+                      aria-pressed={visibility === value}
+                      className={`rounded px-2 py-2 text-xs font-semibold ${
+                        visibility === value
+                          ? "bg-cc-orange text-cc-surface-1"
+                          : "text-slate-400"
+                      }`}
+                      type="button"
+                      onClick={() => setVisibility(value)}
+                    >
+                      {value === "customer" ? "Customer reply" : "Internal note"}
+                    </button>
+                  ))}
+                </div>
+                <label className="mt-4 block text-sm font-semibold">
+                  Message
+                  <textarea
+                    aria-label="Communication message"
+                    className="mt-2 min-h-40 w-full rounded-md border border-white/10 bg-[#111d30] p-3 font-normal"
+                    value={message}
+                    onChange={(event) => setMessage(event.target.value)}
+                  />
+                </label>
+                <button
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+                  disabled={!liveWriteback || !message.trim() || sending}
+                  type="button"
+                  onClick={sendCommunication}
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  {sending
+                    ? "Sending..."
+                    : visibility === "customer"
+                      ? "Send to customer"
+                      : "Add internal note"}
+                </button>
+                {!liveWriteback ? (
+                  <p className="mt-3 text-xs text-amber-200">
+                    Communications require a live MSP Central request.
+                  </p>
+                ) : null}
+              </section>
+            </div>
+          )}
+          {loading ? <p className="mt-4 text-xs text-slate-400">Refreshing ticket...</p> : null}
+          {refreshWarning ? (
+            <p className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-50">
+              Message saved. {refreshWarning}
+            </p>
+          ) : null}
+          {error ? (
+            <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CommunicationThread({
+  emptyLabel,
+  title,
+  updates,
+}: {
+  emptyLabel: string;
+  title: string;
+  updates: MspCentralRequestUpdate[];
+}) {
+  return (
+    <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {updates.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-400">{emptyLabel}</p>
+      ) : (
+        <div className="mt-3 grid gap-3">
+          {updates.map((update) => (
+            <article key={update.id} className="rounded-md border border-white/10 bg-[#111d30] p-3">
+              <div className="flex justify-between gap-3 text-xs text-slate-400">
+                <span className="font-semibold text-slate-200">{update.author}</span>
+                <span>{update.createdAt ? formatDateTime(update.createdAt) : ""}</span>
+              </div>
+              <SafeRequestContent className="mt-2 text-sm leading-6" value={update.body} />
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SafeRequestContent({ className, value }: { className?: string; value: string }) {
+  const parts = safeRequestContentParts(value);
+  return (
+    <div className={`whitespace-pre-wrap ${className ?? ""}`}>
+      {parts.map((part, index) =>
+        part.href ? (
+          <a
+            key={`${part.href}-${index}`}
+            className="font-semibold text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200"
+            href={part.href}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {part.text}
+          </a>
+        ) : (
+          <span key={`text-${index}`}>{part.text}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+export function safeRequestContentParts(value: string) {
+  const normalised = value
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/p\s*>/gi, "\n")
+    .replace(/<\s*p\b[^>]*>/gi, "");
+  const parts: Array<{ href?: string; text: string }> = [];
+  const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(normalised))) {
+    appendLinkifiedText(parts, normalised.slice(cursor, match.index));
+    const href = safeHttpUrl(decodeHtml(match[1] ?? ""));
+    const text = decodeHtml(stripHtml(match[2] ?? "")).trim() || href || "Link";
+    parts.push(href ? { href, text } : { text });
+    cursor = match.index + match[0].length;
+  }
+  appendLinkifiedText(parts, normalised.slice(cursor));
+  return parts.length > 0 ? parts : [{ text: "" }];
+}
+
+function appendLinkifiedText(parts: Array<{ href?: string; text: string }>, value: string) {
+  const text = decodeHtml(stripHtml(value));
+  const urlPattern = /https?:\/\/[^\s<>"']+/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlPattern.exec(text))) {
+    if (match.index > cursor) parts.push({ text: text.slice(cursor, match.index) });
+    const displayText = match[0];
+    const linkText = displayText.replace(/[.,;:!?]+$/, "");
+    const punctuation = displayText.slice(linkText.length);
+    const href = safeHttpUrl(linkText);
+    parts.push(href ? { href, text: displayText } : { text: displayText });
+    if (punctuation && href) {
+      parts[parts.length - 1] = { href, text: linkText };
+      parts.push({ text: punctuation });
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < text.length) parts.push({ text: text.slice(cursor) });
+}
+
+function safeHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripHtml(value: string) {
+  return value.replace(/<[^>]*>/g, "");
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/gi, "'");
+}
+
+export function WorkLogModal({
   appointment,
   liveWriteback,
   onCancel,
@@ -3032,8 +4199,8 @@ function WorkLogModal({
     idempotencyKey: string;
     minutes: string;
     notes: string;
+    solution?: string;
     transfer?: WorklogTransfer;
-    visibility: "external" | "internal";
     workType: WorklogType;
   }) => Promise<void>;
   request?: DispatchRequest;
@@ -3056,9 +4223,7 @@ function WorkLogModal({
     String(Math.max(1, chargeableTime.totalMinutes)),
   );
   const [notes, setNotes] = useState("");
-  const [visibility, setVisibility] = useState<"external" | "internal">(
-    "external",
-  );
+  const [useAsSolution, setUseAsSolution] = useState(false);
   const [workType, setWorkType] = useState<WorklogType>(
     request?.billable === false ? "non_billable" : "billable",
   );
@@ -3193,8 +4358,9 @@ function WorkLogModal({
         idempotencyKey,
         minutes,
         notes,
+        solution:
+          disposition === "complete" && useAsSolution ? notes.trim() : undefined,
         transfer,
-        visibility,
         workType,
       });
     } finally {
@@ -3275,14 +4441,15 @@ function WorkLogModal({
             <h4 className="text-xs font-semibold uppercase text-slate-300">
               Job description
             </h4>
-            <p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-slate-100">
-              {latestRequest.notes ?? "No job description is recorded in MSP Central."}
-            </p>
+            <SafeRequestContent
+              className="mt-2 text-sm leading-5 text-slate-100"
+              value={latestRequest.notes ?? "No job description is recorded in MSP Central."}
+            />
           </div>
 
           {contextStatus === "loading" ? (
             <p className="mt-4 text-xs text-slate-400">
-              Loading latest customer responses and notes...
+              Loading previous Work Logs...
             </p>
           ) : null}
           {contextStatus === "failed" ? (
@@ -3298,19 +4465,6 @@ function WorkLogModal({
                 updates={requestContext.worklogs ?? []}
                 warning={requestContext.worklogsWarning}
               />
-              <div className="grid gap-4 sm:grid-cols-2">
-                <TicketUpdateList
-                  emptyLabel="No customer responses are recorded."
-                  title="Customer responses"
-                  updates={requestContext.customerResponses}
-                />
-                <TicketUpdateList
-                  emptyLabel="No technician or internal notes are recorded."
-                  title="Internal notes"
-                  updates={requestContext.internalNotes}
-                  warning={requestContext.notesWarning}
-                />
-              </div>
             </div>
           ) : null}
         </section>
@@ -3353,16 +4507,9 @@ function WorkLogModal({
                 aria-label="Work type"
                 className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
                 value={workType}
-                onChange={(event) => {
-                  const nextWorkType = event.target.value as WorklogType;
-                  setWorkType(nextWorkType);
-
-                  if (nextWorkType === "billable") {
-                    setVisibility("external");
-                  } else if (nextWorkType === "internal") {
-                    setVisibility("internal");
-                  }
-                }}
+                onChange={(event) =>
+                  setWorkType(event.target.value as WorklogType)
+                }
               >
                 <option value="billable">Billable</option>
                 <option value="non_billable">Non-billable</option>
@@ -3370,38 +4517,6 @@ function WorkLogModal({
               </select>
             </label>
           </div>
-
-          <fieldset className="rounded-md border border-white/10 p-3">
-            <legend className="px-1 text-sm font-semibold text-slate-200">
-              Visibility
-            </legend>
-            <div className="mt-2 flex flex-wrap gap-3 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  aria-label="Customer-facing"
-                  checked={visibility === "external"}
-                  disabled={workType === "internal"}
-                  name="worklog-visibility"
-                  type="radio"
-                  value="external"
-                  onChange={() => setVisibility("external")}
-                />
-                Customer-facing
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  aria-label="Internal"
-                  checked={visibility === "internal"}
-                  disabled={workType === "billable"}
-                  name="worklog-visibility"
-                  type="radio"
-                  value="internal"
-                  onChange={() => setVisibility("internal")}
-                />
-                Internal
-              </label>
-            </div>
-          </fieldset>
 
           {scheduled ? (
             <fieldset className="rounded-md border border-cc-orange/25 bg-cc-orange/[0.04] p-3">
@@ -3542,6 +4657,22 @@ function WorkLogModal({
                 />
               </label>
             </section>
+          ) : null}
+
+          {disposition === "complete" ? (
+            <label className="flex items-start gap-3 rounded-md border border-sky-300/20 bg-sky-400/[0.08] p-3 text-sm text-slate-200">
+              <input
+                aria-label="Use Work Log as solution"
+                checked={useAsSolution}
+                className="mt-0.5 h-4 w-4 accent-[#ff823a]"
+                type="checkbox"
+                onChange={(event) => setUseAsSolution(event.target.checked)}
+              />
+              <span>
+                <strong className="block text-slate-50">Use as solution</strong>
+                Writes these notes as the ticket resolution and includes them in the customer completion response.
+              </span>
+            </label>
           ) : null}
 
         </div>
@@ -3718,6 +4849,9 @@ function CommandHeader({
   calendarStatusLabel,
   date,
   dateKey,
+  integrationOperations,
+  showIntegrationStatus,
+  showIntegrations,
   searchValue,
   onClearSearch,
   onDateChange,
@@ -3734,6 +4868,9 @@ function CommandHeader({
   calendarStatusLabel?: string;
   date: string;
   dateKey: string;
+  integrationOperations: TrackedIntegrationOperation[];
+  showIntegrationStatus: boolean;
+  showIntegrations: boolean;
   searchValue: string;
   onClearSearch: () => void;
   onDateChange: (dateKey: string) => void;
@@ -3841,6 +4978,30 @@ function CommandHeader({
             ) : null}
           </label>
           <PresenceControls technicians={technicians} />
+          {showIntegrationStatus ? (
+            <GlobalIntegrationStatus
+              localOperations={integrationOperations}
+              showRecoveryLink={showIntegrations}
+            />
+          ) : null}
+          {showIntegrations ? (
+            <>
+              <Link
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+                href="/integrations"
+              >
+                <PlugZap className="h-4 w-4" />
+                Integrations
+              </Link>
+            </>
+          ) : null}
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/dispatch/queue"
+          >
+            <Inbox className="h-4 w-4" />
+            Dispatch Queue
+          </Link>
           <Link
             className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
             href="/calls"
@@ -3985,6 +5146,7 @@ function RequestQueueCard({
   onDragEnd,
   onDragStart,
   onMerge,
+  onOpenWorkspace,
   onSelect,
   request,
   technician,
@@ -3995,6 +5157,7 @@ function RequestQueueCard({
   onDragEnd: () => void;
   onDragStart: () => void;
   onMerge: () => void;
+  onOpenWorkspace: () => void;
   onSelect: () => void;
   request: DispatchRequest;
   technician: string;
@@ -4062,8 +5225,18 @@ function RequestQueueCard({
           <span className="text-right">Due {formatTime(request.dueAt)}</span>
         </div>
       </button>
-      {mergeEnabled ? (
-        <div className="flex justify-end border-t border-white/[0.07] px-2 py-1">
+      <div className="flex justify-end gap-1 border-t border-white/[0.07] px-2 py-1">
+          <button
+            aria-label={`Open ${request.requestNumber} ticket workspace`}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
+            draggable={false}
+            type="button"
+            onClick={onOpenWorkspace}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+            Open
+          </button>
+        {mergeEnabled ? (
           <button
             aria-label={`Merge ${request.requestNumber}`}
             className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
@@ -4074,8 +5247,8 @@ function RequestQueueCard({
             <GitMerge className="h-3.5 w-3.5" />
             Merge
           </button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </article>
   );
 }
@@ -4151,7 +5324,7 @@ function TimelineBoard({
   requests,
   seenTicketUpdateIds,
   selectedAppointmentId,
-  stackOverlaps = false,
+  stackOverlaps = true,
   technicians,
 }: {
   activeHealth?: string;
@@ -4234,7 +5407,7 @@ function TimelineBoard({
   return (
     <div
       ref={viewportRef}
-      className="min-h-0 flex-1 overflow-hidden"
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       data-testid="timeline-viewport"
     >
       <div
@@ -4709,6 +5882,8 @@ function WeekAppointmentCard({
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
   const priorityClass = bookingCardPriorityClass(request?.priority);
 
   return (
@@ -4746,6 +5921,8 @@ function WeekAppointmentCard({
               dataTestId={`week-ticket-update-${appointment.id}`}
             />
           ) : null}
+          {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+          {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
           {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
         </span>
       </div>
@@ -5040,6 +6217,8 @@ function TimelineAppointment({
   trackWidth: number;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
   const segments = getTimelineAppointmentSegments(appointment);
   const priorityClass = bookingCardPriorityClass(request?.priority);
   return (
@@ -5103,6 +6282,8 @@ function TimelineAppointment({
                 dataTestId={`timeline-ticket-update-${appointment.id}`}
               />
             ) : null}
+            {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+            {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
             {warning || appointment.travelWarning ? (
               <MailWarning className="h-3.5 w-3.5 shrink-0" />
             ) : null}
@@ -5257,8 +6438,12 @@ function TravelSideExtension({
 function DetailDrawer({
   appointment,
   calendarWriteEnabled,
+  integrationState,
   now,
+  showIntegrations,
   onOpenWorkLog,
+  onOpenWorkspace,
+  onReschedule,
   onSyncCalendar,
   request,
   selectionKind,
@@ -5266,8 +6451,12 @@ function DetailDrawer({
 }: {
   appointment?: Appointment;
   calendarWriteEnabled: boolean;
+  integrationState?: TrackedIntegrationOperation["state"];
   now: Date;
-  onOpenWorkLog: (requestId: string) => void;
+  showIntegrations: boolean;
+  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
+  onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
+  onReschedule: (appointment: Appointment) => void;
   onSyncCalendar: () => void;
   request?: DispatchRequest;
   selectionKind: Selection["kind"];
@@ -5281,6 +6470,14 @@ function DetailDrawer({
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
   const helpdeskUrl = request?.helpdeskUrl ?? appointment?.helpdeskUrl;
+  const normalizedWarnings = normalizeIntegrationWarnings(
+    request?.warnings ?? outlookWarnings(appointment),
+    integrationState,
+  );
+  const secondaryWarnings = normalizedWarnings.filter(
+    (warning) =>
+      !integrationState || !["syncing", "review required"].includes(warning.toLowerCase()),
+  );
 
   return (
     <aside
@@ -5309,8 +6506,28 @@ function DetailDrawer({
             }`}
           />
         </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          {(request?.warnings ?? outlookWarnings(appointment)).map((warning) => (
+        <div aria-label="Selected request warnings" className="mt-2 flex flex-wrap gap-1">
+          {integrationState === "review_required" ? (
+            showIntegrations ? (
+              <Link
+                className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100"
+                href="/integrations"
+              >
+                Review required
+              </Link>
+            ) : (
+              <span className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
+                Review required
+              </span>
+            )
+          ) : integrationState === "queued" ||
+            integrationState === "syncing" ||
+            integrationState === "retrying" ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-100">
+              <RefreshCw className="h-3 w-3 animate-spin" /> Syncing
+            </span>
+          ) : null}
+          {secondaryWarnings.map((warning) => (
             <Badge key={warning} tone="warning">
               {warning}
             </Badge>
@@ -5445,7 +6662,9 @@ function DetailDrawer({
             <ActionButton
               disabled={!request}
               icon={<Clock3 className="h-4 w-4" />}
-              onClick={() => request && onOpenWorkLog(request.id)}
+              onClick={() =>
+                request && onOpenWorkLog(request.id, appointment?.id)
+              }
               primary={Boolean(request)}
               title={
                 request
@@ -5454,6 +6673,17 @@ function DetailDrawer({
               }
             >
               Work Log
+            </ActionButton>
+            <ActionButton
+              disabled={!request}
+              icon={<MessageSquare className="h-4 w-4" />}
+              onClick={() =>
+                request && onOpenWorkspace(request.id, appointment?.id)
+              }
+              primary={Boolean(request)}
+              title={request ? "Open ticket details and customer communications." : "Comms requires a linked Helpdesk request."}
+            >
+              Comms
             </ActionButton>
             <ActionButton
               disabled={!helpdeskUrl}
@@ -5480,9 +6710,14 @@ function DetailDrawer({
               Open Outlook Event
             </ActionButton>
             <ActionButton
-              disabled
+              disabled={!appointment || appointment.readOnly}
               icon={<Clock3 className="h-4 w-4" />}
-              title="MSP Central API access is not configured yet."
+              onClick={() => appointment && onReschedule(appointment)}
+              title={
+                appointment && !appointment.readOnly
+                  ? "Change this booking's technician, date, time, or duration."
+                  : "Outlook-only bookings cannot be rescheduled from Command Centre."
+              }
             >
               Reschedule
             </ActionButton>

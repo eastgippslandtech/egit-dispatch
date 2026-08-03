@@ -36,6 +36,10 @@ const MSP_REQUEST_PAGE_SIZE = 100;
 const MSP_REQUEST_MAX_PAGES = 100;
 
 type MspCentralActionResponse = {
+  request?: {
+    id?: string | number | null;
+    request_number?: string | null;
+  };
   response_status?:
     | { status?: string | null }
     | Array<{ status?: string | null }>;
@@ -87,6 +91,12 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
         request,
         worklogs: [],
       };
+    },
+    async listRequestNotes() {
+      return [];
+    },
+    async listRequestWorklogs() {
+      return [];
     },
     async getTechnician(technicianId) {
       return (await this.listTechnicians()).find(
@@ -160,6 +170,31 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   });
 
   return {
+    async addRequestNote(input) {
+      assertConfigured();
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/notes`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request_note: {
+                add_to_linked_requests: false,
+                description: input.description,
+                mark_first_response: false,
+                notify_technician: false,
+                show_to_requester: input.visibility === "customer",
+              },
+            }),
+          }),
+          method: "POST",
+        },
+      );
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central communication save failed.",
+        );
+      }
+    },
     async addRequestWorklog(input) {
       assertConfigured();
       const durationMinutes = roundWorklogMinutes(input.durationMinutes);
@@ -193,9 +228,57 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         );
       }
     },
+    async createRequest(input) {
+      assertConfigured();
+      const description = appendCommandFingerprint(
+        input.description,
+        input.commandFingerprint,
+      );
+      const request = {
+        ...(input.customer ? { account: { name: input.customer } } : {}),
+        ...(description ? { description } : {}),
+        priority: { name: input.priority },
+        ...(input.requesterEmail
+          ? { requester: { email_id: input.requesterEmail } }
+          : {}),
+        ...(input.site ? { site: { name: input.site } } : {}),
+        subject: input.subject,
+      };
+      const payload = await requestJson<MspCentralActionResponse>(apiRoot + "/requests", {
+        body: new URLSearchParams({
+          input_data: JSON.stringify({ request }),
+        }),
+        method: "POST",
+      });
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError("MSP Central request creation failed.");
+      }
+      const id = String(payload.request?.id ?? "").trim();
+      const requestNumber = String(payload.request?.request_number ?? id).trim();
+      if (!id) {
+        throw new MspCentralConfigurationError(
+          "MSP Central created the request but did not return its ID.",
+        );
+      }
+      return { id, requestNumber };
+    },
+    async findRequestByCommandFingerprint(commandFingerprint) {
+      assertConfigured();
+      const marker = commandFingerprintMarker(commandFingerprint);
+      const rawRequests = await fetchRawRequests();
+      const match = rawRequests.find((request) =>
+        String(request.description ?? "").includes(marker),
+      );
+      const id = String(match?.id ?? "").trim();
+      if (!id) return undefined;
+      return {
+        id,
+        requestNumber: String(match?.request_number ?? id).trim(),
+      };
+    },
     async assignRequest(input) {
       assertConfigured();
-      await requestJson(
+      const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
         {
           body: new URLSearchParams({
@@ -210,10 +293,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           method: "PUT",
         },
       );
+      assertMspCentralActionSucceeded(payload, "technician assignment");
     },
     async clearRequestSchedule(input) {
       assertConfigured();
-      await requestJson(
+      const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
         {
           body: new URLSearchParams({
@@ -227,6 +311,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           method: "PUT",
         },
       );
+      assertMspCentralActionSucceeded(payload, "schedule clearing");
     },
     async getRequest(requestId) {
       assertConfigured();
@@ -309,6 +394,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         })),
       );
     },
+    async listRequestNotes(requestId) {
+      const url = requestChildListUrl(apiRoot, requestId, "notes");
+      return (await getJson<MspCentralRequestNoteListResponse>(url))
+        .request_notes ?? [];
+    },
     async listRequests(params) {
       assertConfigured();
       const rawRequests = await loadMspRequestsWithSnapshot({
@@ -326,6 +416,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           mappedRequests.map((request) => [request.id, request]),
         ).values(),
       ];
+    },
+    async listRequestWorklogs(requestId) {
+      const url = requestChildListUrl(apiRoot, requestId, "worklogs");
+      return (await getJson<MspCentralRequestWorklogListResponse>(url))
+        .worklogs ?? [];
     },
     async listSites() {
       const requests = await this.listRequests();
@@ -388,7 +483,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
             : {}),
       };
 
-      await requestJson(
+      const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
         {
           body: new URLSearchParams({
@@ -397,10 +492,32 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           method: "PUT",
         },
       );
+      assertMspCentralActionSucceeded(payload, "schedule update");
+    },
+    async setRequestResolution(input) {
+      assertConfigured();
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              request: {
+                resolution: { content: input.content },
+              },
+            }),
+          }),
+          method: "PUT",
+        },
+      );
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central solution save failed.",
+        );
+      }
     },
     async updateRequestStatus(input) {
       assertConfigured();
-      await requestJson(
+      const payload = await requestJson<MspCentralActionResponse>(
         `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
         {
           body: new URLSearchParams({
@@ -411,6 +528,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
           method: "PUT",
         },
       );
+      assertMspCentralActionSucceeded(payload, "status update");
     },
   };
 
@@ -591,6 +709,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         detail
           ? `MSP Central API request failed with status ${response.status}: ${detail}.`
           : `MSP Central API request failed with status ${response.status}.`,
+        { status: response.status },
       );
     }
 
@@ -603,6 +722,52 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return payload;
   }
+}
+
+function requestChildListUrl(
+  apiRoot: string,
+  requestId: string,
+  child: "notes" | "worklogs",
+) {
+  const url = new URL(
+    `${apiRoot}/requests/${encodeURIComponent(requestId)}/${child}`,
+  );
+  url.searchParams.set(
+    "input_data",
+    JSON.stringify({
+      list_info: {
+        row_count: 100,
+        sort_field: "created_time",
+        sort_order: "desc",
+        start_index: 1,
+      },
+    }),
+  );
+  return url.toString();
+}
+
+function commandFingerprintMarker(commandFingerprint: string) {
+  const safe = commandFingerprint.trim().replace(/[^a-f0-9_-]/gi, "").slice(0, 128);
+  if (!safe) {
+    throw new MspCentralConfigurationError(
+      "Command Centre request fingerprint is invalid.",
+    );
+  }
+  return `command-centre:${safe}`;
+}
+
+function appendCommandFingerprint(
+  description?: string,
+  commandFingerprint?: string,
+) {
+  const cleanDescription = description?.trim();
+  if (!commandFingerprint?.trim()) return cleanDescription;
+  return [
+    cleanDescription,
+    `<!-- ${commandFingerprintMarker(commandFingerprint)} -->`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function readMspCentralErrorDetail(response: Response) {
@@ -712,9 +877,20 @@ function mspCentralActionSucceeded(payload: MspCentralActionResponse) {
       ? [payload.response_status]
       : [];
 
-  return statuses.some(
+  return statuses.length > 0 && statuses.every(
     (status) => status.status?.trim().toLowerCase() === "success",
   );
+}
+
+function assertMspCentralActionSucceeded(
+  payload: MspCentralActionResponse,
+  action: string,
+) {
+  if (!mspCentralActionSucceeded(payload)) {
+    throw new MspCentralConfigurationError(
+      `MSP Central ${action} failed.`,
+    );
+  }
 }
 
 async function refreshAccessToken(config: DispatchConfig) {

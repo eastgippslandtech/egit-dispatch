@@ -17,7 +17,12 @@ import CommandCentrePage from "./page";
 import {
   CommandCentrePrototype,
   bookingCardPriorityClass,
+  integrationReceiptDisposition,
+  pendingLiveAppointmentId,
+  reconcileDashboardWithPendingWritebacks,
+  resolveWorkLogAppointment,
   requestNotesSummary,
+  safeRequestContentParts,
   ScheduleConfirmModal,
   toastAutoDismissMs,
 } from "./prototype";
@@ -73,7 +78,7 @@ test("renders the locked Command Centre prototype with shared mock data", async 
     screen.getByRole("heading", { level: 1, name: "Command Centre" }),
   ).toBeInTheDocument();
   expect(screen.getByText("Dispatch Health")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Unscheduled/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Unscheduled 2" })).toBeInTheDocument();
   expect(screen.getByText("SLA Risk")).toBeInTheDocument();
   expect(screen.getByText("Double Bookings")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /More Health/ })).toBeInTheDocument();
@@ -84,9 +89,70 @@ test("renders the locked Command Centre prototype with shared mock data", async 
     "href",
     "/wallboard",
   );
+  expect(screen.getByRole("link", { name: "Dispatch Queue" })).toHaveAttribute(
+    "href",
+    "/dispatch/queue",
+  );
+  expect(screen.getByRole("link", { name: "Integrations" })).toHaveAttribute(
+    "href",
+    "/integrations",
+  );
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-hidden");
-  expect(screen.getByTestId("timeline-viewport")).not.toHaveClass("overflow-auto");
+  expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-y-auto");
+});
+
+test("renders a provider warning only once", () => {
+  const data = getDispatchDesignMockData();
+  render(
+    <CommandCentrePrototype
+      data={{ ...data, calendarError: "Outlook calendar is temporarily unavailable." }}
+    />,
+  );
+
+  expect(
+    screen.getAllByText("Outlook calendar is temporarily unavailable."),
+  ).toHaveLength(1);
+});
+
+test("renders a normalized review-required warning only once in the drawer", () => {
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  render(
+    <CommandCentrePrototype
+      showIntegrations
+      data={{
+        ...data,
+        requests: data.requests.map((request) =>
+          request.id === selectedRequest.id
+            ? { ...request, warnings: ["Review required", "review required", "SLA risk"] }
+            : request,
+        ),
+        selectedRequestId: selectedRequest.id,
+      }}
+    />,
+  );
+
+  expect(
+    within(screen.getByLabelText("Selected request warnings")).getAllByText(/review required/i),
+  ).toHaveLength(1);
+});
+
+test("opens the request named by the integrations recovery link", async () => {
+  const data = getDispatchDesignMockData();
+  const target = data.requests[1];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce(data);
+
+  render(
+    await CommandCentrePage({
+      searchParams: Promise.resolve({ requestId: target.id }),
+    }),
+  );
+
+  expect(
+    within(screen.getByTestId("command-centre-drawer")).getByText(
+      target.requestNumber,
+    ),
+  ).toBeInTheDocument();
 });
 
 test("shows a live mobile timer counter in the selected job drawer", () => {
@@ -148,7 +214,6 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
       onTechnicianChange={vi.fn()}
     />,
   );
-
   expect(screen.getByText("Confirm live schedule")).toBeInTheDocument();
   expect(screen.getByText("MSP Central + Outlook")).toBeInTheDocument();
   expect(screen.getByRole("dialog")).toHaveClass("max-w-3xl");
@@ -165,6 +230,65 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
     target: { value: "Remote" },
   });
   expect(onBookingTypeChange).toHaveBeenCalledWith("Remote");
+});
+
+test("queue-opened work logs never silently select the first booking", () => {
+  const data = getDispatchDesignMockData();
+  const requestId = data.appointments.find((appointment) => appointment.requestId)?.requestId;
+  expect(requestId).toBeTruthy();
+  const requestAppointments = data.appointments.filter(
+    (appointment) => appointment.requestId === requestId,
+  );
+
+  expect(resolveWorkLogAppointment(requestAppointments, undefined)).toBeUndefined();
+  expect(
+    resolveWorkLogAppointment(requestAppointments, requestAppointments[0]?.id),
+  ).toEqual(requestAppointments[0]);
+});
+
+test("queue-opened request requires an explicit booking for Work Log", () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const first = {
+    ...data.appointments[0],
+    id: "booking-choice-first",
+    requestId: request.id,
+    start: "10:00",
+    end: "10:30",
+  };
+  const second = {
+    ...data.appointments[0],
+    id: "booking-choice-second",
+    requestId: request.id,
+    technicianId: data.technicians[1].id,
+    start: "11:00",
+    end: "12:00",
+  };
+
+  render(
+    <CommandCentrePrototype
+      data={{ ...data, appointments: [...data.appointments, first, second] }}
+    />,
+  );
+
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: `Open ${request.requestNumber} ticket workspace`,
+    }),
+  );
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  const workLogButton = within(workspace).getByRole("button", { name: "Work Log" });
+  expect(workLogButton).toBeDisabled();
+
+  fireEvent.change(within(workspace).getByLabelText("Booking for Work Log"), {
+    target: { value: second.id },
+  });
+  expect(workLogButton).toBeEnabled();
+  fireEvent.click(workLogButton);
+
+  const workLog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(workLog).toBeInTheDocument();
+  expect(within(workLog).getByText("11:00-12:00")).toBeInTheDocument();
 });
 
 test("live scheduling supports a lead technician and additional crew", () => {
@@ -249,6 +373,218 @@ test("shows immediate proof that schedule confirmation was accepted", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
   expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("reuses the same optimistic appointment id when a schedule command is retried", () => {
+  expect(pendingLiveAppointmentId("request-123", "schedule:command-123")).toBe(
+    pendingLiveAppointmentId("request-123", "schedule:command-123"),
+  );
+  expect(pendingLiveAppointmentId("request-123", "schedule:command-123")).not.toBe(
+    pendingLiveAppointmentId("request-123", "schedule:command-456"),
+  );
+});
+
+test("classifies provider write receipts without claiming false success", () => {
+  expect(integrationReceiptDisposition("queued")).toEqual({
+    closeForm: true,
+    phase: "pending",
+  });
+  expect(integrationReceiptDisposition("syncing")).toEqual({
+    closeForm: true,
+    phase: "pending",
+  });
+  expect(integrationReceiptDisposition("retrying")).toEqual({
+    closeForm: true,
+    phase: "retrying",
+  });
+  expect(integrationReceiptDisposition("review_required")).toEqual({
+    closeForm: true,
+    phase: "review_required",
+  });
+  expect(integrationReceiptDisposition("synced")).toEqual({
+    closeForm: true,
+    phase: "synced",
+  });
+});
+
+test("closes schedule confirmation and leaves persistent review state", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      operationId: "operation-schedule-review",
+      status: "review_required",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <CommandCentrePrototype
+      showIntegrations
+      data={{
+        ...data,
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: data.requests.map((candidate) =>
+          candidate.id === request.id
+            ? { ...candidate, sourceSystem: "msp-central" as const }
+            : candidate,
+        ),
+      }}
+    />,
+  );
+
+  const requestButton = screen.getByRole("button", {
+    name: `${request.requestNumber} ${request.subject}`,
+  });
+  const requestCard = requestButton.closest("article");
+  if (!requestCard) throw new Error("Expected draggable request card.");
+  const dataTransfer = {
+    effectAllowed: "move",
+    setData: vi.fn(),
+  };
+  fireEvent.dragStart(requestCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(screen.getAllByTestId("timeline-track")[0], {
+    clientX: 120,
+    dataTransfer,
+  });
+
+  await act(async () => undefined);
+  const dialog = screen.getByText("Schedule request").closest("section");
+  if (!dialog) throw new Error("Expected schedule confirmation dialog.");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Confirm schedule" }));
+  await act(async () => undefined);
+
+  expect(
+    screen.getByText(
+      `${request.requestNumber} scheduled locally. Provider sync needs review.`,
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Schedule request")).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Review required" })).toHaveAttribute(
+    "href",
+    "/integrations",
+  );
+});
+
+test("rescheduling a refreshed crew appointment sends the parent schedule group", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    sourceSystem: "msp-central" as const,
+    status: "Scheduled" as const,
+    technicianId: data.technicians[0].id,
+  };
+  const lead = {
+    ...data.appointments[0],
+    calendarOwnerEmail: data.technicians[0].outlookEmail,
+    customer: request.customer,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "parent-link-1",
+    outlookEventId: "event-lead",
+    readOnly: false,
+    requestId: request.id,
+    scheduleAssignmentRole: "lead" as const,
+    scheduleGroupId: "parent-link-1",
+    start: "10:00",
+    technicianId: data.technicians[0].id,
+    title: request.subject,
+  };
+  const crew = {
+    ...lead,
+    calendarOwnerEmail: data.technicians[1].outlookEmail,
+    id: "crew-row-uuid",
+    outlookEventId: "event-crew",
+    scheduleAssignmentRole: "crew" as const,
+    technicianId: data.technicians[1].id,
+  };
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      operationId: "operation-reschedule-1",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [lead, crew],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+        selectedRequestId: request.id,
+      }}
+    />,
+  );
+
+  fireEvent.click(screen.getByTestId("timeline-appointment-crew-row-uuid"));
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Reschedule",
+    }),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("/api/internal/dispatch/live-schedule");
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    appointmentId: "parent-link-1",
+    previousAssignments: expect.arrayContaining([
+      expect.objectContaining({ eventId: "event-lead" }),
+      expect.objectContaining({ eventId: "event-crew" }),
+    ]),
+  });
+});
+
+test("does not claim manual calendar sync succeeded when review is required", async () => {
+  const data = getDispatchDesignMockData();
+  const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => ({
+        operationId: "operation-calendar-review",
+        status: "review_required",
+      }),
+      ok: true,
+    });
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: data.requests.map((request) => ({
+          ...request,
+          sourceSystem: "msp-central" as const,
+        })),
+      }}
+    />,
+  );
+
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
+  const drawer = screen.getByTestId("command-centre-drawer");
+  const syncButton = within(drawer).getByRole("button", {
+    name: "Create / Update Calendar Event",
+  });
+  expect(syncButton).toBeEnabled();
+  fireEvent.click(syncButton);
+  await act(async () => undefined);
+  expect(fetchMock).toHaveBeenCalled();
+
+  expect(
+    screen.getByText("REQ-100211 calendar sync needs review."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("REQ-100211 synced to MSP Central and Outlook.")).not.toBeInTheDocument();
 });
 
 test("keeps error notices visible longer than success notices", () => {
@@ -469,7 +805,7 @@ test("disables unavailable Helpdesk and Outlook writeback actions honestly", asy
   expect(within(drawer).getByRole("button", { name: "Reschedule" })).toBeDisabled();
   expect(within(drawer).getByRole("button", { name: "Reschedule" })).toHaveAttribute(
     "title",
-    "MSP Central API access is not configured yet.",
+    "Outlook-only bookings cannot be rescheduled from Command Centre.",
   );
   expect(
     within(drawer).getByRole("button", {
@@ -523,7 +859,7 @@ test("keeps the Helpdesk link available for a completed request calendar booking
   );
 });
 
-test("opens a Work Log modal from the drawer with latest job information and customer-facing visibility", async () => {
+test("opens a Work Log modal from the drawer with latest job information", async () => {
   render(await CommandCentrePage());
 
   const drawer = screen.getByTestId("command-centre-drawer");
@@ -547,18 +883,18 @@ test("opens a Work Log modal from the drawer with latest job information and cus
   expect(within(dialog).getByText("Contact")).toBeInTheDocument();
   expect(within(dialog).getByText("Site/address")).toBeInTheDocument();
   expect(within(dialog).getByText("Job description")).toBeInTheDocument();
-  expect(within(dialog).getByLabelText("Customer-facing")).toBeChecked();
-  expect(within(dialog).getByLabelText("Internal")).not.toBeChecked();
+  expect(within(dialog).queryByText("Visibility")).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Customer-facing")).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText("Internal")).not.toBeInTheDocument();
   expect(within(dialog).getByLabelText("Work Log notes")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Time spent")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
   expect(within(dialog).queryByRole("checkbox", { name: "Billable" })).not.toBeInTheDocument();
-  expect(within(dialog).getByLabelText("Internal")).toBeDisabled();
   expect(within(dialog).queryByText("Outcome")).not.toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
 });
 
-test("keeps Work Log billing and visibility combinations valid", async () => {
+test("keeps customer communication out of the Work Log flow", async () => {
   render(await CommandCentrePage());
 
   fireEvent.click(
@@ -568,23 +904,84 @@ test("keeps Work Log billing and visibility combinations valid", async () => {
   );
 
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
-  const workType = within(dialog).getByLabelText("Work type");
-  const customerFacing = within(dialog).getByLabelText("Customer-facing");
-  const internal = within(dialog).getByLabelText("Internal");
-
-  expect(customerFacing).toBeChecked();
-  expect(internal).toBeDisabled();
-
-  fireEvent.change(workType, { target: { value: "internal" } });
-  expect(internal).toBeChecked();
-  expect(customerFacing).toBeDisabled();
-
-  fireEvent.change(workType, { target: { value: "non_billable" } });
-  expect(customerFacing).not.toBeDisabled();
-  expect(internal).not.toBeDisabled();
+  expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
+  expect(within(dialog).queryByText("Visibility")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("Customer-facing")).not.toBeInTheDocument();
 });
 
-test("loads the latest job description and customer responses into a live Work Log", async () => {
+test("opens Work Log against the exact selected appointment", async () => {
+  const data = getDispatchDesignMockData();
+  const first = data.appointments.find((appointment) => appointment.id === "appt-1");
+  if (!first?.requestId) throw new Error("Expected appt-1 fixture.");
+  const second = {
+    ...first,
+    end: "15:00",
+    id: "appt-1-second",
+    start: "14:00",
+    title: "Follow-up visit",
+  };
+
+  render(
+    <CommandCentrePrototype
+      data={{ ...data, appointments: [...data.appointments, second] }}
+    />,
+  );
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1-second"));
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Work Log",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(within(dialog).getByText("14:00-15:00")).toBeInTheDocument();
+});
+
+test("preserves optimistic schedules while refreshed server data is still stale", () => {
+  const incoming = getDispatchDesignMockData();
+  const request = incoming.requests[0];
+  const optimisticRequest = {
+    ...request,
+    scheduledEnd: "2026-07-08T11:00:00.000Z",
+    scheduledStart: "2026-07-08T10:00:00.000Z",
+    status: "Scheduled" as const,
+    technicianId: "tech-simeon",
+  };
+  const optimisticAppointment = {
+    customer: request.customer,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "pending-live-refresh-test",
+    requestId: request.id,
+    source: "linked" as const,
+    start: "10:00",
+    status: "confirmed" as const,
+    technicianId: "tech-simeon",
+    title: request.subject,
+  };
+  const current = {
+    ...incoming,
+    appointments: [...incoming.appointments, optimisticAppointment],
+    requests: incoming.requests.map((candidate) =>
+      candidate.id === request.id ? optimisticRequest : candidate,
+    ),
+  };
+
+  const reconciled = reconcileDashboardWithPendingWritebacks(
+    current,
+    incoming,
+    new Set([request.id]),
+  );
+
+  expect(
+    reconciled.appointments.find((appointment) => appointment.id === optimisticAppointment.id),
+  ).toEqual(optimisticAppointment);
+  expect(
+    reconciled.requests.find((candidate) => candidate.id === request.id),
+  ).toEqual(optimisticRequest);
+});
+
+test("keeps customer communications separate from a live Work Log", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();
   const selectedRequest = data.requests[0];
@@ -646,18 +1043,12 @@ test("loads the latest job description and customer responses into a live Work L
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
   expect(await within(dialog).findByText("Job description")).toBeInTheDocument();
   expect(
-    within(dialog).getByText(
+    await within(dialog).findByText(
       "The Zebra label printer is offline after a power outage.",
     ),
   ).toBeInTheDocument();
-  expect(within(dialog).getByText("Customer responses")).toBeInTheDocument();
-  expect(
-    within(dialog).getByText("Labels are no longer printing at all."),
-  ).toBeInTheDocument();
-  expect(within(dialog).getByText("Internal notes")).toBeInTheDocument();
-  expect(
-    within(dialog).getByText("Confirm access before dispatch."),
-  ).toBeInTheDocument();
+  expect(within(dialog).queryByText("Customer responses")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("Internal notes")).not.toBeInTheDocument();
   expect(within(dialog).getByText("Previous work logs")).toBeInTheDocument();
   expect(
     within(dialog).getByText(
@@ -687,6 +1078,8 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
   });
   expect(within(dialog).getByRole("button", { name: "Choose an outcome" })).toBeDisabled();
   fireEvent.click(within(dialog).getByLabelText("Complete ticket"));
+  expect(within(dialog).getByLabelText("Use Work Log as solution")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByLabelText("Use Work Log as solution"));
   fireEvent.click(
     within(dialog).getByRole("button", { name: "Save Work Log and complete ticket" }),
   );
@@ -725,16 +1118,11 @@ test("shows the required conditional fields for book forward and transfer", asyn
   expect(within(dialog).queryByLabelText("Forward date")).not.toBeInTheDocument();
 });
 
-test("retries server data while the MSP Central unavailable warning is visible", async () => {
-  const data = getDispatchDesignMockData();
-  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
-    ...data,
-    calendarError:
-      "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded.",
-  });
-
+test("refreshes live queue data while Command Centre remains open", async () => {
   render(await CommandCentrePage());
-  await vi.advanceTimersByTimeAsync(30_000);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
 
   expect(routerRefreshMock).toHaveBeenCalledOnce();
 });
@@ -755,7 +1143,9 @@ test("merges the queue duplicate into a searched surviving parent after confirma
     json: async () => ({
       childRequestId: "100284",
       ok: true,
+      operationId: "operation-merge-1",
       parentRequestId: "100301",
+      status: "queued",
     }),
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -799,50 +1189,37 @@ test("merges the queue duplicate into a searched surviving parent after confirma
     }),
   );
 
-  await waitFor(() =>
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/internal/msp-central/merge-requests",
-      expect.objectContaining({
-        body: JSON.stringify({
-          childRequestId: "100284",
-          parentRequestId: "100301",
-        }),
-        method: "POST",
-      }),
-    ),
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  const mergeCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/internal/msp-central/merge-requests",
   );
-  await waitFor(() =>
-    expect(
-      within(screen.getByTestId("request-queue")).queryByRole("button", {
-        name: "REQ-100284 Packhouse label printer offline",
-      }),
-    ).not.toBeInTheDocument(),
+  expect(mergeCall).toBeDefined();
+  const [url, init] = mergeCall as [string, RequestInit];
+  expect(url).toBe("/api/internal/msp-central/merge-requests");
+  expect(init.method).toBe("POST");
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    childRequestId: "100284",
+    idempotencyKey: expect.stringMatching(/^merge:/),
+    parentRequestId: "100301",
+  });
+  const childRequestButton = within(screen.getByTestId("request-queue")).getByRole(
+    "button",
+    { name: "REQ-100284 Packhouse label printer offline" },
   );
-  expect(screen.getByText("REQ-100284 merged into REQ-100301.")).toBeInTheDocument();
+  const childRequestCard = childRequestButton.closest("article");
+  if (!childRequestCard) throw new Error("Expected the child request card.");
+  await waitFor(() =>
+    expect(within(childRequestCard).getByText("Syncing")).toBeInTheDocument(),
+  );
 });
 
-test("renders overlapping timeline appointments as an inspectable stack", async () => {
+test("renders overlapping timeline appointments in separate visible lanes", async () => {
   render(await CommandCentrePage());
 
-  const stack = screen.getByRole("button", {
-    name: /2 overlapping appointments/,
-  });
-
-  expect(stack).toHaveTextContent("+1");
-  expect(stack).toHaveTextContent("Overlap");
-
-  fireEvent.mouseEnter(stack);
-
-  const reveal = screen.getByTestId("timeline-overlap-reveal");
-  expect(within(reveal).getByText("Practice management update")).toBeInTheDocument();
-  expect(within(reveal).getByText("Outlook busy: supplier call")).toBeInTheDocument();
-  expect(within(reveal).getByText("11:15-12:30")).toBeInTheDocument();
-
-  fireEvent.click(
-    within(reveal).getByRole("button", {
-      name: /Outlook busy: supplier call/,
-    }),
-  );
+  expect(screen.queryByRole("button", { name: /overlapping appointments/ })).not.toBeInTheDocument();
+  expect(screen.getByText("Practice management update")).toBeInTheDocument();
+  expect(screen.getByText("Outlook busy: supplier call")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Outlook busy: supplier call/ }));
 
   const drawer = screen.getByTestId("command-centre-drawer");
   expect(
@@ -850,6 +1227,246 @@ test("renders overlapping timeline appointments as an inspectable stack", async 
       name: "Outlook busy: supplier call",
     }),
   ).toBeInTheDocument();
+});
+
+test("switches the queue between unscheduled and assigned jobs", async () => {
+  render(await CommandCentrePage());
+
+  expect(screen.getByRole("button", { name: "Unscheduled queue" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Assigned jobs" }));
+
+  expect(screen.getByRole("heading", { name: "Assigned Jobs" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Assigned jobs" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(within(screen.getByTestId("request-queue")).getAllByRole("article").length).toBeGreaterThan(0);
+});
+
+test("opens a queue ticket in the full ticket workspace", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  expect(within(dialog).getByRole("tab", { name: "Overview" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Work Log" })).toBeInTheDocument();
+});
+
+test("shows customer emails and clickable external links in Comms", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central" as const,
+    })),
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      json: async () => ({
+        customerResponses: [
+          {
+            author: "Mel Harris",
+            body: 'Please use <a href="https://jobs.example.com/123">Go to job</a>.',
+            id: "response-1",
+          },
+        ],
+        internalNotes: [],
+        request: selectedRequest,
+        worklogs: [],
+      }),
+      ok: true,
+    }),
+  );
+
+  render(await CommandCentrePage());
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Comms" }));
+
+  expect(await within(dialog).findByText("Mel Harris")).toBeInTheDocument();
+  expect(within(dialog).getByRole("link", { name: "Go to job" })).toHaveAttribute(
+    "href",
+    "https://jobs.example.com/123",
+  );
+  expect(within(dialog).getByRole("button", { name: "Send to customer" })).toBeInTheDocument();
+});
+
+test("creates a new live Helpdesk request from the queue", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+  });
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      operationId: "operation-create-1",
+      pendingRequestId: "pending:create-1",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Create request" });
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Description"), {
+    target: { value: "Printer cannot reach the network." },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Requester email"), {
+    target: { value: "user@example.com" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/internal/msp-central/requests",
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+  const createCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/internal/msp-central/requests",
+  );
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    idempotencyKey: expect.stringMatching(/^request:/),
+    subject: "Printer offline",
+  });
+  expect(
+    await screen.findByText("Request creation queued. Syncing with MSP Central."),
+  ).toBeInTheDocument();
+});
+
+test("closes request creation and reports durable review state", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      json: async () => ({
+        operationId: "operation-create-review",
+        pendingRequestId: "pending:create-review",
+        status: "review_required",
+      }),
+      ok: true,
+    }),
+  );
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+  const dialog = screen.getByRole("dialog", { name: "Create request" });
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
+
+  expect(
+    await screen.findByText("Request saved locally. Provider sync needs review."),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("dialog", { name: "Create request" }),
+  ).not.toBeInTheDocument();
+});
+
+test("closes communication workspace and reports durable review state", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central" as const,
+    })),
+  });
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      return {
+        json: async () => ({
+          operationId: "operation-comms-review",
+          status: "review_required",
+        }),
+        ok: true,
+      };
+    }
+    return {
+      json: async () => ({
+        customerResponses: [],
+        internalNotes: [],
+        request: selectedRequest,
+        worklogs: [],
+      }),
+      ok: true,
+    };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Comms" }));
+  fireEvent.change(within(dialog).getByLabelText("Communication message"), {
+    target: { value: "Please restart the printer." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send to customer" }));
+
+  expect(
+    await screen.findByText(
+      "Communication saved locally. Provider sync needs review.",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("dialog", { name: "Ticket workspace" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Review required" })).toHaveAttribute(
+    "href",
+    "/integrations",
+  );
+});
+
+test("turns safe external links in request content into clickable links", () => {
+  expect(
+    safeRequestContentParts(
+      'Open <a href="https://jobs.example.com/123">Go to job</a> or https://portal.example.com.',
+    ),
+  ).toEqual([
+    { text: "Open " },
+    { href: "https://jobs.example.com/123", text: "Go to job" },
+    { text: " or " },
+    { href: "https://portal.example.com/", text: "https://portal.example.com" },
+    { text: "." },
+  ]);
 });
 
 test("keeps health cards focused on label and count", async () => {
@@ -924,7 +1541,7 @@ test("filters the board from Dispatch Health cards", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   fireEvent.click(screen.getByRole("button", { name: /Double Bookings/ }));
   expect(within(queue).getByText("Practice management update")).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "match",
   );
@@ -941,7 +1558,7 @@ test("health filters cover sync, travel, out-of-hours, and More Health records",
 
   fireEvent.click(screen.getByRole("button", { name: /Sync Issues/ }));
   expect(within(queue).getByText("Practice management update")).toBeInTheDocument();
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "match",
   );
@@ -1030,7 +1647,7 @@ test("filters the queue with top search and dims nonmatching appointments", asyn
     "data-search-state",
     "match",
   );
-  expect(screen.getByTestId("timeline-overlap-appt-3")).toHaveAttribute(
+  expect(screen.getByTestId("timeline-appointment-appt-3")).toHaveAttribute(
     "data-search-state",
     "dimmed",
   );

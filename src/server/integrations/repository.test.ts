@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -256,6 +258,22 @@ function fakeSql() {
 }
 
 describe("integration repository", () => {
+  it("uses an unambiguous PostgreSQL step lock target", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+
+    expect(source).toContain("select step.id");
+    expect(source).toContain("for update of step skip locked");
+  });
+
+  it("excludes the changed step while deciding whether an operation is synced", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+    const checks = source.match(
+      /from public\.integration_operation_steps remaining\s+where remaining\.operation_id = changed\.operation_id\s+and remaining\.id <> changed\.id\s+and remaining\.state <> 'succeeded'/g,
+    );
+
+    expect(checks).toHaveLength(3);
+  });
+
   it("creates a new operation and steps in declared order", async () => {
     const fake = fakeSql();
     const repository = createIntegrationRepository(fake.sql);

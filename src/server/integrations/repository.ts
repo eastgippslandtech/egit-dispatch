@@ -289,7 +289,7 @@ class PostgresIntegrationSql implements IntegrationSql {
         return this.steps(
           this.sql`
             with due as (
-              select id
+              select step.id
               from public.integration_operation_steps step
               join public.integration_operations operation
                 on operation.id = step.operation_id
@@ -304,7 +304,7 @@ class PostgresIntegrationSql implements IntegrationSql {
                     and predecessor.state <> 'succeeded'
                 )
               order by step.next_attempt_at nulls first, step.created_at
-              for update skip locked
+              for update of step skip locked
               limit ${limit}
             )
             update public.integration_operation_steps step
@@ -382,19 +382,25 @@ class PostgresIntegrationSql implements IntegrationSql {
             update public.integration_operations operation
             set
               state = case when not exists (
-                select 1 from public.integration_operation_steps
-                where operation_id = changed.operation_id
-                  and state <> 'succeeded'
+                select 1
+                from public.integration_operation_steps remaining
+                where remaining.operation_id = changed.operation_id
+                  and remaining.id <> changed.id
+                  and remaining.state <> 'succeeded'
               ) then 'synced' else operation.state end,
               synced_at = case when not exists (
-                select 1 from public.integration_operation_steps
-                where operation_id = changed.operation_id
-                  and state <> 'succeeded'
+                select 1
+                from public.integration_operation_steps remaining
+                where remaining.operation_id = changed.operation_id
+                  and remaining.id <> changed.id
+                  and remaining.state <> 'succeeded'
               ) then ${completedAt} else operation.synced_at end,
               last_error = case when not exists (
-                select 1 from public.integration_operation_steps
-                where operation_id = changed.operation_id
-                  and state <> 'succeeded'
+                select 1
+                from public.integration_operation_steps remaining
+                where remaining.operation_id = changed.operation_id
+                  and remaining.id <> changed.id
+                  and remaining.state <> 'succeeded'
               ) then null else operation.last_error end,
               updated_at = ${completedAt}
             from changed

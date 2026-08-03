@@ -110,6 +110,29 @@ test("renders a provider warning only once", () => {
   ).toHaveLength(1);
 });
 
+test("renders a normalized review-required warning only once in the drawer", () => {
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  render(
+    <CommandCentrePrototype
+      showIntegrations
+      data={{
+        ...data,
+        requests: data.requests.map((request) =>
+          request.id === selectedRequest.id
+            ? { ...request, warnings: ["Review required", "review required", "SLA risk"] }
+            : request,
+        ),
+        selectedRequestId: selectedRequest.id,
+      }}
+    />,
+  );
+
+  expect(
+    within(screen.getByLabelText("Selected request warnings")).getAllByText(/review required/i),
+  ).toHaveLength(1);
+});
+
 test("opens the request named by the integrations recovery link", async () => {
   const data = getDispatchDesignMockData();
   const target = data.requests[1];
@@ -363,6 +386,7 @@ test("closes schedule confirmation and leaves persistent review state", async ()
   vi.stubGlobal("fetch", fetchMock);
   render(
     <CommandCentrePrototype
+      showIntegrations
       data={{
         ...data,
         calendarDataSource: "outlook",

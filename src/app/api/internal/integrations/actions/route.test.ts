@@ -13,6 +13,7 @@ vi.mock("@/server/yeastar/route-auth", () => ({ dispatchRouteAccess: vi.fn() }))
 const access = vi.mocked(dispatchRouteAccess);
 const createRepository = vi.mocked(createPostgresIntegrationRepository);
 const listActionableOperations = vi.fn();
+const listActiveOperations = vi.fn();
 
 describe("integration failed actions route", () => {
   beforeEach(() => {
@@ -39,7 +40,8 @@ describe("integration failed actions route", () => {
         updatedAt: "2026-08-03T09:00:00.000Z",
       },
     ]);
-    createRepository.mockReturnValue({ listActionableOperations } as never);
+    listActiveOperations.mockResolvedValue([]);
+    createRepository.mockReturnValue({ listActionableOperations, listActiveOperations } as never);
   });
 
   it("requires dispatch/admin access", async () => {
@@ -65,5 +67,38 @@ describe("integration failed actions route", () => {
     expect(JSON.stringify(payload)).not.toContain("secret-value");
     expect(JSON.stringify(payload)).not.toContain("private customer content");
     expect(JSON.stringify(payload)).not.toContain("hidden-key");
+  });
+
+  it("returns active durable operations for dispatch hydration", async () => {
+    listActiveOperations.mockResolvedValueOnce([
+      {
+        actionType: "schedule.booking",
+        actorEmail: "dispatcher@egit.com.au",
+        attemptCount: 1,
+        createdAt: "2026-08-03T08:00:00.000Z",
+        id: "operation-active",
+        idempotencyKey: "hidden-key",
+        inputFingerprint: "hidden-fingerprint",
+        payload: { private: true },
+        requestId: "REQ-2",
+        state: "syncing",
+        updatedAt: "2026-08-03T09:00:00.000Z",
+      },
+    ]);
+
+    const response = await GET(
+      new Request("http://localhost/api/internal/integrations/actions?scope=active"),
+    );
+    const payload = await response.json();
+
+    expect(listActiveOperations).toHaveBeenCalledWith({ limit: 100 });
+    expect(payload.actions).toEqual([
+      expect.objectContaining({
+        id: "operation-active",
+        requestId: "REQ-2",
+        state: "syncing",
+      }),
+    ]);
+    expect(JSON.stringify(payload)).not.toContain("private");
   });
 });

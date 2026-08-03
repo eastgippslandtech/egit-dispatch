@@ -235,18 +235,33 @@ export function resolveWorkLogAppointment(
   return appointments.find((appointment) => appointment.id === appointmentId);
 }
 
+export function normalizeIntegrationWarnings(
+  warnings: readonly string[],
+  state?: TrackedIntegrationOperation["state"],
+) {
+  const integrationLabel = state === "review_required"
+    ? "Review required"
+    : state === "queued" || state === "syncing" || state === "retrying"
+      ? "Syncing"
+      : undefined;
+  const normalized = integrationLabel
+    ? warnings.filter((warning) => !["syncing", "review required"].includes(warning.trim().toLowerCase()))
+    : warnings;
+  const unique = new Map<string, string>();
+  for (const warning of normalized) {
+    const value = warning.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (!unique.has(key)) unique.set(key, value);
+  }
+  return integrationLabel ? [integrationLabel, ...unique.values()] : [...unique.values()];
+}
+
 function requestWithIntegrationState(
   request: DispatchRequest,
   state?: TrackedIntegrationOperation["state"],
 ) {
-  const warnings = request.warnings.filter(
-    (warning) => warning !== "Syncing" && warning !== "Review required",
-  );
-  if (state === "review_required") warnings.unshift("Review required");
-  else if (state === "queued" || state === "syncing" || state === "retrying") {
-    warnings.unshift("Syncing");
-  }
-  return { ...request, warnings };
+  return { ...request, warnings: normalizeIntegrationWarnings(request.warnings, state) };
 }
 
 export function reconcileDashboardWithPendingWritebacks(
@@ -410,10 +425,12 @@ function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
 export function CommandCentrePrototype({
   authDisabled = false,
   data,
+  showIntegrationStatus = false,
   showIntegrations = false,
 }: {
   authDisabled?: boolean;
   data: DispatchDashboardData;
+  showIntegrationStatus?: boolean;
   showIntegrations?: boolean;
 }) {
   const router = useRouter();
@@ -446,7 +463,9 @@ export function CommandCentrePrototype({
     useState<WorkLogTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
-  const integrationTracker = useTrackedIntegrationOperations();
+  const integrationTracker = useTrackedIntegrationOperations({
+    hydrate: showIntegrationStatus,
+  });
 
   function trackIntegrationReceipt(
     receipt: { operationId?: string; status?: IntegrationReceiptStatus },
@@ -2142,6 +2161,7 @@ export function CommandCentrePrototype({
           date={selectedDateLabel}
           dateKey={selectedDateKey}
           integrationOperations={integrationTracker.operations}
+          showIntegrationStatus={showIntegrationStatus}
           showIntegrations={showIntegrations}
           technicians={dashboard.technicians}
           timezone={dashboard.timezone}
@@ -2515,6 +2535,7 @@ export function CommandCentrePrototype({
             appointment={selectedAppointment}
             calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
             integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
+            showIntegrations={showIntegrations}
             onOpenWorkLog={openWorkLog}
             onOpenWorkspace={(requestId, appointmentId) =>
               setTicketWorkspaceTarget({ appointmentId, requestId })
@@ -4815,6 +4836,7 @@ function CommandHeader({
   date,
   dateKey,
   integrationOperations,
+  showIntegrationStatus,
   showIntegrations,
   searchValue,
   onClearSearch,
@@ -4833,6 +4855,7 @@ function CommandHeader({
   date: string;
   dateKey: string;
   integrationOperations: TrackedIntegrationOperation[];
+  showIntegrationStatus: boolean;
   showIntegrations: boolean;
   searchValue: string;
   onClearSearch: () => void;
@@ -4941,9 +4964,14 @@ function CommandHeader({
             ) : null}
           </label>
           <PresenceControls technicians={technicians} />
+          {showIntegrationStatus ? (
+            <GlobalIntegrationStatus
+              localOperations={integrationOperations}
+              showRecoveryLink={showIntegrations}
+            />
+          ) : null}
           {showIntegrations ? (
             <>
-              <GlobalIntegrationStatus localOperations={integrationOperations} />
               <Link
                 className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
                 href="/integrations"
@@ -6390,6 +6418,7 @@ function DetailDrawer({
   appointment,
   calendarWriteEnabled,
   integrationState,
+  showIntegrations,
   onOpenWorkLog,
   onOpenWorkspace,
   onReschedule,
@@ -6401,6 +6430,7 @@ function DetailDrawer({
   appointment?: Appointment;
   calendarWriteEnabled: boolean;
   integrationState?: TrackedIntegrationOperation["state"];
+  showIntegrations: boolean;
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
   onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
   onReschedule: (appointment: Appointment) => void;
@@ -6417,6 +6447,14 @@ function DetailDrawer({
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
   const helpdeskUrl = request?.helpdeskUrl ?? appointment?.helpdeskUrl;
+  const normalizedWarnings = normalizeIntegrationWarnings(
+    request?.warnings ?? outlookWarnings(appointment),
+    integrationState,
+  );
+  const secondaryWarnings = normalizedWarnings.filter(
+    (warning) =>
+      !integrationState || !["syncing", "review required"].includes(warning.toLowerCase()),
+  );
 
   return (
     <aside
@@ -6445,14 +6483,20 @@ function DetailDrawer({
             }`}
           />
         </div>
-        <div className="mt-2 flex flex-wrap gap-1">
+        <div aria-label="Selected request warnings" className="mt-2 flex flex-wrap gap-1">
           {integrationState === "review_required" ? (
-            <Link
-              className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100"
-              href="/integrations"
-            >
-              Review required
-            </Link>
+            showIntegrations ? (
+              <Link
+                className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100"
+                href="/integrations"
+              >
+                Review required
+              </Link>
+            ) : (
+              <span className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
+                Review required
+              </span>
+            )
           ) : integrationState === "queued" ||
             integrationState === "syncing" ||
             integrationState === "retrying" ? (
@@ -6460,7 +6504,7 @@ function DetailDrawer({
               <RefreshCw className="h-3 w-3 animate-spin" /> Syncing
             </span>
           ) : null}
-          {(request?.warnings ?? outlookWarnings(appointment)).map((warning) => (
+          {secondaryWarnings.map((warning) => (
             <Badge key={warning} tone="warning">
               {warning}
             </Badge>

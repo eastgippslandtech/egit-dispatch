@@ -59,6 +59,30 @@ describe("IntegrationHealth", () => {
     expect(screen.getByText("2 review required")).toBeInTheDocument();
     expect(screen.getAllByText("Safe provider error")).toHaveLength(4);
   });
+
+  it("labels unknown connector health as not checked", () => {
+    render(
+      <IntegrationHealth
+        connectors={[connector("outlook", "unknown")]}
+        counts={{ pending: 0, reviewRequired: 0 }}
+      />,
+    );
+
+    expect(screen.getByText("Not checked")).toBeInTheDocument();
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("renders an explicit unknown state when connector health is absent", () => {
+    render(
+      <IntegrationHealth
+        connectors={undefined as never}
+        counts={{ pending: 0, reviewRequired: 0 }}
+      />,
+    );
+
+    expect(screen.getByText("Status unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+  });
 });
 
 describe("FailedActions", () => {
@@ -176,6 +200,39 @@ describe("IntegrationsPage", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("ignores an older refresh that resolves after a newer refresh", async () => {
+    vi.useFakeTimers();
+    const firstHealth = deferredResponse();
+    const firstActions = deferredResponse();
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(firstHealth.promise)
+      .mockReturnValueOnce(firstActions.promise)
+      .mockResolvedValueOnce(jsonResponse({
+        connectors: [connector("outlook", "healthy")],
+        counts: { pending: 2, reviewRequired: 0 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ actions: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(await IntegrationsPage());
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(screen.getByText("2 pending")).toBeInTheDocument();
+
+    await act(async () => {
+      firstHealth.resolve(jsonResponse({
+        connectors: [connector("outlook", "unavailable")],
+        counts: { pending: 9, reviewRequired: 0 },
+      }));
+      firstActions.resolve(jsonResponse({ actions: [] }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("2 pending")).toBeInTheDocument();
+    expect(screen.queryByText("9 pending")).not.toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+  });
 });
 
 function connector(connectorName: string, status: string) {
@@ -209,4 +266,12 @@ function jsonResponse(body: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
     status,
   });
+}
+
+function deferredResponse() {
+  let resolve: (response: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve };
 }

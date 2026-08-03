@@ -26,6 +26,7 @@ type IntegrationQueryName =
   | "getStepResults"
   | "insertOperation"
   | "insertStep"
+  | "listActiveOperations"
   | "listActionableOperations"
   | "listOperations"
   | "markStepFailed"
@@ -180,6 +181,10 @@ export function createIntegrationRepository(sql: IntegrationSql) {
 
     async listOperations({ limit = 50 }: { limit?: number } = {}) {
       return (await sql.query("listOperations", [limit])) as IntegrationOperation[];
+    },
+
+    async listActiveOperations({ limit = 50 }: { limit?: number } = {}) {
+      return (await sql.query("listActiveOperations", [limit])) as IntegrationOperation[];
     },
 
     async listActionableOperations({ limit = 50 }: { limit?: number } = {}) {
@@ -697,6 +702,18 @@ class PostgresIntegrationSql implements IntegrationSql {
           this.sql`
             select ${this.sql.unsafe(operationColumns)}
             from public.integration_operations
+            order by updated_at desc
+            limit ${limit}
+          `,
+        );
+      }
+      case "listActiveOperations": {
+        const [limit] = values as [number];
+        return this.operations(
+          this.sql`
+            select ${this.sql.unsafe(operationColumns)}
+            from public.integration_operations
+            where state in ('queued', 'syncing', 'retrying', 'review_required')
             order by updated_at desc
             limit ${limit}
           `,

@@ -26,15 +26,18 @@ export function IntegrationsConsole() {
   const [notice, setNotice] = useState<string>();
   const [busyOperationId, setBusyOperationId] = useState<string>();
   const mounted = useRef(true);
+  const refreshSequence = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      refreshSequence.current += 1;
     };
   }, []);
 
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequence.current;
     try {
       const [healthResponse, actionsResponse] = await Promise.all([
         fetch("/api/internal/integrations/health", {
@@ -59,11 +62,11 @@ export function IntegrationsConsole() {
       const actions = (await actionsResponse.json()) as {
         actions: FailedActionSummary[];
       };
-      if (!mounted.current) return;
+      if (!mounted.current || sequence !== refreshSequence.current) return;
       setSnapshot({ ...health, actions: actions.actions });
       setError(undefined);
     } catch (loadError) {
-      if (!mounted.current) return;
+      if (!mounted.current || sequence !== refreshSequence.current) return;
       setError(
         loadError instanceof Error && loadError.message === "AUTHORIZATION_REQUIRED"
           ? "Your session no longer has access to integration recovery."

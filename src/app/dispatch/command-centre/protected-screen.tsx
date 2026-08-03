@@ -48,6 +48,7 @@ export async function ProtectedCommandCentreScreen({
     <CommandCentrePrototype
       authDisabled={access.authDisabled}
       data={selectedData}
+      showIntegrationStatus
       showIntegrations={canManageIntegrations}
       key={`${data.dispatchDataSource}:${data.calendarError ?? "healthy"}`}
     />

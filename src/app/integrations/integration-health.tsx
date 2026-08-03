@@ -38,7 +38,7 @@ const stateLabels: Record<IntegrationConnectorHealthStatus, string> = {
   healthy: "Connected",
   stale: "Stale",
   unavailable: "Unavailable",
-  unknown: "Unknown",
+  unknown: "Not checked",
 };
 
 const stateClasses: Record<IntegrationConnectorHealthStatus, string> = {
@@ -51,10 +51,10 @@ const stateClasses: Record<IntegrationConnectorHealthStatus, string> = {
 };
 
 export function IntegrationHealth({
-  connectors,
+  connectors = [],
   counts,
 }: {
-  connectors: IntegrationConnectorHealth[];
+  connectors?: IntegrationConnectorHealth[];
   counts: IntegrationCounts;
 }) {
   return (
@@ -118,7 +118,7 @@ export function IntegrationHealth({
         </table>
         {connectors.length === 0 ? (
           <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-slate-400">
-            <CircleHelp className="h-4 w-4" /> No connector activity has been recorded yet.
+            <CircleHelp className="h-4 w-4" /> <span><strong>Status unknown</strong>. No connector activity has been recorded yet.</span>
           </div>
         ) : null}
       </div>

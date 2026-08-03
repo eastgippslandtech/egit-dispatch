@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createElement } from "react";
 import Link from "next/link";
 
@@ -36,8 +36,9 @@ export function operationStateForRequest(
   return states.find((state) => pendingStates.has(state));
 }
 
-export function useTrackedIntegrationOperations() {
+export function useTrackedIntegrationOperations({ hydrate = false } = {}) {
   const [operations, setOperations] = useState<TrackedIntegrationOperation[]>([]);
+  const terminalOperationIds = useRef(new Set<string>());
 
   const track = useCallback((operation: TrackedIntegrationOperation) => {
     if (!operation.operationId) return;
@@ -46,6 +47,56 @@ export function useTrackedIntegrationOperations() {
       operation,
     ]);
   }, []);
+
+  useEffect(() => {
+    if (!hydrate) return;
+    let active = true;
+
+    const hydrateActiveOperations = async () => {
+      try {
+        const response = await fetch(
+          "/api/internal/integrations/actions?scope=active",
+          { cache: "no-store", headers: { Accept: "application/json" } },
+        );
+        if ([401, 403].includes(response.status) || !response.ok) return;
+        const body = (await response.json()) as {
+          actions?: Array<{
+            id?: string;
+            requestId?: string;
+            state?: IntegrationOperationState;
+          }>;
+        };
+        if (!active) return;
+        const hydrated = (body.actions ?? []).flatMap((operation) =>
+          operation.id && operation.state && isActiveOperationState(operation.state)
+            ? [{
+                operationId: operation.id,
+                requestId: operation.requestId,
+                state: operation.state,
+              }]
+            : [],
+        );
+        setOperations((current) => {
+          const localIds = new Set(current.map((operation) => operation.operationId));
+          return [
+            ...current,
+            ...hydrated.filter(
+              (operation) =>
+                !localIds.has(operation.operationId) &&
+                !terminalOperationIds.current.has(operation.operationId),
+            ),
+          ];
+        });
+      } catch {
+        // A technician may not have access to the recovery list; Dispatch remains usable.
+      }
+    };
+
+    void hydrateActiveOperations();
+    return () => {
+      active = false;
+    };
+  }, [hydrate]);
 
   const pendingOperationIds = useMemo(
     () =>
@@ -78,6 +129,11 @@ export function useTrackedIntegrationOperations() {
         }),
       );
       if (!active) return;
+      for (const update of updates) {
+        if (update && (update.state === "synced" || update.state === "cancelled")) {
+          terminalOperationIds.current.add(update.id);
+        }
+      }
       setOperations((current) =>
         current.flatMap((operation) => {
           const update = updates.find((candidate) => candidate?.id === operation.operationId);
@@ -109,8 +165,10 @@ export function useTrackedIntegrationOperations() {
 
 export function GlobalIntegrationStatus({
   localOperations,
+  showRecoveryLink = true,
 }: {
   localOperations: TrackedIntegrationOperation[];
+  showRecoveryLink?: boolean;
 }) {
   const [counts, setCounts] = useState<{ pending: number; reviewRequired: number }>();
   const [connectorStatus, setConnectorStatus] =
@@ -152,6 +210,7 @@ export function GlobalIntegrationStatus({
   const reviewRequired = Math.max(counts?.reviewRequired ?? 0, localReview);
   const connectorUnavailable = connectorStatus === "unavailable";
   const authenticationRequired = connectorStatus === "authentication_required";
+  const statusUnknown = connectorStatus === undefined || connectorStatus === "unknown";
   const label = reviewRequired > 0
       ? `${pending} syncing, ${reviewRequired} review required`
       : authenticationRequired
@@ -164,7 +223,9 @@ export function GlobalIntegrationStatus({
           ? "Integrations degraded"
           : connectorStatus === "stale"
             ? "Integration data stale"
-        : "Integrations connected";
+            : statusUnknown
+              ? "Integration status not checked"
+              : "Integrations connected";
   const className = reviewRequired > 0
     ? "border-amber-300/25 bg-amber-400/10 text-amber-100"
     : authenticationRequired || connectorUnavailable
@@ -177,18 +238,32 @@ export function GlobalIntegrationStatus({
           ? "border-amber-300/25 bg-amber-400/10 text-amber-100"
           : connectorStatus === "stale"
             ? "border-sky-300/20 bg-sky-400/10 text-sky-100"
-        : "border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100";
+            : statusUnknown
+              ? "border-slate-300/15 bg-slate-400/[0.06] text-slate-400"
+              : "border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100";
+
+  const sharedProps = {
+    "aria-label": label,
+    className: `inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-semibold ${className}`,
+  };
+
+  if (!showRecoveryLink) {
+    return createElement("span", { ...sharedProps, title: "Integration status" }, label);
+  }
 
   return createElement(
     Link,
     {
-      "aria-label": label,
-      className: `inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-semibold ${className}`,
+      ...sharedProps,
       href: "/integrations",
       title: "Open integration health and recovery",
     },
     label,
   );
+}
+
+function isActiveOperationState(state: IntegrationOperationState) {
+  return pendingStates.has(state) || state === "review_required";
 }
 
 function highestConnectorStatus(

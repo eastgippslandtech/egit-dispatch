@@ -8,13 +8,18 @@ import { dispatchRouteAccess } from "@/server/yeastar/route-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request?: Request) {
   if (!(await dispatchRouteAccess())) {
     return integrationJson({ error: "Unauthorized." }, { status: 401 });
   }
   try {
-    const operations = await createPostgresIntegrationRepository()
-      .listActionableOperations({ limit: 100 });
+    const repository = createPostgresIntegrationRepository();
+    const active = request
+      ? new URL(request.url).searchParams.get("scope") === "active"
+      : false;
+    const operations = active
+      ? await repository.listActiveOperations({ limit: 100 })
+      : await repository.listActionableOperations({ limit: 100 });
     return integrationJson({
       actions: operations.map((operation) => ({
         actionType: operation.actionType,

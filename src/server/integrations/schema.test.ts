@@ -26,6 +26,20 @@ describe("durable integration schema", () => {
     expect(sql).toContain("create table public.integration_audit_events");
     expect(sql).toContain("create table public.integration_connector_health");
     expect(sql).toContain("check (connector in ('command_centre','msp_central','outlook','zoho_crm','msp_endpoint','zoho_survey','push','email'))");
+    expect(sql).toContain("details - ARRAY['event', 'outcome', 'error_code', 'attempt_count', 'http_status', 'duration_ms', 'step_key'] = '{}'::jsonb");
+    expect(sql).toContain("Allowed top-level keys: event, outcome, error_code, attempt_count, http_status, duration_ms, step_key.");
+
+    for (const sensitiveKey of [
+      "authorization",
+      "authorization_header",
+      "headers",
+      "token",
+      "access_token",
+      "refresh_token",
+      "provider_payload",
+    ]) {
+      expect(sql).not.toContain(`'${sensitiveKey}'`);
+    }
 
     expect(sql).toContain("create index integration_operation_steps_due_idx");
     expect(sql).toContain("where state in ('queued','retrying')");
@@ -42,6 +56,9 @@ describe("durable integration schema", () => {
     ]) {
       expect(sql).toContain(`alter table public.${table} enable row level security`);
       expect(sql).toContain(`revoke all on public.${table} from anon, authenticated`);
+      expect(sql).toContain(
+        `grant select, insert, update, delete\n  on public.${table} to service_role`,
+      );
     }
   });
 });

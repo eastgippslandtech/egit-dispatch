@@ -51,8 +51,22 @@ create table public.integration_audit_events (
   connector text
     check (connector is null or connector in ('command_centre','msp_central','outlook','zoho_crm','msp_endpoint','zoho_survey','push','email')),
   details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint integration_audit_events_details_keys_check check (
+    jsonb_typeof(details) = 'object'
+    and details - ARRAY['event', 'outcome', 'error_code', 'attempt_count', 'http_status', 'duration_ms', 'step_key'] = '{}'::jsonb
+    and coalesce(jsonb_typeof(details -> 'event'), 'null') in ('null', 'string')
+    and coalesce(jsonb_typeof(details -> 'outcome'), 'null') in ('null', 'string')
+    and coalesce(jsonb_typeof(details -> 'error_code'), 'null') in ('null', 'string')
+    and coalesce(jsonb_typeof(details -> 'attempt_count'), 'null') in ('null', 'number')
+    and coalesce(jsonb_typeof(details -> 'http_status'), 'null') in ('null', 'number')
+    and coalesce(jsonb_typeof(details -> 'duration_ms'), 'null') in ('null', 'number')
+    and coalesce(jsonb_typeof(details -> 'step_key'), 'null') in ('null', 'string')
+  )
 );
+
+comment on column public.integration_audit_events.details is
+  'Safe audit summary only. Allowed top-level keys: event, outcome, error_code, attempt_count, http_status, duration_ms, step_key. Provider payloads, authorization headers, tokens, and other sensitive data are prohibited.';
 
 create table public.integration_connector_health (
   connector text primary key

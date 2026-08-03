@@ -31,6 +31,8 @@ create table public.integration_operation_steps (
     check (attempt_count >= 0),
   next_attempt_at timestamptz,
   lease_token uuid,
+  worker_id varchar(128)
+    check (worker_id is null or worker_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'),
   leased_at timestamptz,
   lease_expires_at timestamptz,
   last_error text,

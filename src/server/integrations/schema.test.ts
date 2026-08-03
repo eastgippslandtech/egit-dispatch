@@ -16,6 +16,9 @@ describe("durable integration schema", () => {
 
     expect(sql).toContain("create table public.integration_operations");
     expect(sql).toContain("idempotency_key text not null unique");
+    expect(sql).toContain("actor_email varchar(320) not null");
+    expect(sql).toContain("source_version varchar(128)");
+    expect(sql).toContain("input_fingerprint char(64) not null");
     expect(sql).toContain("check (state in ('queued','syncing','retrying','synced','review_required','cancelled'))");
     expect(sql).toContain("create table public.integration_operation_steps");
     expect(sql).toContain("unique (operation_id, step_key)");

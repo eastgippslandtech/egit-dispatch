@@ -3,6 +3,11 @@ create table public.integration_operations (
   idempotency_key text not null unique,
   request_id text not null,
   action text not null,
+  actor_email varchar(320) not null
+    check (actor_email ~ '^[^[:space:]@]+@[^[:space:]@]+$'),
+  source_version varchar(128),
+  input_fingerprint char(64) not null
+    check (input_fingerprint ~ '^[0-9a-f]{64}$'),
   payload jsonb not null default '{}'::jsonb,
   state text not null default 'queued'
     check (state in ('queued','syncing','retrying','synced','review_required','cancelled')),

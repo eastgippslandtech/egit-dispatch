@@ -50,18 +50,25 @@ function fakeSql() {
         return operations.filter((operation) => operation.idempotencyKey === values[0]);
       }
       if (name === "insertOperation") {
-        const [input] = values as [EnqueueIntegrationOperation];
+        const [input, inputFingerprint, actorEmail] = values as [
+          EnqueueIntegrationOperation,
+          string,
+          string,
+        ];
         if (operations.some((operation) => operation.idempotencyKey === input.idempotencyKey)) {
           return [];
         }
         const stored: IntegrationOperation = {
           actionType: input.actionType,
+          actorEmail,
           attemptCount: 0,
           createdAt: now,
           id: `operation-${operations.length + 1}`,
           idempotencyKey: input.idempotencyKey,
+          inputFingerprint,
           payload: input.payload,
           requestId: input.requestId ?? input.idempotencyKey,
+          sourceVersion: input.sourceVersion,
           state: "queued",
           updatedAt: now,
         };
@@ -87,6 +94,30 @@ function fakeSql() {
         steps.push(stored);
         return [stored];
       }
+      if (name === "expireExpiredLeases") {
+        const [changedAt] = values as [string];
+        for (const step of steps) {
+          if (
+            step.state === "processing" &&
+            step.leaseExpiresAt &&
+            step.leaseExpiresAt <= changedAt
+          ) {
+            step.lastError ??= "Integration step lease expired before completion.";
+            step.leaseExpiresAt = undefined;
+            step.leaseToken = undefined;
+            step.state = "review_required";
+            step.workerId = undefined;
+            const parent = operations.find(
+              (operation) => operation.id === step.operationId,
+            );
+            if (parent && parent.state !== "cancelled" && parent.state !== "synced") {
+              parent.lastError ??= "Integration step lease expired before completion.";
+              parent.state = "review_required";
+            }
+          }
+        }
+        return [];
+      }
       if (name === "claimDueSteps") {
         const [claimNow, workerId, leaseExpiresAt, limit] = values as [
           string,
@@ -98,7 +129,17 @@ function fakeSql() {
           .filter(
             (step) =>
               (step.state === "queued" || step.state === "retrying") &&
-              (!step.nextAttemptAt || step.nextAttemptAt <= claimNow),
+              (!step.nextAttemptAt || step.nextAttemptAt <= claimNow) &&
+              !["review_required", "cancelled", "synced"].includes(
+                operations.find((operation) => operation.id === step.operationId)
+                  ?.state ?? "cancelled",
+              ) &&
+              !steps.some(
+                (predecessor) =>
+                  predecessor.operationId === step.operationId &&
+                  predecessor.stepOrder < step.stepOrder &&
+                  predecessor.state !== "succeeded",
+              ),
           )
           .sort((left, right) => left.stepOrder - right.stepOrder)
           .slice(0, limit);
@@ -126,9 +167,21 @@ function fakeSql() {
         if (!step) return [];
         step.completedAt = completedAt;
         step.leaseExpiresAt = undefined;
+        step.lastError = undefined;
+        step.nextAttemptAt = undefined;
         step.result = result;
         step.state = "succeeded";
         step.updatedAt = completedAt;
+        const parent = operations.find((operation) => operation.id === step.operationId);
+        if (
+          parent &&
+          steps
+            .filter((candidate) => candidate.operationId === step.operationId)
+            .every((candidate) => candidate.state === "succeeded")
+        ) {
+          parent.lastError = undefined;
+          parent.state = "synced";
+        }
         return [step];
       }
       if (name === "markStepFailed") {
@@ -148,12 +201,20 @@ function fakeSql() {
       if (name === "retryOperation" || name === "cancelOperation") {
         const [operationId, changedAt] = values as [string, string];
         const target = operations.find((operation) => operation.id === operationId);
-        if (!target) return [];
+        if (!target || (name === "retryOperation" && target.state !== "review_required")) {
+          return [];
+        }
         target.cancelledAt = name === "cancelOperation" ? changedAt : undefined;
         target.state = name === "retryOperation" ? "retrying" : "cancelled";
         target.updatedAt = changedAt;
         for (const step of steps.filter((step) => step.operationId === operationId)) {
-          if (["succeeded", "cancelled"].includes(step.state)) continue;
+          if (
+            name === "retryOperation"
+              ? step.state !== "review_required"
+              : ["succeeded", "cancelled"].includes(step.state)
+          ) {
+            continue;
+          }
           step.leaseExpiresAt = undefined;
           step.nextAttemptAt = name === "retryOperation" ? changedAt : undefined;
           step.state = name === "retryOperation" ? "retrying" : "cancelled";
@@ -230,6 +291,36 @@ describe("integration repository", () => {
     ).rejects.toThrow("already used for different work");
   });
 
+  it("rejects idempotency key reuse when behavior-affecting input changes", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    await repository.enqueue(operation());
+
+    await expect(
+      repository.enqueue({ ...operation(), actorEmail: "other@example.com" }),
+    ).rejects.toThrow("already used for different work");
+    await expect(
+      repository.enqueue({ ...operation(), requestId: "request-99" }),
+    ).rejects.toThrow("already used for different work");
+    await expect(
+      repository.enqueue({ ...operation(), sourceVersion: "v2" }),
+    ).rejects.toThrow("already used for different work");
+    await expect(
+      repository.enqueue({
+        ...operation(),
+        steps: [
+          ...operation().steps,
+          {
+            action: "request.email",
+            connector: "email",
+            payload: { requestId: "42" },
+            stepKey: "email.notify",
+          },
+        ],
+      }),
+    ).rejects.toThrow("already used for different work");
+  });
+
   it("claims only due unfinished steps with a worker lease", async () => {
     const fake = fakeSql();
     const repository = createIntegrationRepository(fake.sql);
@@ -263,6 +354,30 @@ describe("integration repository", () => {
         stepId: claimed!.id,
       }),
     ).resolves.toMatchObject({ result: { provider: "ok" }, state: "succeeded" });
+  });
+
+  it("clears stale step and operation errors when all steps succeed", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+    fake.operations[0]!.lastError = "Previous failure";
+    fake.steps[0]!.lastError = "Retry later";
+    fake.steps[0]!.nextAttemptAt = "2026-08-03T10:00:00.000Z";
+    fake.steps[1]!.state = "succeeded";
+    const [claimed] = await repository.claimDueSteps({ workerId: "worker-a" });
+
+    await repository.markStepSucceeded({
+      leaseToken: claimed!.leaseToken!,
+      result: { provider: "ok" },
+      stepId: claimed!.id,
+    });
+
+    expect(fake.steps[0]).toMatchObject({
+      lastError: undefined,
+      nextAttemptAt: undefined,
+      state: "succeeded",
+    });
+    expect(created).toMatchObject({ lastError: undefined, state: "synced" });
   });
 
   it("schedules a retryable failure", async () => {
@@ -300,18 +415,77 @@ describe("integration repository", () => {
     ).resolves.toMatchObject({ state: "review_required" });
   });
 
-  it("retries and cancels outstanding operation steps", async () => {
+  it("retries only review-required steps and cancels outstanding operation steps", async () => {
     const fake = fakeSql();
     const repository = createIntegrationRepository(fake.sql);
     const { operation: created } = await repository.enqueue(operation());
+    created.state = "review_required";
+    fake.steps[0]!.state = "review_required";
+    fake.steps[1]!.state = "processing";
+    fake.steps[1]!.leaseToken = "active-lease";
 
     await expect(repository.retryOperation(created.id)).resolves.toMatchObject({
       state: "retrying",
     });
+    expect(fake.steps[0]).toMatchObject({ state: "retrying" });
+    expect(fake.steps[1]).toMatchObject({
+      leaseToken: "active-lease",
+      state: "processing",
+    });
     await expect(repository.cancelOperation(created.id)).resolves.toMatchObject({
       state: "cancelled",
     });
-    expect(fake.steps.every((step) => step.state === "cancelled")).toBe(true);
+    expect(fake.steps[0]).toMatchObject({ state: "cancelled" });
+  });
+
+  it("rejects manual retry while an operation is processing or synced", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+
+    created.state = "syncing";
+    await expect(repository.retryOperation(created.id)).rejects.toThrow(
+      "not ready for manual retry",
+    );
+    created.state = "synced";
+    await expect(repository.retryOperation(created.id)).rejects.toThrow(
+      "not ready for manual retry",
+    );
+  });
+
+  it("claims only the next ordered step and stops after review is required", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    await repository.enqueue(operation());
+
+    const first = await repository.claimDueSteps({ limit: 2, workerId: "worker-a" });
+    expect(first.map((step) => step.stepOrder)).toEqual([0]);
+    await repository.markStepFailed({
+      error: "Needs review",
+      leaseToken: first[0]!.leaseToken!,
+      reviewRequired: true,
+      stepId: first[0]!.id,
+    });
+
+    await expect(repository.claimDueSteps({ workerId: "worker-b" })).resolves.toEqual([]);
+  });
+
+  it("moves expired processing leases to review before claiming due work", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: created } = await repository.enqueue(operation());
+    fake.steps[0]!.leaseExpiresAt = "2026-08-03T10:00:00.000Z";
+    fake.steps[0]!.leaseToken = "expired-lease";
+    fake.steps[0]!.state = "processing";
+
+    await expect(
+      repository.claimDueSteps({
+        now: new Date("2026-08-03T10:30:00.000Z"),
+        workerId: "worker-a",
+      }),
+    ).resolves.toEqual([]);
+    expect(fake.steps[0]).toMatchObject({ state: "review_required" });
+    expect(created).toMatchObject({ state: "review_required" });
   });
 
   it("inserts only the bounded audit summary", async () => {

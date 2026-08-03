@@ -16,6 +16,7 @@ type IntegrationQueryName =
   | "appendAudit"
   | "cancelOperation"
   | "claimDueSteps"
+  | "expireExpiredLeases"
   | "findOperationByKey"
   | "getHealth"
   | "insertOperation"
@@ -58,26 +59,33 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       workerId: string;
     }): Promise<IntegrationOperationStep[]> {
       const claimedAt = now.toISOString();
-      return sql.query("claimDueSteps", [
-        claimedAt,
-        boundedWorkerId(workerId),
-        new Date(now.getTime() + leaseDurationMs).toISOString(),
-        limit,
-      ]);
+      return sql.transaction(async (transaction) => {
+        await transaction.query("expireExpiredLeases", [claimedAt]);
+        return (await transaction.query("claimDueSteps", [
+          claimedAt,
+          boundedWorkerId(workerId),
+          new Date(now.getTime() + leaseDurationMs).toISOString(),
+          limit,
+        ])) as IntegrationOperationStep[];
+      });
     },
 
     async enqueue(input: EnqueueIntegrationOperation) {
+      const inputFingerprint = fingerprintOperationInput(input);
+      const actorEmail = normalizeEmail(input.actorEmail);
       return sql.transaction(async (transaction) => {
         const existing = (await transaction.query("findOperationByKey", [
           input.idempotencyKey,
         ])) as IntegrationOperation[];
         if (existing[0]) {
-          assertMatchingPayload(existing[0], input);
+          assertMatchingInput(existing[0], inputFingerprint);
           return { operation: existing[0], replayed: true };
         }
 
         const inserted = (await transaction.query("insertOperation", [
           input,
+          inputFingerprint,
+          actorEmail,
         ])) as IntegrationOperation[];
         const operation = inserted[0];
         if (!operation) {
@@ -88,15 +96,13 @@ export function createIntegrationRepository(sql: IntegrationSql) {
             conflicted,
             "Integration operation could not be stored.",
           );
-          assertMatchingPayload(replay, input);
+          assertMatchingInput(replay, inputFingerprint);
           return { operation: replay, replayed: true };
         }
 
-        await Promise.all(
-          input.steps.map((step, stepOrder) =>
-            transaction.query("insertStep", [operation.id, step, stepOrder]),
-          ),
-        );
+        for (const [stepOrder, step] of input.steps.entries()) {
+          await transaction.query("insertStep", [operation.id, step, stepOrder]);
+        }
         return { operation, replayed: false };
       });
     },
@@ -181,7 +187,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
     async retryOperation(operationId: string, now = new Date()) {
       return requiredRow<IntegrationOperation>(
         await sql.query("retryOperation", [operationId, now.toISOString()]),
-        "Integration operation was not found.",
+        "Integration operation is not ready for manual retry.",
       );
     },
   };
@@ -217,18 +223,28 @@ class PostgresIntegrationSql implements IntegrationSql {
         );
       }
       case "insertOperation": {
-        const [input] = values as [EnqueueIntegrationOperation];
+        const [input, inputFingerprint, actorEmail] = values as [
+          EnqueueIntegrationOperation,
+          string,
+          string,
+        ];
         return this.operations(
           this.sql`
             insert into public.integration_operations (
               idempotency_key,
               request_id,
               action,
+              actor_email,
+              source_version,
+              input_fingerprint,
               payload
             ) values (
               ${input.idempotencyKey},
               ${input.requestId ?? input.idempotencyKey},
               ${input.actionType},
+              ${actorEmail},
+              ${input.sourceVersion ?? null},
+              ${inputFingerprint},
               ${this.sql.json(input.payload as postgres.JSONValue)}
             )
             on conflict (idempotency_key) do nothing
@@ -274,10 +290,20 @@ class PostgresIntegrationSql implements IntegrationSql {
           this.sql`
             with due as (
               select id
-              from public.integration_operation_steps
-              where state in ('queued', 'retrying')
-                and (next_attempt_at is null or next_attempt_at <= ${now})
-              order by next_attempt_at nulls first, created_at
+              from public.integration_operation_steps step
+              join public.integration_operations operation
+                on operation.id = step.operation_id
+              where step.state in ('queued', 'retrying')
+                and operation.state not in ('review_required', 'cancelled', 'synced')
+                and (step.next_attempt_at is null or step.next_attempt_at <= ${now})
+                and not exists (
+                  select 1
+                  from public.integration_operation_steps predecessor
+                  where predecessor.operation_id = step.operation_id
+                    and predecessor.step_order < step.step_order
+                    and predecessor.state <> 'succeeded'
+                )
+              order by step.next_attempt_at nulls first, step.created_at
               for update skip locked
               limit ${limit}
             )
@@ -297,6 +323,35 @@ class PostgresIntegrationSql implements IntegrationSql {
           `,
         );
       }
+      case "expireExpiredLeases": {
+        const [changedAt] = values as [string];
+        await this.sql`
+          with expired as (
+            update public.integration_operation_steps
+            set
+              state = 'review_required',
+              next_attempt_at = null,
+              lease_token = null,
+              worker_id = null,
+              leased_at = null,
+              lease_expires_at = null,
+              last_error = coalesce(last_error, 'Integration step lease expired before completion.'),
+              updated_at = ${changedAt}
+            where state = 'processing'
+              and lease_expires_at is not null
+              and lease_expires_at <= ${changedAt}
+            returning operation_id
+          )
+          update public.integration_operations operation
+          set
+            state = 'review_required',
+            last_error = coalesce(operation.last_error, 'Integration step lease expired before completion.'),
+            updated_at = ${changedAt}
+          where operation.id in (select distinct operation_id from expired)
+            and operation.state not in ('cancelled', 'synced')
+        `;
+        return [];
+      }
       case "markStepSucceeded": {
         const [stepId, leaseToken, result, completedAt] = values as [
           string,
@@ -311,6 +366,8 @@ class PostgresIntegrationSql implements IntegrationSql {
               set
                 state = 'succeeded',
                 result = ${this.sql.json(result as postgres.JSONValue)},
+                next_attempt_at = null,
+                last_error = null,
                 lease_token = null,
                 worker_id = null,
                 leased_at = null,
@@ -334,6 +391,11 @@ class PostgresIntegrationSql implements IntegrationSql {
                 where operation_id = changed.operation_id
                   and state <> 'succeeded'
               ) then ${completedAt} else operation.synced_at end,
+              last_error = case when not exists (
+                select 1 from public.integration_operation_steps
+                where operation_id = changed.operation_id
+                  and state <> 'succeeded'
+              ) then null else operation.last_error end,
               updated_at = ${completedAt}
             from changed
             where operation.id = changed.operation_id
@@ -385,7 +447,7 @@ class PostgresIntegrationSql implements IntegrationSql {
                 last_error = null,
                 updated_at = ${changedAt}
               where id = ${operationId}::uuid
-                and state <> 'cancelled'
+                and state = 'review_required'
               returning *
             ), reset_steps as (
               update public.integration_operation_steps step
@@ -399,7 +461,7 @@ class PostgresIntegrationSql implements IntegrationSql {
                 updated_at = ${changedAt}
               from retried
               where step.operation_id = retried.id
-                and step.state not in ('succeeded', 'cancelled')
+                and step.state = 'review_required'
             )
             select ${this.sql.unsafe(operationColumnsFromRetried)}
             from retried
@@ -568,6 +630,7 @@ class PostgresIntegrationSql implements IntegrationSql {
       ...row,
       cancelledAt: row.cancelledAt ?? undefined,
       lastError: row.lastError ?? undefined,
+      sourceVersion: row.sourceVersion ?? undefined,
       syncedAt: row.syncedAt ?? undefined,
     }));
   }
@@ -589,10 +652,11 @@ class PostgresIntegrationSql implements IntegrationSql {
 
 type OperationRow = Omit<
   IntegrationOperation,
-  "cancelledAt" | "lastError" | "syncedAt"
+  "cancelledAt" | "lastError" | "sourceVersion" | "syncedAt"
 > & {
   cancelledAt: string | null;
   lastError: string | null;
+  sourceVersion: string | null;
   syncedAt: string | null;
 };
 
@@ -639,6 +703,9 @@ function thisOperationColumns(table?: string) {
           ${prefix}idempotency_key as "idempotencyKey",
           ${prefix}request_id as "requestId",
           ${prefix}action as "actionType",
+          ${prefix}actor_email as "actorEmail",
+          ${prefix}source_version as "sourceVersion",
+          ${prefix}input_fingerprint as "inputFingerprint",
           ${prefix}payload,
           ${prefix}state::text as "state",
           ${prefix}attempt_count as "attemptCount",
@@ -672,13 +739,33 @@ function thisStepColumns(table?: string) {
           ${prefix}updated_at::text as "updatedAt"`;
 }
 
-function assertMatchingPayload(
+function assertMatchingInput(
   existing: IntegrationOperation,
-  incoming: EnqueueIntegrationOperation,
+  inputFingerprint: string,
 ) {
-  if (fingerprintPayload(existing.payload) !== fingerprintPayload(incoming.payload)) {
+  if (existing.inputFingerprint !== inputFingerprint) {
     throw new Error("This integration idempotency key was already used for different work.");
   }
+}
+
+function fingerprintOperationInput(input: EnqueueIntegrationOperation) {
+  return fingerprintPayload({
+    actionType: input.actionType,
+    actorEmail: normalizeEmail(input.actorEmail),
+    payload: input.payload,
+    requestId: input.requestId ?? null,
+    sourceVersion: input.sourceVersion ?? null,
+    steps: input.steps.map((step) => ({
+      action: step.action,
+      connector: step.connector,
+      payload: step.payload,
+      stepKey: step.stepKey,
+    })),
+  });
+}
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function boundedWorkerId(workerId: string) {

@@ -41,14 +41,17 @@ export type IntegrationStepState =
 
 export type IntegrationOperation = {
   actionType: string;
+  actorEmail: string;
   attemptCount: number;
   cancelledAt?: string;
   createdAt: string;
   id: string;
   idempotencyKey: string;
+  inputFingerprint: string;
   lastError?: string;
   payload: Record<string, unknown>;
   requestId: string;
+  sourceVersion?: string;
   state: IntegrationOperationState;
   syncedAt?: string;
   updatedAt: string;

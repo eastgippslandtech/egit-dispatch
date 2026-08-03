@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
 
 describe("durable integration schema", () => {
   it("defines the integration operation tables and reliability safeguards", () => {
@@ -43,6 +44,9 @@ describe("durable integration schema", () => {
     )?.[1];
     expect(stepTable).toBeDefined();
     expect(stepTable).toContain("result jsonb");
+    expect(stepTable).toContain(
+      "requires_reconciliation boolean not null default false",
+    );
     expect(stepTable).toContain("worker_id varchar(128)");
     expect(stepTable).toContain(
       "worker_id is null or worker_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'",

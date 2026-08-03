@@ -132,6 +132,7 @@ export function createIntegrationProcessor({
       leaseToken: requiredLeaseToken(step),
       nextAttemptAt,
       now: failedAt,
+      reconciliationRequired: failure.code === "ambiguous",
       reviewRequired: !retrying,
       stepId: step.id,
     });

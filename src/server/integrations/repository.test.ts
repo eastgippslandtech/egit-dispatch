@@ -89,6 +89,7 @@ function fakeSql() {
           createdAt: now,
           id: `step-${steps.length + 1}`,
           operationId,
+          requiresReconciliation: false,
           state: "queued",
           stepOrder,
           updatedAt: now,
@@ -107,6 +108,7 @@ function fakeSql() {
             step.lastError ??= "Integration step lease expired before completion.";
             step.leaseExpiresAt = undefined;
             step.leaseToken = undefined;
+            step.requiresReconciliation = true;
             step.state = "review_required";
             step.workerId = undefined;
             const parent = operations.find(
@@ -178,6 +180,7 @@ function fakeSql() {
         step.leaseExpiresAt = undefined;
         step.lastError = undefined;
         step.nextAttemptAt = undefined;
+        step.requiresReconciliation = false;
         step.result = result;
         step.state = "succeeded";
         step.updatedAt = completedAt;
@@ -194,8 +197,23 @@ function fakeSql() {
         return [step];
       }
       if (name === "markStepFailed") {
-        const [stepId, leaseToken, error, nextAttemptAt, reviewRequired, changedAt] =
-          values as [string, string, string, string | undefined, boolean, string];
+        const [
+          stepId,
+          leaseToken,
+          error,
+          nextAttemptAt,
+          reconciliationRequired,
+          reviewRequired,
+          changedAt,
+        ] = values as [
+          string,
+          string,
+          string,
+          string | undefined,
+          boolean,
+          boolean,
+          string,
+        ];
         const step = steps.find(
           (candidate) => candidate.id === stepId && candidate.leaseToken === leaseToken,
         );
@@ -203,6 +221,7 @@ function fakeSql() {
         step.lastError = error;
         step.leaseExpiresAt = undefined;
         step.nextAttemptAt = nextAttemptAt;
+        step.requiresReconciliation ||= reconciliationRequired;
         step.state = reviewRequired ? "review_required" : "retrying";
         step.updatedAt = changedAt;
         return [step];
@@ -289,6 +308,19 @@ describe("integration repository", () => {
 
     expect(source).toMatch(
       /const \[connector, succeeded, error, checkedAt, requestedStatus\] = values as \[\s*IntegrationConnector,\s*boolean,\s*string \| undefined,\s*string,\s*IntegrationConnectorHealthStatus \| undefined,/,
+    );
+  });
+
+  it("maps and persists explicit reconciliation state in PostgreSQL", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "repository.ts"), "utf8");
+
+    expect(source).toContain(
+      'requires_reconciliation as "requiresReconciliation"',
+    );
+    expect(source).toContain("requires_reconciliation = true");
+    expect(source).toContain("requires_reconciliation = false");
+    expect(source).toContain(
+      "requires_reconciliation = requires_reconciliation or ${reconciliationRequired}",
     );
   });
 
@@ -393,13 +425,21 @@ describe("integration repository", () => {
     await repository.enqueue(operation());
     const [claimed] = await repository.claimDueSteps({ workerId: "worker-a" });
 
+    (fake.steps[0] as IntegrationOperationStep & {
+      requiresReconciliation: boolean;
+    }).requiresReconciliation = true;
+
     await expect(
       repository.markStepSucceeded({
         leaseToken: claimed!.leaseToken!,
         result: { provider: "ok" },
         stepId: claimed!.id,
       }),
-    ).resolves.toMatchObject({ result: { provider: "ok" }, state: "succeeded" });
+    ).resolves.toMatchObject({
+      requiresReconciliation: false,
+      result: { provider: "ok" },
+      state: "succeeded",
+    });
   });
 
   it("loads an operation by id for processor audit context", async () => {
@@ -483,10 +523,31 @@ describe("integration repository", () => {
       repository.markStepFailed({
         error: "Needs operator review",
         leaseToken: claimed!.leaseToken!,
+        reconciliationRequired: true,
         reviewRequired: true,
         stepId: claimed!.id,
       }),
-    ).resolves.toMatchObject({ state: "review_required" });
+    ).resolves.toMatchObject({
+      requiresReconciliation: true,
+      state: "review_required",
+    });
+  });
+
+  it("does not mark definite failures as requiring reconciliation", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    await repository.enqueue(operation());
+    const [claimed] = await repository.claimDueSteps({ workerId: "worker-a" });
+
+    await expect(
+      repository.markStepFailed({
+        error: "Refresh token rejected",
+        leaseToken: claimed!.leaseToken!,
+        reconciliationRequired: false,
+        reviewRequired: true,
+        stepId: claimed!.id,
+      }),
+    ).resolves.toMatchObject({ requiresReconciliation: false });
   });
 
   it("retries only review-required steps and cancels outstanding operation steps", async () => {
@@ -495,13 +556,19 @@ describe("integration repository", () => {
     const { operation: created } = await repository.enqueue(operation());
     created.state = "review_required";
     fake.steps[0]!.state = "review_required";
+    (fake.steps[0] as IntegrationOperationStep & {
+      requiresReconciliation: boolean;
+    }).requiresReconciliation = true;
     fake.steps[1]!.state = "processing";
     fake.steps[1]!.leaseToken = "active-lease";
 
     await expect(repository.retryOperation(created.id)).resolves.toMatchObject({
       state: "retrying",
     });
-    expect(fake.steps[0]).toMatchObject({ state: "retrying" });
+    expect(fake.steps[0]).toMatchObject({
+      requiresReconciliation: true,
+      state: "retrying",
+    });
     expect(fake.steps[1]).toMatchObject({
       leaseToken: "active-lease",
       state: "processing",
@@ -558,7 +625,10 @@ describe("integration repository", () => {
         workerId: "worker-a",
       }),
     ).resolves.toEqual([]);
-    expect(fake.steps[0]).toMatchObject({ state: "review_required" });
+    expect(fake.steps[0]).toMatchObject({
+      requiresReconciliation: true,
+      state: "review_required",
+    });
     expect(created).toMatchObject({ state: "review_required" });
   });
 

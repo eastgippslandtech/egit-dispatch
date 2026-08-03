@@ -96,6 +96,7 @@ function step(action: string, payload: Record<string, unknown>): IntegrationOper
     leaseToken: "lease-1",
     operationId: "operation-1",
     payload,
+    requiresReconciliation: false,
     state: "processing",
     stepKey: action,
     stepOrder: 5,

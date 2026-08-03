@@ -129,6 +129,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       leaseToken,
       nextAttemptAt,
       now = new Date(),
+      reconciliationRequired = false,
       reviewRequired = false,
       stepId,
     }: {
@@ -136,6 +137,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       leaseToken: string;
       nextAttemptAt?: Date;
       now?: Date;
+      reconciliationRequired?: boolean;
       reviewRequired?: boolean;
       stepId: string;
     }) {
@@ -145,6 +147,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
           leaseToken,
           safeError(error),
           nextAttemptAt?.toISOString(),
+          reconciliationRequired,
           reviewRequired,
           now.toISOString(),
         ]),
@@ -353,6 +356,7 @@ class PostgresIntegrationSql implements IntegrationSql {
             update public.integration_operation_steps
             set
               state = 'review_required',
+              requires_reconciliation = true,
               next_attempt_at = null,
               lease_token = null,
               worker_id = null,
@@ -389,6 +393,7 @@ class PostgresIntegrationSql implements IntegrationSql {
               set
                 state = 'succeeded',
                 result = ${this.sql.json(result as postgres.JSONValue)},
+                requires_reconciliation = false,
                 next_attempt_at = null,
                 last_error = null,
                 lease_token = null,
@@ -433,8 +438,23 @@ class PostgresIntegrationSql implements IntegrationSql {
         );
       }
       case "markStepFailed": {
-        const [stepId, leaseToken, error, nextAttemptAt, reviewRequired, changedAt] =
-          values as [string, string, string, string | undefined, boolean, string];
+        const [
+          stepId,
+          leaseToken,
+          error,
+          nextAttemptAt,
+          reconciliationRequired,
+          reviewRequired,
+          changedAt,
+        ] = values as [
+          string,
+          string,
+          string,
+          string | undefined,
+          boolean,
+          boolean,
+          string,
+        ];
         return this.steps(
           this.sql`
             with changed as (
@@ -442,6 +462,7 @@ class PostgresIntegrationSql implements IntegrationSql {
               set
                 state = ${reviewRequired ? "review_required" : "retrying"},
                 last_error = ${error},
+                requires_reconciliation = requires_reconciliation or ${reconciliationRequired},
                 next_attempt_at = ${nextAttemptAt ?? null},
                 lease_token = null,
                 worker_id = null,
@@ -770,6 +791,7 @@ function thisStepColumns(table?: string) {
           ${prefix}payload,
           ${prefix}state::text as "state",
           ${prefix}attempt_count as "attemptCount",
+          ${prefix}requires_reconciliation as "requiresReconciliation",
           ${prefix}next_attempt_at::text as "nextAttemptAt",
           ${prefix}lease_token::text as "leaseToken",
           ${prefix}worker_id as "workerId",

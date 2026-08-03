@@ -71,6 +71,7 @@ export type IntegrationOperationStep = {
   operationId: string;
   payload: Record<string, unknown>;
   result?: Record<string, unknown>;
+  requiresReconciliation: boolean;
   startedAt?: string;
   state: IntegrationStepState;
   stepKey: string;

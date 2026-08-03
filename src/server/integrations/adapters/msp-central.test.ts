@@ -143,6 +143,7 @@ describe("MSP Central integration adapters", () => {
             worklogType: "internal",
           },
           2,
+          true,
         ),
       ),
     ).resolves.toMatchObject({
@@ -175,6 +176,7 @@ describe("MSP Central integration adapters", () => {
             worklogType: "internal",
           },
           2,
+          true,
         ),
       ),
     ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
@@ -322,6 +324,7 @@ describe("MSP Central integration adapters", () => {
           "msp.merge_requests",
           { childRequestId: "duplicate-42", parentRequestId: "parent-7" },
           2,
+          true,
         ),
       ),
     ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
@@ -384,6 +387,7 @@ describe("MSP Central integration adapters", () => {
             subject: "Printer offline",
           },
           2,
+          true,
         ),
       ),
     ).resolves.toMatchObject({
@@ -392,12 +396,42 @@ describe("MSP Central integration adapters", () => {
     });
     expect(createRequest).not.toHaveBeenCalled();
   });
+
+  it("allows a remediated second attempt to write when no ambiguity was persisted", async () => {
+    const addRequestWorklog = vi.fn().mockResolvedValue(undefined);
+    const listRequestWorklogs = vi.fn();
+    const adapters = createMspCentralAdapters({
+      client: client({ addRequestWorklog, listRequestWorklogs }),
+    });
+
+    await expect(
+      adapters["msp.add_worklog"].execute(
+        step(
+          "msp.add_worklog",
+          {
+            description: "Completed diagnostics.",
+            durationMinutes: 15,
+            endedAt: "2026-08-04T10:15:00+10:00",
+            ownerId: "msp-simeon",
+            requestId: "request-42",
+            startedAt: "2026-08-04T10:00:00+10:00",
+            worklogType: "internal",
+          },
+          2,
+          false,
+        ),
+      ),
+    ).resolves.toEqual({});
+    expect(listRequestWorklogs).not.toHaveBeenCalled();
+    expect(addRequestWorklog).toHaveBeenCalledOnce();
+  });
 });
 
 function step(
   action: string,
   payload: Record<string, unknown>,
   attemptCount = 1,
+  requiresReconciliation = false,
 ): IntegrationOperationStep {
   return {
     action,
@@ -408,6 +442,7 @@ function step(
     leaseToken: "lease-1",
     operationId: "operation-1",
     payload,
+    requiresReconciliation,
     state: "processing",
     stepKey: action,
     stepOrder: 0,

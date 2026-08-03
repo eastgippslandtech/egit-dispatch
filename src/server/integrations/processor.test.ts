@@ -163,6 +163,7 @@ describe("integration processor", () => {
       leaseToken: "lease-1",
       nextAttemptAt: new Date(now.getTime() + delayMinutes * 60_000),
       now,
+      reconciliationRequired: false,
       reviewRequired: false,
       stepId: "step-1",
     });
@@ -173,11 +174,11 @@ describe("integration processor", () => {
   });
 
   it.each([
-    [new AuthenticationIntegrationError("refresh token rejected", 401), "authentication_required"],
-    [new PermanentIntegrationError("validation failed", 400), undefined],
-    [Object.assign(new Error("version conflict"), { status: 409 }), undefined],
-    [new AmbiguousIntegrationError("write outcome unknown"), "degraded"],
-  ])("moves non-retryable failures to review", async (failure, healthStatus) => {
+    [new AuthenticationIntegrationError("refresh token rejected", 401), "authentication_required", false],
+    [new PermanentIntegrationError("validation failed", 400), undefined, false],
+    [Object.assign(new Error("version conflict"), { status: 409 }), undefined, false],
+    [new AmbiguousIntegrationError("write outcome unknown"), "degraded", true],
+  ])("moves non-retryable failures to review", async (failure, healthStatus, reconciliationRequired) => {
     const harness = createHarness([makeStep()]);
     const processor = createIntegrationProcessor({
       clock: () => now,
@@ -197,6 +198,7 @@ describe("integration processor", () => {
     expect(result.reviewRequired).toBe(1);
     expect(harness.failed[0]).toMatchObject({
       nextAttemptAt: undefined,
+      reconciliationRequired,
       reviewRequired: true,
     });
     if (healthStatus) {
@@ -231,6 +233,7 @@ describe("integration processor", () => {
     expect(harness.failed[0]).toMatchObject({
       error: "timed out after sending",
       nextAttemptAt: undefined,
+      reconciliationRequired: true,
       reviewRequired: true,
     });
     expect(harness.audit[0]).toMatchObject({ errorCode: "ambiguous" });
@@ -402,6 +405,7 @@ function makeStep(
     leaseToken: "lease-1",
     operationId: "operation-1",
     payload: { subject: "Example" },
+    requiresReconciliation: false,
     startedAt: now.toISOString(),
     state: "processing",
     stepKey: "outlook.primary",

@@ -186,7 +186,7 @@ async function executeWithReconciliation({
   step: IntegrationOperationStep;
   write: () => Promise<IntegrationStepResult>;
 }) {
-  if (step.attemptCount > 1) {
+  if (step.requiresReconciliation) {
     try {
       const existing = await reconcile();
       if (existing) return { ...existing, reconciled: true };

@@ -34,6 +34,7 @@ create table public.integration_operation_steps (
     check (state in ('queued','processing','retrying','succeeded','review_required','cancelled')),
   attempt_count integer not null default 0
     check (attempt_count >= 0),
+  requires_reconciliation boolean not null default false,
   next_attempt_at timestamptz,
   lease_token uuid,
   worker_id varchar(128)

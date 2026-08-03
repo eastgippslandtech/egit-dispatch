@@ -173,10 +173,26 @@ async function bestEffortWake(operationId: string) {
 function localScheduleEvents(
   command: ValidLiveScheduleCommand,
 ): DispatchTestSyncEventInput[] {
+  const scheduleRoster = {
+    assignments: [
+      {
+        appointmentId: command.appointmentId,
+        outlookEventId: command.eventId,
+        technicianId: command.technicianId,
+      },
+      ...command.crew.map((member) => ({
+        appointmentId: `${command.appointmentId}-crew-${member.technicianId}`,
+        outlookEventId: member.eventId,
+        technicianId: member.technicianId,
+      })),
+    ],
+    groupId: command.appointmentId,
+  };
   const lead = localScheduleEvent({
     appointmentId: command.appointmentId,
     command,
     id: `live-schedule-${command.appointmentId}`,
+    scheduleRoster,
     technicianId: command.technicianId,
     travel: command.travel,
   });
@@ -188,6 +204,7 @@ function localScheduleEvents(
         command,
         id: `live-schedule-${command.appointmentId}-crew-${member.technicianId}`,
         role: "crew",
+        scheduleRoster,
         technicianId: member.technicianId,
         travel: member.travel ?? command.travel,
       }),
@@ -199,6 +216,7 @@ function localScheduleEvent({
   appointmentId,
   command,
   id,
+  scheduleRoster,
   technicianId,
   travel,
   role = "lead",
@@ -206,6 +224,14 @@ function localScheduleEvent({
   appointmentId: string;
   command: ValidLiveScheduleCommand;
   id: string;
+  scheduleRoster: {
+    assignments: Array<{
+      appointmentId: string;
+      outlookEventId?: string;
+      technicianId: string;
+    }>;
+    groupId: string;
+  };
   technicianId: string;
   travel?: TravelEstimate;
   role?: "crew" | "lead";
@@ -224,6 +250,7 @@ function localScheduleEvent({
         groupId: command.appointmentId,
         role,
       },
+      scheduleRoster,
       travel,
     },
     priority: command.priority,

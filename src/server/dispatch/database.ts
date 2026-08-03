@@ -46,6 +46,7 @@ type DispatchStaffRow = {
 
 type DispatchLinkRow = {
   assignmentRole: "crew" | "lead";
+  dispatchLinkId: string;
   id: string;
   lastSyncError: string | null;
   lastSyncStatus: string;
@@ -192,6 +193,7 @@ function selectDispatchRows(sql: postgres.Sql) {
     )
     select
       assignments.assignment_id::text as "id",
+      assignments.dispatch_link_id::text as "dispatchLinkId",
       assignments.assignment_role as "assignmentRole",
       dl.sdp_request_id as "sdpRequestId",
       dl.sdp_request_number as "sdpRequestNumber",
@@ -385,6 +387,8 @@ function mapAppointment(
     outlookEventId: row.outlookEventId ?? undefined,
     readOnly: true,
     requestId: row.sdpRequestId,
+    scheduleAssignmentRole: row.assignmentRole,
+    scheduleGroupId: row.dispatchLinkId,
     source: "linked",
     start: formatMelbourneTime(start),
     status: row.lastSyncStatus === "needs_review" ? "tentative" : "confirmed",

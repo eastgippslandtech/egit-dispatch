@@ -313,6 +313,83 @@ test("keeps the schedule confirmation open when provider sync needs review", asy
   expect(screen.getByText("Schedule request")).toBeInTheDocument();
 });
 
+test("rescheduling a refreshed crew appointment sends the parent schedule group", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    sourceSystem: "msp-central" as const,
+    status: "Scheduled" as const,
+    technicianId: data.technicians[0].id,
+  };
+  const lead = {
+    ...data.appointments[0],
+    calendarOwnerEmail: data.technicians[0].outlookEmail,
+    customer: request.customer,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "parent-link-1",
+    outlookEventId: "event-lead",
+    readOnly: false,
+    requestId: request.id,
+    scheduleAssignmentRole: "lead" as const,
+    scheduleGroupId: "parent-link-1",
+    start: "10:00",
+    technicianId: data.technicians[0].id,
+    title: request.subject,
+  };
+  const crew = {
+    ...lead,
+    calendarOwnerEmail: data.technicians[1].outlookEmail,
+    id: "crew-row-uuid",
+    outlookEventId: "event-crew",
+    scheduleAssignmentRole: "crew" as const,
+    technicianId: data.technicians[1].id,
+  };
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      operationId: "operation-reschedule-1",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [lead, crew],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+        selectedRequestId: request.id,
+      }}
+    />,
+  );
+
+  fireEvent.click(screen.getByTestId("timeline-appointment-crew-row-uuid"));
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Reschedule",
+    }),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("/api/internal/dispatch/live-schedule");
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    appointmentId: "parent-link-1",
+    previousAssignments: expect.arrayContaining([
+      expect.objectContaining({ eventId: "event-lead" }),
+      expect.objectContaining({ eventId: "event-crew" }),
+    ]),
+  });
+});
+
 test("does not claim manual calendar sync succeeded when review is required", async () => {
   const data = getDispatchDesignMockData();
   const fetchMock = vi.fn().mockResolvedValue({

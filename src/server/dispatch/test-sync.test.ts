@@ -210,6 +210,96 @@ describe("dispatch test sync overlays", () => {
     ]);
   });
 
+  it.each(["pending", "retrying", "review_required"] as const)(
+    "hides obsolete base crew while the lead-only roster is %s",
+    (status) => {
+      const dashboard = applyDispatchTestSyncEvents(
+        {
+          ...baseDashboard,
+          appointments: [
+            persistedAssignment("group-a", "group-a", "matt", "event-lead"),
+            persistedAssignment(
+              "crew-row-jervy",
+              "group-a",
+              "jervy",
+              "event-crew-jervy",
+              "crew",
+            ),
+            persistedAssignment(
+              "stale-lead-row",
+              "group-a",
+              "matt",
+              "event-old-lead",
+              "crew",
+            ),
+            persistedAssignment(
+              "group-b",
+              "group-b",
+              "jervy",
+              "event-unrelated",
+            ),
+          ],
+        },
+        [
+          normaliseDispatchTestSyncEvent({
+            appointmentId: "group-a",
+            bookingType: "Onsite",
+            createdAt: "2026-07-08T02:00:00.000Z",
+            date: "2026-07-08",
+            end: "12:00",
+            eventType: "rescheduled",
+            payload: {
+              liveSync: { status },
+              scheduleAssignment: {
+                assignmentKey: "group-a:matt",
+                groupId: "group-a",
+                role: "lead",
+              },
+              scheduleRoster: {
+                assignments: [
+                  {
+                    appointmentId: "group-a",
+                    outlookEventId: "event-lead",
+                    technicianId: "matt",
+                  },
+                ],
+                groupId: "group-a",
+              },
+              travel: travelEstimate("Sale", 25),
+            },
+            requestId: "req-1",
+            start: "11:00",
+            technicianId: "matt",
+          }),
+        ],
+      );
+
+      expect(
+        dashboard.appointments.map((appointment) => appointment.id),
+      ).toEqual(["group-a", "group-b"]);
+      expect(
+        dashboard.appointments.find(
+          (appointment) => appointment.id === "group-a",
+        ),
+      ).toMatchObject({
+        bookingType: "Onsite",
+        end: "12:00",
+        start: "11:00",
+        travelBackToOfficeMinutes: 25,
+        travelToSiteMinutes: 25,
+      });
+      expect(
+        dashboard.appointments.find(
+          (appointment) => appointment.id === "group-b",
+        ),
+      ).toMatchObject({
+        outlookEventId: "event-unrelated",
+        requestId: "req-1",
+        scheduleGroupId: "group-b",
+      });
+    },
+  );
+
   it("keeps a live scheduled booking visible and flags background sync failures", () => {
     const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
       normaliseDispatchTestSyncEvent({
@@ -486,5 +576,30 @@ function travelEstimate(
     travelEstimated: false,
     travelMode: "office_to_site_and_back" as const,
     travelToSiteMinutes: minutes,
+  };
+}
+
+function persistedAssignment(
+  id: string,
+  scheduleGroupId: string,
+  technicianId: string,
+  outlookEventId: string,
+  scheduleAssignmentRole: "crew" | "lead" = "lead",
+) {
+  return {
+    bookingType: "Remote" as const,
+    customer: "OneHarvest",
+    date: "2026-07-08",
+    end: "10:00",
+    id,
+    outlookEventId,
+    requestId: "req-1",
+    scheduleAssignmentRole,
+    scheduleGroupId,
+    source: "linked" as const,
+    start: "09:00",
+    status: "confirmed" as const,
+    technicianId,
+    title: "Printer offline",
   };
 }

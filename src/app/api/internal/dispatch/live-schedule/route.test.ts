@@ -180,6 +180,14 @@ describe("live dispatch schedule route", () => {
                 role: "lead",
               },
               travel: expect.objectContaining({ travelToSiteMinutes: 25 }),
+              scheduleRoster: {
+                assignments: expect.arrayContaining([
+                  expect.objectContaining({ technicianId: "tech-matt" }),
+                  expect.objectContaining({ technicianId: "tech-jervy" }),
+                  expect.objectContaining({ technicianId: "tech-riley" }),
+                ]),
+                groupId: "pending-live-123",
+              },
             }),
             technicianId: "tech-matt",
           }),
@@ -210,6 +218,30 @@ describe("live dispatch schedule route", () => {
         },
       }),
     );
+    const persistedEvents = vi.mocked(persist).mock.calls[0][0].events;
+    expect(persistedEvents).toHaveLength(3);
+    for (const event of persistedEvents) {
+      expect(event.payload?.scheduleRoster).toEqual({
+        assignments: [
+          {
+            appointmentId: "pending-live-123",
+            outlookEventId: undefined,
+            technicianId: "tech-matt",
+          },
+          {
+            appointmentId: "pending-live-123-crew-tech-jervy",
+            outlookEventId: undefined,
+            technicianId: "tech-jervy",
+          },
+          {
+            appointmentId: "pending-live-123-crew-tech-riley",
+            outlookEventId: undefined,
+            technicianId: "tech-riley",
+          },
+        ],
+        groupId: "pending-live-123",
+      });
+    }
   });
 
   it("rejects duplicate lead and crew technicians before local persistence", async () => {

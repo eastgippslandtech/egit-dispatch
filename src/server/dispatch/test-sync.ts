@@ -31,6 +31,22 @@ export type DispatchWorkLogPayload = {
   workType: BookingType;
 };
 
+type DispatchScheduleRoster = {
+  assignments: Array<{
+    appointmentId: string;
+    outlookEventId?: string;
+    technicianId: string;
+  }>;
+  groupId: string;
+};
+
+type DispatchLiveSyncStatus =
+  | "failed"
+  | "pending"
+  | "retrying"
+  | "review_required"
+  | "synced";
+
 export type DispatchTestSyncEvent = {
   id: string;
   eventType: DispatchTestSyncEventType;
@@ -48,13 +64,14 @@ export type DispatchTestSyncEvent = {
       error?: string;
       outlookEventId?: string;
       outlookWebLink?: string;
-      status: "failed" | "pending" | "synced";
+      status: DispatchLiveSyncStatus;
     };
     scheduleAssignment?: {
       assignmentKey: string;
       groupId: string;
       role: "crew" | "lead";
     };
+    scheduleRoster?: DispatchScheduleRoster;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   };
@@ -83,11 +100,18 @@ type DispatchTestSyncRow = {
   priority: Priority | null;
   notes: string | null;
   payload: {
+    liveSync?: {
+      error?: string;
+      outlookEventId?: string;
+      outlookWebLink?: string;
+      status: DispatchLiveSyncStatus;
+    };
     scheduleAssignment?: {
       assignmentKey: string;
       groupId: string;
       role: "crew" | "lead";
     };
+    scheduleRoster?: DispatchScheduleRoster;
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   } | null;
@@ -133,13 +157,17 @@ export function applyDispatchTestSyncEvents(
   }
 
   const requests = dashboard.requests.map((request) => ({ ...request }));
-  const appointments = dashboard.appointments.map((appointment) => ({
-    ...appointment,
-  }));
-
-  for (const event of [...events].sort((first, second) =>
+  const sortedEvents = [...events].sort((first, second) =>
     first.createdAt.localeCompare(second.createdAt),
-  )) {
+  );
+  const authoritativeRosters = getAuthoritativeScheduleRosters(sortedEvents);
+  const appointments = dashboard.appointments
+    .filter((appointment) =>
+      isRetainedByAuthoritativeRoster(appointment, authoritativeRosters),
+    )
+    .map((appointment) => ({ ...appointment }));
+
+  for (const event of sortedEvents) {
     if (event.eventType === "cancelled") {
       const appointmentIndex = appointments.findIndex((appointment) =>
         appointmentMatchesEvent(appointment, event),
@@ -421,6 +449,55 @@ export function getDispatchTestSyncClient(
     databaseUrl,
     shouldUseSsl(databaseUrl) ? "require" : false,
   );
+}
+
+function getAuthoritativeScheduleRosters(events: DispatchTestSyncEvent[]) {
+  const rosters = new Map<string, DispatchScheduleRoster>();
+
+  for (const event of events) {
+    const roster = event.payload?.scheduleRoster;
+    if (!roster) {
+      continue;
+    }
+
+    if (event.payload?.liveSync?.status === "synced") {
+      rosters.delete(roster.groupId);
+    } else {
+      rosters.set(roster.groupId, roster);
+    }
+  }
+
+  return rosters;
+}
+
+function isRetainedByAuthoritativeRoster(
+  appointment: Appointment,
+  rosters: Map<string, DispatchScheduleRoster>,
+) {
+  if (!appointment.scheduleGroupId) {
+    return true;
+  }
+
+  const roster = rosters.get(appointment.scheduleGroupId);
+  if (!roster) {
+    return true;
+  }
+
+  return roster.assignments.some((assignment) => {
+    if (assignment.technicianId !== appointment.technicianId) {
+      return false;
+    }
+
+    if (assignment.outlookEventId && appointment.outlookEventId) {
+      return assignment.outlookEventId === appointment.outlookEventId;
+    }
+
+    if (assignment.appointmentId === appointment.id) {
+      return true;
+    }
+
+    return !assignment.outlookEventId || !appointment.outlookEventId;
+  });
 }
 
 export async function removeObsoleteDispatchScheduleAssignments(

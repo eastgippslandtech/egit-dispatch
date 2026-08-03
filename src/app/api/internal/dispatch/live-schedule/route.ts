@@ -178,11 +178,13 @@ function localScheduleEvents(
       {
         appointmentId: command.appointmentId,
         outlookEventId: command.eventId,
+        role: "lead" as const,
         technicianId: command.technicianId,
       },
       ...command.crew.map((member) => ({
         appointmentId: `${command.appointmentId}-crew-${member.technicianId}`,
         outlookEventId: member.eventId,
+        role: "crew" as const,
         technicianId: member.technicianId,
       })),
     ],
@@ -191,6 +193,7 @@ function localScheduleEvents(
   const lead = localScheduleEvent({
     appointmentId: command.appointmentId,
     command,
+    existingOutlookEventId: command.eventId,
     id: `live-schedule-${command.appointmentId}`,
     scheduleRoster,
     technicianId: command.technicianId,
@@ -202,6 +205,7 @@ function localScheduleEvents(
       localScheduleEvent({
         appointmentId: `${command.appointmentId}-crew-${member.technicianId}`,
         command,
+        existingOutlookEventId: member.eventId,
         id: `live-schedule-${command.appointmentId}-crew-${member.technicianId}`,
         role: "crew",
         scheduleRoster,
@@ -215,6 +219,7 @@ function localScheduleEvents(
 function localScheduleEvent({
   appointmentId,
   command,
+  existingOutlookEventId,
   id,
   scheduleRoster,
   technicianId,
@@ -223,11 +228,13 @@ function localScheduleEvent({
 }: {
   appointmentId: string;
   command: ValidLiveScheduleCommand;
+  existingOutlookEventId?: string;
   id: string;
   scheduleRoster: {
     assignments: Array<{
       appointmentId: string;
       outlookEventId?: string;
+      role: "crew" | "lead";
       technicianId: string;
     }>;
     groupId: string;
@@ -244,7 +251,10 @@ function localScheduleEvent({
     eventType: command.scheduleAction,
     id,
     payload: {
-      liveSync: { status: "pending" },
+      liveSync: {
+        outlookEventId: existingOutlookEventId,
+        status: "pending",
+      },
       scheduleAssignment: {
         assignmentKey: `${command.appointmentId}:${technicianId}`,
         groupId: command.appointmentId,

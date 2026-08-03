@@ -191,6 +191,181 @@ describe("dispatch test sync overlays", () => {
     expect(dashboard.requests[0].technicianId).toBe("matt");
   });
 
+  it("updates persisted lead and crew once using roster Outlook identity", () => {
+    const roster = {
+      assignments: [
+        {
+          appointmentId: "group-a",
+          outlookEventId: "event-lead",
+          role: "lead" as const,
+          technicianId: "matt",
+        },
+        {
+          appointmentId: "group-a-crew-jervy",
+          outlookEventId: "event-crew-jervy",
+          role: "crew" as const,
+          technicianId: "jervy",
+        },
+      ],
+      groupId: "group-a",
+    };
+    const dashboard = applyDispatchTestSyncEvents(
+      {
+        ...baseDashboard,
+        appointments: [
+          persistedAssignment("group-a", "group-a", "matt", "event-lead"),
+          persistedAssignment(
+            "crew-row-jervy",
+            "group-a",
+            "jervy",
+            "event-crew-jervy",
+            "crew",
+          ),
+        ],
+      },
+      [
+        retainedRescheduleEvent({
+          appointmentId: "group-a",
+          role: "lead",
+          roster,
+          technicianId: "matt",
+          travel: travelEstimate("Sale", 25),
+        }),
+        retainedRescheduleEvent({
+          appointmentId: "group-a-crew-jervy",
+          role: "crew",
+          roster,
+          technicianId: "jervy",
+          travel: travelEstimate("Bairnsdale", 10),
+        }),
+      ],
+    );
+
+    expect(dashboard.appointments).toHaveLength(2);
+    expect(dashboard.appointments).toEqual([
+      expect.objectContaining({
+        bookingType: "Onsite",
+        id: "group-a",
+        start: "11:00",
+        technicianId: "matt",
+        travelToSiteMinutes: 25,
+      }),
+      expect.objectContaining({
+        bookingType: "Onsite",
+        id: "crew-row-jervy",
+        start: "11:00",
+        technicianId: "jervy",
+        travelToSiteMinutes: 10,
+      }),
+    ]);
+  });
+
+  it("matches multiple no-ID crew by group technician and role only", () => {
+    const roster = {
+      assignments: [
+        {
+          appointmentId: "group-a",
+          role: "lead" as const,
+          technicianId: "matt",
+        },
+        {
+          appointmentId: "group-a-crew-jervy",
+          role: "crew" as const,
+          technicianId: "jervy",
+        },
+        {
+          appointmentId: "group-a-crew-riley",
+          role: "crew" as const,
+          technicianId: "riley",
+        },
+      ],
+      groupId: "group-a",
+    };
+    const dashboard = applyDispatchTestSyncEvents(
+      {
+        ...baseDashboard,
+        appointments: [
+          persistedAssignment("group-a", "group-a", "matt"),
+          persistedAssignment(
+            "crew-row-jervy",
+            "group-a",
+            "jervy",
+            undefined,
+            "crew",
+          ),
+          persistedAssignment(
+            "crew-row-riley",
+            "group-a",
+            "riley",
+            undefined,
+            "crew",
+          ),
+          persistedAssignment(
+            "stale-jervy-lead",
+            "group-a",
+            "jervy",
+            undefined,
+            "lead",
+          ),
+          persistedAssignment("group-b", "group-b", "jervy"),
+        ],
+      },
+      [
+        retainedRescheduleEvent({
+          appointmentId: "group-a",
+          role: "lead",
+          roster,
+          technicianId: "matt",
+          travel: travelEstimate("Sale", 25),
+        }),
+        retainedRescheduleEvent({
+          appointmentId: "group-a-crew-jervy",
+          role: "crew",
+          roster,
+          technicianId: "jervy",
+          travel: travelEstimate("Bairnsdale", 10),
+        }),
+        retainedRescheduleEvent({
+          appointmentId: "group-a-crew-riley",
+          role: "crew",
+          roster,
+          technicianId: "riley",
+          travel: travelEstimate("Bairnsdale", 15),
+        }),
+      ],
+    );
+
+    expect(dashboard.appointments.map((appointment) => appointment.id)).toEqual([
+      "group-a",
+      "crew-row-jervy",
+      "crew-row-riley",
+      "group-b",
+    ]);
+    expect(
+      dashboard.appointments.filter(
+        (appointment) => appointment.scheduleGroupId === "group-a",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        technicianId: "matt",
+        travelToSiteMinutes: 25,
+      }),
+      expect.objectContaining({
+        technicianId: "jervy",
+        travelToSiteMinutes: 10,
+      }),
+      expect.objectContaining({
+        technicianId: "riley",
+        travelToSiteMinutes: 15,
+      }),
+    ]);
+    expect(dashboard.appointments.at(-1)).toMatchObject({
+      id: "group-b",
+      requestId: "req-1",
+      start: "09:00",
+    });
+  });
+
   it("does not collapse separate time slots for the same request", () => {
     const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
       scheduleEvent("booking-morning", "matt", "09:00", "10:00"),
@@ -535,6 +710,9 @@ function scheduleEvent(
   end: string,
   travel = travelEstimate("Bairnsdale", 0),
 ) {
+  const groupId = appointmentId.includes("-crew-")
+    ? appointmentId.slice(0, appointmentId.indexOf("-crew-"))
+    : appointmentId;
   return normaliseDispatchTestSyncEvent({
     appointmentId,
     bookingType: "Onsite",
@@ -544,8 +722,8 @@ function scheduleEvent(
     eventType: "scheduled",
     payload: {
       scheduleAssignment: {
-        assignmentKey: `booking-1:${technicianId}`,
-        groupId: "booking-1",
+        assignmentKey: `${groupId}:${technicianId}`,
+        groupId,
         role: appointmentId.includes("-crew-") ? "crew" : "lead",
       },
       travel,
@@ -579,11 +757,57 @@ function travelEstimate(
   };
 }
 
+function retainedRescheduleEvent({
+  appointmentId,
+  role,
+  roster,
+  technicianId,
+  travel,
+}: {
+  appointmentId: string;
+  role: "crew" | "lead";
+  roster: {
+    assignments: Array<{
+      appointmentId: string;
+      outlookEventId?: string;
+      role: "crew" | "lead";
+      technicianId: string;
+    }>;
+    groupId: string;
+  };
+  technicianId: string;
+  travel: ReturnType<typeof travelEstimate>;
+}) {
+  const createdAtMinute =
+    technicianId === "matt" ? "00" : technicianId === "jervy" ? "01" : "02";
+  return normaliseDispatchTestSyncEvent({
+    appointmentId,
+    bookingType: "Onsite",
+    createdAt: `2026-07-08T02:${createdAtMinute}:00.000Z`,
+    date: "2026-07-08",
+    end: "12:00",
+    eventType: "rescheduled",
+    payload: {
+      liveSync: { status: "pending" },
+      scheduleAssignment: {
+        assignmentKey: `group-a:${technicianId}`,
+        groupId: "group-a",
+        role,
+      },
+      scheduleRoster: roster,
+      travel,
+    },
+    requestId: "req-1",
+    start: "11:00",
+    technicianId,
+  });
+}
+
 function persistedAssignment(
   id: string,
   scheduleGroupId: string,
   technicianId: string,
-  outlookEventId: string,
+  outlookEventId?: string,
   scheduleAssignmentRole: "crew" | "lead" = "lead",
 ) {
   return {

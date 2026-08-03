@@ -150,6 +150,7 @@ describe("live dispatch schedule route", () => {
         validCommand({
           crew: [
             {
+              eventId: "event-crew-jervy",
               technicianEmail: "jervy@egit.com.au",
               technicianId: "tech-jervy",
               technicianName: "Jervy",
@@ -157,6 +158,7 @@ describe("live dispatch schedule route", () => {
               userPrincipalName: "jervy@egit.com.au",
             },
             {
+              eventId: "event-crew-riley",
               technicianEmail: "riley@egit.com.au",
               technicianId: "tech-riley",
               technicianName: "Riley",
@@ -164,6 +166,7 @@ describe("live dispatch schedule route", () => {
               userPrincipalName: "riley@egit.com.au",
             },
           ],
+          eventId: "event-lead",
           travel: travelEstimate("Sale", 25),
         }),
       ),
@@ -174,6 +177,10 @@ describe("live dispatch schedule route", () => {
         events: [
           expect.objectContaining({
             payload: expect.objectContaining({
+              liveSync: {
+                outlookEventId: "event-lead",
+                status: "pending",
+              },
               scheduleAssignment: {
                 assignmentKey: "pending-live-123:tech-matt",
                 groupId: "pending-live-123",
@@ -194,6 +201,10 @@ describe("live dispatch schedule route", () => {
           expect.objectContaining({
             appointmentId: "pending-live-123-crew-tech-jervy",
             payload: expect.objectContaining({
+              liveSync: {
+                outlookEventId: "event-crew-jervy",
+                status: "pending",
+              },
               scheduleAssignment: expect.objectContaining({ role: "crew" }),
               travel: expect.objectContaining({ travelToSiteMinutes: 10 }),
             }),
@@ -202,6 +213,10 @@ describe("live dispatch schedule route", () => {
           expect.objectContaining({
             appointmentId: "pending-live-123-crew-tech-riley",
             payload: expect.objectContaining({
+              liveSync: {
+                outlookEventId: "event-crew-riley",
+                status: "pending",
+              },
               scheduleAssignment: expect.objectContaining({ role: "crew" }),
               travel: expect.objectContaining({ travelToSiteMinutes: 15 }),
             }),
@@ -225,17 +240,20 @@ describe("live dispatch schedule route", () => {
         assignments: [
           {
             appointmentId: "pending-live-123",
-            outlookEventId: undefined,
+            outlookEventId: "event-lead",
+            role: "lead",
             technicianId: "tech-matt",
           },
           {
             appointmentId: "pending-live-123-crew-tech-jervy",
-            outlookEventId: undefined,
+            outlookEventId: "event-crew-jervy",
+            role: "crew",
             technicianId: "tech-jervy",
           },
           {
             appointmentId: "pending-live-123-crew-tech-riley",
-            outlookEventId: undefined,
+            outlookEventId: "event-crew-riley",
+            role: "crew",
             technicianId: "tech-riley",
           },
         ],

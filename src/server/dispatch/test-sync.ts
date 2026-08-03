@@ -35,6 +35,7 @@ type DispatchScheduleRoster = {
   assignments: Array<{
     appointmentId: string;
     outlookEventId?: string;
+    role?: "crew" | "lead";
     technicianId: string;
   }>;
   groupId: string;
@@ -488,6 +489,13 @@ function isRetainedByAuthoritativeRoster(
       return false;
     }
 
+    if (
+      assignment.role &&
+      assignment.role !== appointment.scheduleAssignmentRole
+    ) {
+      return false;
+    }
+
     if (assignment.outlookEventId && appointment.outlookEventId) {
       return assignment.outlookEventId === appointment.outlookEventId;
     }
@@ -554,13 +562,18 @@ function appointmentMatchesEvent(
   event: DispatchTestSyncEvent,
 ) {
   const syncedOutlookEventId = event.payload?.liveSync?.outlookEventId;
+  const scheduleAssignment = event.payload?.scheduleAssignment;
 
   return Boolean(
     (event.appointmentId && appointment.id === event.appointmentId) ||
       (syncedOutlookEventId &&
         appointment.outlookEventId === syncedOutlookEventId &&
         (!event.technicianId ||
-          appointment.technicianId === event.technicianId)),
+          appointment.technicianId === event.technicianId)) ||
+      (scheduleAssignment &&
+        appointment.scheduleGroupId === scheduleAssignment.groupId &&
+        appointment.technicianId === event.technicianId &&
+        appointment.scheduleAssignmentRole === scheduleAssignment.role),
   );
 }
 

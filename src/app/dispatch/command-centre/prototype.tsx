@@ -18,6 +18,7 @@ import {
   Meh,
   MessageSquare,
   Monitor,
+  PlugZap,
   PhoneCall,
   Plus,
   RefreshCw,
@@ -101,6 +102,12 @@ import {
 } from "@/server/dispatch/current-time";
 import { formatTalkTime } from "@/server/yeastar/talk-time";
 import {
+  GlobalIntegrationStatus,
+  operationStateForRequest,
+  type TrackedIntegrationOperation,
+  useTrackedIntegrationOperations,
+} from "./operation-status";
+import {
   applyTravelToAppointment,
   buildAppointmentTravel,
   getAppointmentBlockedWindow,
@@ -130,6 +137,11 @@ type LiveScheduleResult = {
   webLink?: string;
 };
 
+type IntegrationOperationReceipt = {
+  operationId?: string;
+  status?: IntegrationReceiptStatus;
+};
+
 export function integrationReceiptDisposition(
   status?: IntegrationReceiptStatus,
 ): {
@@ -137,7 +149,7 @@ export function integrationReceiptDisposition(
   phase: "pending" | "retrying" | "review_required" | "synced";
 } {
   if (status === "review_required") {
-    return { closeForm: false, phase: "review_required" };
+    return { closeForm: true, phase: "review_required" };
   }
   if (status === "retrying") {
     return { closeForm: true, phase: "retrying" };
@@ -214,6 +226,28 @@ type QueueView = "assigned" | "unscheduled";
 type SearchState = "dimmed" | "match" | "normal";
 type SeenTicketUpdateIds = Set<string>;
 type WorkLogTarget = { appointmentId?: string; requestId: string };
+
+export function resolveWorkLogAppointment(
+  appointments: Appointment[],
+  appointmentId?: string,
+) {
+  if (!appointmentId) return undefined;
+  return appointments.find((appointment) => appointment.id === appointmentId);
+}
+
+function requestWithIntegrationState(
+  request: DispatchRequest,
+  state?: TrackedIntegrationOperation["state"],
+) {
+  const warnings = request.warnings.filter(
+    (warning) => warning !== "Syncing" && warning !== "Review required",
+  );
+  if (state === "review_required") warnings.unshift("Review required");
+  else if (state === "queued" || state === "syncing" || state === "retrying") {
+    warnings.unshift("Syncing");
+  }
+  return { ...request, warnings };
+}
 
 export function reconcileDashboardWithPendingWritebacks(
   current: DispatchDashboardData,
@@ -376,9 +410,11 @@ function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
 export function CommandCentrePrototype({
   authDisabled = false,
   data,
+  showIntegrations = false,
 }: {
   authDisabled?: boolean;
   data: DispatchDashboardData;
+  showIntegrations?: boolean;
 }) {
   const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
@@ -410,6 +446,31 @@ export function CommandCentrePrototype({
     useState<WorkLogTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
+  const integrationTracker = useTrackedIntegrationOperations();
+
+  function trackIntegrationReceipt(
+    receipt: { operationId?: string; status?: IntegrationReceiptStatus },
+    target: { appointmentId?: string; requestId?: string } = {},
+  ) {
+    if (!receipt.operationId || !receipt.status || receipt.status === "synced") return;
+    integrationTracker.track({
+      appointmentId: target.appointmentId,
+      operationId: receipt.operationId,
+      requestId: target.requestId,
+      state: receipt.status,
+    });
+  }
+
+  function openWorkLog(requestId: string, appointmentId?: string) {
+    const requestBookings = dashboard.appointments.filter(
+      (appointment) => appointment.requestId === requestId,
+    );
+    if (!appointmentId && requestBookings.length > 0) {
+      setTicketWorkspaceTarget({ requestId });
+      return;
+    }
+    setWorkLogTarget({ appointmentId, requestId });
+  }
 
   useEffect(() => {
     if (!toast) {
@@ -568,6 +629,16 @@ export function CommandCentrePrototype({
     queueSearch,
     topSearch,
   });
+  const displayRequests = useMemo(
+    () =>
+      dashboard.requests.map((request) =>
+        requestWithIntegrationState(
+          request,
+          operationStateForRequest(integrationTracker.operations, request.id),
+        ),
+      ),
+    [dashboard.requests, integrationTracker.operations],
+  );
 
   function clearAllFilters() {
     setTopSearch("");
@@ -627,14 +698,14 @@ export function CommandCentrePrototype({
       idempotencyKey,
       parentRequestId: parentRequest.id,
     });
+    trackIntegrationReceipt(result, { requestId: childRequest.id });
     const receipt = integrationReceiptDisposition(result.status);
-    if (receipt.phase === "review_required") {
-      throw new Error("Merge needs review before it can reach MSP Central.");
-    }
     setMergeRequestId(undefined);
     setToast(
       receipt.phase === "synced"
         ? `${childRequest.requestNumber} merged in MSP Central.`
+        : receipt.phase === "review_required"
+          ? `${childRequest.requestNumber} merge saved locally. Provider sync needs review.`
         : receipt.phase === "retrying"
           ? `${childRequest.requestNumber} merge queued. MSP Central sync is retrying.`
           : `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
@@ -736,13 +807,10 @@ export function CommandCentrePrototype({
     const selectedWorklogRequest = dashboard.requests.find(
       (candidate) => candidate.id === requestId,
     );
-    const worklogAppointment =
-      dashboard.appointments.find(
-        (candidate) => candidate.id === workLogTarget?.appointmentId,
-      ) ??
-      dashboard.appointments.find(
-        (candidate) => candidate.requestId === requestId,
-      );
+    const worklogAppointment = resolveWorkLogAppointment(
+      dashboard.appointments,
+      workLogTarget?.appointmentId,
+    );
     if (!selectedWorklogRequest) return;
 
     const trimmedNotes = notes.trim();
@@ -761,6 +829,7 @@ export function CommandCentrePrototype({
     const liveWorklog =
       dashboard.dispatchDataSource === "msp-central" &&
       selectedWorklogRequest.sourceSystem === "msp-central";
+    let worklogReceiptStatus: IntegrationReceiptStatus | undefined;
     const scheduled = Boolean(
       worklogAppointment || selectedWorklogRequest.scheduledStart,
     );
@@ -803,12 +872,11 @@ export function CommandCentrePrototype({
           visibility,
           workType,
         });
-        if (result.status === "review_required") {
-          setToast(
-            `Work Log needs review before it can sync: ${result.error ?? "open Integrations to review it"}`,
-          );
-          return;
-        }
+        trackIntegrationReceipt(result, {
+          appointmentId: worklogAppointment?.id,
+          requestId,
+        });
+        worklogReceiptStatus = result.status;
       } catch (error) {
         setToast(
           error instanceof Error
@@ -830,7 +898,7 @@ export function CommandCentrePrototype({
           workTypeLabel(workType),
           billable ? "billable" : "non-billable",
           liveWorklog ? "MSP Central" : "mock/test-sync",
-        ].join(" · ");
+        ].join(" / ");
 
         return {
           ...request,
@@ -946,9 +1014,11 @@ export function CommandCentrePrototype({
     setWorkLogTarget(undefined);
     setToast(
       liveWorklog
-        ? disposition === "complete"
-          ? "Work Log queued. Ticket completion is syncing."
-          : "Work Log and outcome queued for sync."
+        ? worklogReceiptStatus === "review_required"
+          ? "Work Log saved locally. Provider sync needs review."
+          : disposition === "complete"
+            ? "Work Log queued. Ticket completion is syncing."
+            : "Work Log and outcome queued for sync."
         : disposition === "complete"
           ? "Work Log saved and ticket resolved locally for test sync."
           : disposition
@@ -1573,6 +1643,13 @@ export function CommandCentrePrototype({
         return;
       }
 
+      if (liveSchedule && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId,
+          requestId: request.id,
+        });
+      }
+
       if (liveSchedule) {
         pendingWritebackRequestIds.current.add(request.id);
         if (
@@ -1582,8 +1659,6 @@ export function CommandCentrePrototype({
           setToast(
             `${request.requestNumber} was saved locally, but provider sync needs review.`,
           );
-          router.refresh();
-          return;
         }
       }
 
@@ -1794,6 +1869,13 @@ export function CommandCentrePrototype({
         return;
       }
 
+      if (liveSchedule && request && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId: pendingSchedule.appointmentId,
+          requestId: request.id,
+        });
+      }
+
       if (liveSchedule && request) {
         pendingWritebackRequestIds.current.add(request.id);
         if (
@@ -1803,8 +1885,6 @@ export function CommandCentrePrototype({
           setToast(
             "The move was saved locally, but provider sync needs review.",
           );
-          router.refresh();
-          return;
         }
       }
 
@@ -2009,6 +2089,10 @@ export function CommandCentrePrototype({
           leadTechnicianId,
         ),
       });
+      trackIntegrationReceipt(liveEvent, {
+        appointmentId: selectedAppointment.id,
+        requestId: selectedRequest.id,
+      });
 
       const receipt = integrationReceiptDisposition(liveEvent.status);
       if (receipt.phase === "review_required") {
@@ -2057,6 +2141,8 @@ export function CommandCentrePrototype({
           calendarStatusLabel={dashboard.calendarStatusLabel}
           date={selectedDateLabel}
           dateKey={selectedDateKey}
+          integrationOperations={integrationTracker.operations}
+          showIntegrations={showIntegrations}
           technicians={dashboard.technicians}
           timezone={dashboard.timezone}
           viewMode={viewMode}
@@ -2327,7 +2413,10 @@ export function CommandCentrePrototype({
                     request.sourceSystem === "msp-central" ||
                     request.sourceSystem === "msp-central-fixture"
                   }
-                  request={request}
+                  request={requestWithIntegrationState(
+                    request,
+                    integrationTracker.stateForRequest(request.id),
+                  )}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
@@ -2370,7 +2459,7 @@ export function CommandCentrePrototype({
               <WeekPlanner
                 appointments={weekAppointments}
                 dragPayload={dragPayload}
-                requests={dashboard.requests}
+                requests={displayRequests}
                 seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
@@ -2398,7 +2487,7 @@ export function CommandCentrePrototype({
                 dropPreview={dropPreview}
                 globalSearch={topSearch}
                 activeHealth={activeHealth}
-                requests={dashboard.requests}
+                requests={displayRequests}
                 seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
@@ -2425,9 +2514,8 @@ export function CommandCentrePrototype({
           <DetailDrawer
             appointment={selectedAppointment}
             calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
-            onOpenWorkLog={(requestId, appointmentId) =>
-              setWorkLogTarget({ appointmentId, requestId })
-            }
+            integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
+            onOpenWorkLog={openWorkLog}
             onOpenWorkspace={(requestId, appointmentId) =>
               setTicketWorkspaceTarget({ appointmentId, requestId })
             }
@@ -2460,14 +2548,10 @@ export function CommandCentrePrototype({
         ) : null}
         {workLogTarget ? (
           <WorkLogModal
-            appointment={
-              dashboard.appointments.find(
-                (appointment) => appointment.id === workLogTarget.appointmentId,
-              ) ??
-              dashboard.appointments.find(
-                (appointment) => appointment.requestId === workLogTarget.requestId,
-              )
-            }
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              workLogTarget.appointmentId,
+            )}
             key={`${workLogTarget.requestId}:${workLogTarget.appointmentId ?? "request"}`}
             liveWriteback={
               dashboard.dispatchDataSource === "msp-central" &&
@@ -2494,16 +2578,14 @@ export function CommandCentrePrototype({
         ) : null}
         {ticketWorkspaceTarget ? (
           <TicketWorkspaceModal
-            appointment={
-              dashboard.appointments.find(
-                (appointment) =>
-                  appointment.id === ticketWorkspaceTarget.appointmentId,
-              ) ??
-              dashboard.appointments.find(
-                (appointment) =>
-                  appointment.requestId === ticketWorkspaceTarget.requestId,
-              )
-            }
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              ticketWorkspaceTarget.appointmentId,
+            )}
+            appointments={dashboard.appointments.filter(
+              (appointment) =>
+                appointment.requestId === ticketWorkspaceTarget.requestId,
+            )}
             liveWriteback={
               dashboard.dispatchDataSource === "msp-central" &&
               dashboard.requests.find(
@@ -2516,14 +2598,21 @@ export function CommandCentrePrototype({
             onClose={() => setTicketWorkspaceTarget(undefined)}
             onOpenWorkLog={(requestId, appointmentId) => {
               setTicketWorkspaceTarget(undefined);
-              setWorkLogTarget({ appointmentId, requestId });
+              openWorkLog(requestId, appointmentId);
             }}
-            onSaved={(status) => {
+            onSaved={(result) => {
+              setTicketWorkspaceTarget(undefined);
+              trackIntegrationReceipt(result, {
+                appointmentId: ticketWorkspaceTarget.appointmentId,
+                requestId: ticketWorkspaceTarget.requestId,
+              });
               router.refresh();
-              const receipt = integrationReceiptDisposition(status);
+              const receipt = integrationReceiptDisposition(result.status);
               setToast(
                 receipt.phase === "synced"
                   ? "Communication saved in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Communication saved locally. Provider sync needs review."
                   : receipt.phase === "retrying"
                     ? "Communication queued. MSP Central sync is retrying."
                     : "Communication queued. Syncing with MSP Central.",
@@ -2534,13 +2623,18 @@ export function CommandCentrePrototype({
         {createRequestOpen ? (
           <CreateRequestModal
             onCancel={() => setCreateRequestOpen(false)}
-            onCreated={(status) => {
+            onCreated={(result) => {
               setCreateRequestOpen(false);
               setQueueView("unscheduled");
-              const receipt = integrationReceiptDisposition(status);
+              trackIntegrationReceipt(result, {
+                requestId: result.pendingRequestId,
+              });
+              const receipt = integrationReceiptDisposition(result.status);
               setToast(
                 receipt.phase === "synced"
                   ? "Request created in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Request saved locally. Provider sync needs review."
                   : receipt.phase === "retrying"
                     ? "Request creation queued. MSP Central sync is retrying."
                     : "Request creation queued. Syncing with MSP Central.",
@@ -2671,7 +2765,11 @@ async function publishMspCentralRequestMerge(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string; status?: IntegrationReceiptStatus }
+    | {
+        error?: string;
+        operationId?: string;
+        status?: IntegrationReceiptStatus;
+      }
     | null;
 
   if (!response.ok) {
@@ -2693,6 +2791,7 @@ async function publishMspCentralWorklog(
   const body = (await response.json().catch(() => null)) as
     | {
         error?: string;
+        operationId?: string;
         status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
       }
     | null;
@@ -2702,6 +2801,7 @@ async function publishMspCentralWorklog(
   }
   return {
     error: body?.error,
+    operationId: body?.operationId,
     status: body?.status ?? ("queued" as const),
   };
 }
@@ -2814,6 +2914,9 @@ function scheduleReceiptMessage(
   if (receipt.phase === "retrying") {
     return `${requestNumber} scheduled locally. Provider sync is retrying.`;
   }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} scheduled locally. Provider sync needs review.`;
+  }
   return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
 }
 
@@ -2824,6 +2927,9 @@ function moveReceiptMessage(status?: IntegrationReceiptStatus) {
   }
   if (receipt.phase === "retrying") {
     return "Appointment moved locally. Provider sync is retrying.";
+  }
+  if (receipt.phase === "review_required") {
+    return "Appointment moved locally. Provider sync needs review.";
   }
   return "Appointment moved. Syncing with MSP Central and Outlook.";
 }
@@ -2838,6 +2944,9 @@ function manualSyncReceiptMessage(
   }
   if (receipt.phase === "retrying") {
     return `${requestNumber} sync is queued and retrying.`;
+  }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} sync needs review.`;
   }
   return `${requestNumber} sync queued for MSP Central and Outlook.`;
 }
@@ -3475,7 +3584,7 @@ function CreateRequestModal({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: (status?: IntegrationReceiptStatus) => void;
+  onCreated: (result: IntegrationOperationReceipt & { pendingRequestId?: string }) => void;
 }) {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -3502,12 +3611,7 @@ function CreateRequestModal({
         subject: subject.trim(),
       });
       if (!created.operationId) throw new Error("Request was not queued.");
-      const receipt = integrationReceiptDisposition(created.status);
-      if (receipt.phase === "review_required") {
-        setError("Request creation needs review before it reaches MSP Central.");
-        return;
-      }
-      onCreated(created.status);
+      onCreated(created);
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -3628,6 +3732,7 @@ function CreateRequestModal({
 
 function TicketWorkspaceModal({
   appointment,
+  appointments,
   liveWriteback,
   onClose,
   onOpenWorkLog,
@@ -3635,10 +3740,11 @@ function TicketWorkspaceModal({
   request,
 }: {
   appointment?: Appointment;
+  appointments: Appointment[];
   liveWriteback: boolean;
   onClose: () => void;
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
-  onSaved: (status?: IntegrationReceiptStatus) => void;
+  onSaved: (result: IntegrationOperationReceipt) => void;
   request?: DispatchRequest;
 }) {
   const [tab, setTab] = useState<"comms" | "details">("details");
@@ -3649,6 +3755,7 @@ function TicketWorkspaceModal({
   const [message, setMessage] = useState("");
   const [visibility, setVisibility] = useState<"customer" | "internal">("customer");
   const [sending, setSending] = useState(false);
+  const [bookingChoiceId, setBookingChoiceId] = useState(appointment?.id ?? "");
   const pendingCommunication = useRef<{
     idempotencyKey: string;
     message: string;
@@ -3687,8 +3794,10 @@ function TicketWorkspaceModal({
 
   if (!request) return null;
   const latestRequest = context?.request ?? request;
-  const scheduledTime = appointment
-    ? `${appointment.start}-${appointment.end}`
+  const chosenAppointment =
+    appointment ?? resolveWorkLogAppointment(appointments, bookingChoiceId);
+  const scheduledTime = chosenAppointment
+    ? `${chosenAppointment.start}-${chosenAppointment.end}`
     : latestRequest.scheduledStart
       ? `${formatTime(latestRequest.scheduledStart)}-${formatTime(latestRequest.scheduledEnd ?? latestRequest.scheduledStart)}`
       : "Not scheduled";
@@ -3718,14 +3827,9 @@ function TicketWorkspaceModal({
         requestId: request.id,
         visibility: command.visibility,
       });
-      const receipt = integrationReceiptDisposition(result.status);
-      if (receipt.phase === "review_required") {
-        setError("Communication needs review before it reaches MSP Central.");
-        return;
-      }
       pendingCommunication.current = undefined;
       setMessage("");
-      onSaved(result.status);
+      onSaved(result);
     } catch (sendError) {
       setError(
         sendError instanceof Error
@@ -3754,10 +3858,30 @@ function TicketWorkspaceModal({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {!appointment && appointments.length > 0 ? (
+              <label className="text-xs font-semibold text-slate-300">
+                Booking for Work Log
+                <select
+                  aria-label="Booking for Work Log"
+                  className="ml-2 rounded-md border border-white/10 bg-[#111d30] px-2 py-2 text-xs text-slate-100"
+                  value={bookingChoiceId}
+                  onChange={(event) => setBookingChoiceId(event.target.value)}
+                >
+                  <option value="">Choose booking</option>
+                  {appointments.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.date ?? "Current day"} {candidate.start}-{candidate.end} · {candidate.technicianId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <button
-              className="flex items-center gap-2 rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1"
+              className="flex items-center gap-2 rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!appointment && appointments.length > 0 && !chosenAppointment}
+              title={!appointment && appointments.length > 0 && !chosenAppointment ? "Choose the exact booking before recording time." : "Open Work Log for this booking."}
               type="button"
-              onClick={() => onOpenWorkLog(request.id, appointment?.id)}
+              onClick={() => onOpenWorkLog(request.id, chosenAppointment?.id)}
             >
               <Clock3 className="h-4 w-4" />
               Work Log
@@ -4690,6 +4814,8 @@ function CommandHeader({
   calendarStatusLabel,
   date,
   dateKey,
+  integrationOperations,
+  showIntegrations,
   searchValue,
   onClearSearch,
   onDateChange,
@@ -4706,6 +4832,8 @@ function CommandHeader({
   calendarStatusLabel?: string;
   date: string;
   dateKey: string;
+  integrationOperations: TrackedIntegrationOperation[];
+  showIntegrations: boolean;
   searchValue: string;
   onClearSearch: () => void;
   onDateChange: (dateKey: string) => void;
@@ -4813,6 +4941,18 @@ function CommandHeader({
             ) : null}
           </label>
           <PresenceControls technicians={technicians} />
+          {showIntegrations ? (
+            <>
+              <GlobalIntegrationStatus localOperations={integrationOperations} />
+              <Link
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+                href="/integrations"
+              >
+                <PlugZap className="h-4 w-4" />
+                Integrations
+              </Link>
+            </>
+          ) : null}
           <Link
             className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
             href="/calls"
@@ -5693,6 +5833,8 @@ function WeekAppointmentCard({
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
   const priorityClass = bookingCardPriorityClass(request?.priority);
 
   return (
@@ -5730,6 +5872,8 @@ function WeekAppointmentCard({
               dataTestId={`week-ticket-update-${appointment.id}`}
             />
           ) : null}
+          {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+          {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
           {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
         </span>
       </div>
@@ -6024,6 +6168,8 @@ function TimelineAppointment({
   trackWidth: number;
 }) {
   const warning = Boolean(appointment.syncIssue);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
   const segments = getTimelineAppointmentSegments(appointment);
   const priorityClass = bookingCardPriorityClass(request?.priority);
   return (
@@ -6087,6 +6233,8 @@ function TimelineAppointment({
                 dataTestId={`timeline-ticket-update-${appointment.id}`}
               />
             ) : null}
+            {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+            {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
             {warning || appointment.travelWarning ? (
               <MailWarning className="h-3.5 w-3.5 shrink-0" />
             ) : null}
@@ -6241,6 +6389,7 @@ function TravelSideExtension({
 function DetailDrawer({
   appointment,
   calendarWriteEnabled,
+  integrationState,
   onOpenWorkLog,
   onOpenWorkspace,
   onReschedule,
@@ -6251,6 +6400,7 @@ function DetailDrawer({
 }: {
   appointment?: Appointment;
   calendarWriteEnabled: boolean;
+  integrationState?: TrackedIntegrationOperation["state"];
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
   onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
   onReschedule: (appointment: Appointment) => void;
@@ -6296,6 +6446,20 @@ function DetailDrawer({
           />
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
+          {integrationState === "review_required" ? (
+            <Link
+              className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100"
+              href="/integrations"
+            >
+              Review required
+            </Link>
+          ) : integrationState === "queued" ||
+            integrationState === "syncing" ||
+            integrationState === "retrying" ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-100">
+              <RefreshCw className="h-3 w-3 animate-spin" /> Syncing
+            </span>
+          ) : null}
           {(request?.warnings ?? outlookWarnings(appointment)).map((warning) => (
             <Badge key={warning} tone="warning">
               {warning}

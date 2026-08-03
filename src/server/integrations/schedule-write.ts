@@ -2,6 +2,7 @@ import type { DispatchTestSyncEventInput } from "@/server/dispatch/test-sync";
 import {
   getDispatchTestSyncClient,
   recordDispatchTestSyncEvent,
+  removeObsoleteDispatchScheduleAssignments,
 } from "@/server/dispatch/test-sync";
 
 import { createPostgresIntegrationRepository } from "./repository";
@@ -15,6 +16,12 @@ type EnqueueResult = {
 type AtomicScheduleTransaction = {
   enqueue(input: EnqueueIntegrationOperation): Promise<EnqueueResult>;
   record(input: DispatchTestSyncEventInput, createdBy: string): Promise<unknown>;
+  removeObsolete(input: ScheduleReconciliation): Promise<unknown>;
+};
+
+type ScheduleReconciliation = {
+  retainedEventIds: string[];
+  scheduleGroupId: string;
 };
 
 export function createAtomicScheduleWriter({
@@ -29,10 +36,14 @@ export function createAtomicScheduleWriter({
       createdBy: string;
       events: DispatchTestSyncEventInput[];
       operation: EnqueueIntegrationOperation;
+      reconciliation?: ScheduleReconciliation;
     }): Promise<EnqueueResult> {
       return transaction(async (current) => {
         for (const event of input.events) {
           await current.record(event, input.createdBy);
+        }
+        if (input.reconciliation) {
+          await current.removeObsolete(input.reconciliation);
         }
         return current.enqueue(input.operation);
       });
@@ -57,6 +68,8 @@ export function createPostgresAtomicScheduleWriter({
             repository.enqueueInCurrentTransaction(operation),
           record: (event, createdBy) =>
             recordDispatchTestSyncEvent(event, createdBy, currentSql),
+          removeObsolete: (input) =>
+            removeObsoleteDispatchScheduleAssignments(input, currentSql),
         });
       }) as unknown as ReturnType<typeof callback>,
   });

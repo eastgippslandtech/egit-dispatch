@@ -137,6 +137,79 @@ describe("dispatch test sync overlays", () => {
     );
   });
 
+  it("round trips a lead and two crew as distinct appointments", () => {
+    const leadTravel = travelEstimate("Sale", 25);
+    const jervyTravel = travelEstimate("Bairnsdale", 10);
+    const rileyTravel = travelEstimate("Bairnsdale", 15);
+    const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
+      scheduleEvent("booking-1", "matt", "10:00", "11:00", leadTravel),
+      scheduleEvent(
+        "booking-1-crew-jervy",
+        "jervy",
+        "10:00",
+        "11:00",
+        jervyTravel,
+      ),
+      scheduleEvent(
+        "booking-1-crew-riley",
+        "riley",
+        "10:00",
+        "11:00",
+        rileyTravel,
+      ),
+    ]);
+
+    expect(
+      dashboard.appointments
+        .filter((appointment) => appointment.requestId === "req-1")
+        .map((appointment) => ({
+          bookingType: appointment.bookingType,
+          id: appointment.id,
+          technicianId: appointment.technicianId,
+          travelToSiteMinutes: appointment.travelToSiteMinutes,
+        })),
+    ).toEqual([
+      {
+        bookingType: "Onsite",
+        id: "booking-1",
+        technicianId: "matt",
+        travelToSiteMinutes: 25,
+      },
+      {
+        bookingType: "Onsite",
+        id: "booking-1-crew-jervy",
+        technicianId: "jervy",
+        travelToSiteMinutes: 10,
+      },
+      {
+        bookingType: "Onsite",
+        id: "booking-1-crew-riley",
+        technicianId: "riley",
+        travelToSiteMinutes: 15,
+      },
+    ]);
+    expect(dashboard.requests[0].technicianId).toBe("matt");
+  });
+
+  it("does not collapse separate time slots for the same request", () => {
+    const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
+      scheduleEvent("booking-morning", "matt", "09:00", "10:00"),
+      scheduleEvent("booking-afternoon", "matt", "14:00", "15:00"),
+    ]);
+
+    expect(
+      dashboard.appointments
+        .filter((appointment) => appointment.requestId === "req-1")
+        .map((appointment) => ({
+          id: appointment.id,
+          start: appointment.start,
+        })),
+    ).toEqual([
+      { id: "booking-morning", start: "09:00" },
+      { id: "booking-afternoon", start: "14:00" },
+    ]);
+  });
+
   it("keeps a live scheduled booking visible and flags background sync failures", () => {
     const dashboard = applyDispatchTestSyncEvents(baseDashboard, [
       normaliseDispatchTestSyncEvent({
@@ -205,6 +278,11 @@ describe("dispatch test sync overlays", () => {
               outlookEventId: "event-1",
               status: "synced",
             },
+            scheduleAssignment: {
+              assignmentKey: "pending-live-req-1:matt",
+              groupId: "pending-live-req-1",
+              role: "lead",
+            },
           },
           requestId: "req-1",
           start: "09:30",
@@ -222,8 +300,60 @@ describe("dispatch test sync overlays", () => {
       id: "outlook-matt-event-1",
       requestId: "req-1",
       readOnly: false,
+      scheduleAssignmentRole: "lead",
+      scheduleGroupId: "pending-live-req-1",
       source: "linked",
     });
+  });
+
+  it("uses Outlook event and technician identity when event IDs repeat across calendars", () => {
+    const dashboard = applyDispatchTestSyncEvents(
+      {
+        ...baseDashboard,
+        appointments: [
+          {
+            ...baseDashboard.appointments[0],
+            id: "outlook-matt-shared",
+            outlookEventId: "shared-event-id",
+            technicianId: "matt",
+          },
+          {
+            ...baseDashboard.appointments[0],
+            id: "outlook-jervy-shared",
+            outlookEventId: "shared-event-id",
+            technicianId: "jervy",
+          },
+        ],
+      },
+      [
+        normaliseDispatchTestSyncEvent({
+          createdAt: "2026-07-08T00:00:00.000Z",
+          date: "2026-07-08",
+          end: "12:00",
+          eventType: "rescheduled",
+          payload: {
+            liveSync: {
+              outlookEventId: "shared-event-id",
+              status: "synced",
+            },
+          },
+          requestId: "req-1",
+          start: "11:00",
+          technicianId: "jervy",
+        }),
+      ],
+    );
+
+    expect(
+      dashboard.appointments.find(
+        (appointment) => appointment.id === "outlook-matt-shared",
+      ),
+    ).toMatchObject({ requestId: "req-2", start: "10:00" });
+    expect(
+      dashboard.appointments.find(
+        (appointment) => appointment.id === "outlook-jervy-shared",
+      ),
+    ).toMatchObject({ requestId: "req-1", start: "11:00" });
   });
 
   it("moves an existing appointment between technicians", () => {
@@ -307,3 +437,54 @@ describe("dispatch test sync overlays", () => {
     expect(dashboard.requests[0].warnings).toContain("Work Log added");
   });
 });
+
+function scheduleEvent(
+  appointmentId: string,
+  technicianId: string,
+  start: string,
+  end: string,
+  travel = travelEstimate("Bairnsdale", 0),
+) {
+  return normaliseDispatchTestSyncEvent({
+    appointmentId,
+    bookingType: "Onsite",
+    createdAt: `2026-07-08T${start}:00.000Z`,
+    date: "2026-07-08",
+    end,
+    eventType: "scheduled",
+    payload: {
+      scheduleAssignment: {
+        assignmentKey: `booking-1:${technicianId}`,
+        groupId: "booking-1",
+        role: appointmentId.includes("-crew-") ? "crew" : "lead",
+      },
+      travel,
+    },
+    requestId: "req-1",
+    start,
+    technicianId,
+  });
+}
+
+function travelEstimate(
+  officeOriginName: "Bairnsdale" | "Sale",
+  minutes: number,
+) {
+  const officeOriginId = officeOriginName.toLowerCase() as
+    | "bairnsdale"
+    | "sale";
+  return {
+    officeOriginAddress:
+      officeOriginId === "sale"
+        ? "387 Raymond Street, Sale VIC 3850"
+        : "137 Main Street, Bairnsdale VIC 3875",
+    officeOriginId,
+    officeOriginName,
+    travelBackToOfficeMinutes: minutes,
+    travelCalculatedFrom: "technician_base_office" as const,
+    travelCalculationReason: "Estimated from technician base office",
+    travelEstimated: false,
+    travelMode: "office_to_site_and_back" as const,
+    travelToSiteMinutes: minutes,
+  };
+}

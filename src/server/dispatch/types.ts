@@ -101,6 +101,8 @@ export type Appointment = {
   id: string;
   date?: string;
   requestId?: string;
+  scheduleAssignmentRole?: "crew" | "lead";
+  scheduleGroupId?: string;
   helpdeskUrl?: string;
   technicianId: string;
   title: string;

@@ -9,10 +9,6 @@ create table if not exists public.worklog_disposition_operations (
   last_error text,
   worklog_saved_at timestamptz,
   completed_at timestamptz,
-  execution_owner text
-    check (execution_owner is null or execution_owner in ('legacy', 'generic')),
-  migrated_operation_id uuid unique,
-  migrated_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint worklog_disposition_value_check check (

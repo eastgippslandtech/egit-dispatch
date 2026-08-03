@@ -50,6 +50,11 @@ export type DispatchTestSyncEvent = {
       outlookWebLink?: string;
       status: "failed" | "pending" | "synced";
     };
+    scheduleAssignment?: {
+      assignmentKey: string;
+      groupId: string;
+      role: "crew" | "lead";
+    };
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   };
@@ -78,6 +83,11 @@ type DispatchTestSyncRow = {
   priority: Priority | null;
   notes: string | null;
   payload: {
+    scheduleAssignment?: {
+      assignmentKey: string;
+      groupId: string;
+      role: "crew" | "lead";
+    };
     travel?: TravelEstimate;
     workLog?: DispatchWorkLogPayload;
   } | null;
@@ -204,7 +214,7 @@ export function applyDispatchTestSyncEvents(
     const scheduledStart = mockIsoTime(event.date, event.start);
     const scheduledEnd = mockIsoTime(event.date, event.end);
 
-    if (request) {
+    if (request && event.payload?.scheduleAssignment?.role !== "crew") {
       const liveSync = event.payload?.liveSync;
       const liveSyncWarnings =
         liveSync?.status === "failed"
@@ -238,6 +248,12 @@ export function applyDispatchTestSyncEvents(
             ...appointments[appointmentIndex],
             requestId:
               event.requestId ?? appointments[appointmentIndex].requestId,
+            scheduleAssignmentRole:
+              event.payload?.scheduleAssignment?.role ??
+              appointments[appointmentIndex].scheduleAssignmentRole,
+            scheduleGroupId:
+              event.payload?.scheduleAssignment?.groupId ??
+              appointments[appointmentIndex].scheduleGroupId,
             technicianId: event.technicianId,
             date: event.date,
             start: event.start,
@@ -279,6 +295,8 @@ export function applyDispatchTestSyncEvents(
           {
             id: event.appointmentId ?? `test-sync-${request.id}`,
             requestId: request.id,
+            scheduleAssignmentRole: event.payload?.scheduleAssignment?.role,
+            scheduleGroupId: event.payload?.scheduleAssignment?.groupId,
             technicianId: event.technicianId,
             title: request.subject,
             customer: request.customer,
@@ -405,6 +423,31 @@ export function getDispatchTestSyncClient(
   );
 }
 
+export async function removeObsoleteDispatchScheduleAssignments(
+  {
+    retainedEventIds,
+    scheduleGroupId,
+  }: {
+    retainedEventIds: string[];
+    scheduleGroupId: string;
+  },
+  transactionSql?: postgres.Sql,
+) {
+  const sql = transactionSql ?? getDispatchTestSyncClient();
+  const legacyCrewPrefix = `${scheduleGroupId}-crew-`;
+
+  await sql`
+    delete from dispatch_test_schedule_events
+     where event_type in ('scheduled', 'rescheduled')
+       and (
+         payload #>> '{scheduleAssignment,groupId}' = ${scheduleGroupId}
+         or appointment_id = ${scheduleGroupId}
+         or left(appointment_id, ${legacyCrewPrefix.length}) = ${legacyCrewPrefix}
+       )
+       and id not in ${sql(retainedEventIds)}
+  `;
+}
+
 function rowToDispatchTestSyncEvent(
   row: DispatchTestSyncRow,
 ): DispatchTestSyncEvent {
@@ -437,9 +480,10 @@ function appointmentMatchesEvent(
 
   return Boolean(
     (event.appointmentId && appointment.id === event.appointmentId) ||
-      (event.requestId && appointment.requestId === event.requestId) ||
       (syncedOutlookEventId &&
-        appointment.outlookEventId === syncedOutlookEventId),
+        appointment.outlookEventId === syncedOutlookEventId &&
+        (!event.technicianId ||
+          appointment.technicianId === event.technicianId)),
   );
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -84,18 +85,6 @@ describe("durable integration schema", () => {
     expect(sql).toContain("(request_id, created_at desc)");
     expect(sql).toContain("create index integration_operations_failed_idx");
     expect(sql).toContain("create index integration_connector_health_freshness_idx");
-    expect(sql).toContain(
-      "foreign key (migrated_operation_id) references public.integration_operations(id)",
-    );
-
-    const legacySql = fs.readFileSync(
-      path.join(migrationsDir, "20260801103000_worklog_disposition_operations.sql"),
-      "utf8",
-    );
-    expect(legacySql).toContain("execution_owner text");
-    expect(legacySql).toContain("migrated_operation_id uuid unique");
-    expect(legacySql).toContain("migrated_at timestamptz");
-
     for (const table of [
       "integration_operations",
       "integration_operation_steps",
@@ -109,4 +98,65 @@ describe("durable integration schema", () => {
       );
     }
   });
+
+  it("adds legacy Work Log migration links through forward-only upgrades", () => {
+    const migrationsDir = path.resolve(process.cwd(), "supabase/migrations");
+    const originalName =
+      "20260801103000_worklog_disposition_operations.sql";
+    const columnsName =
+      "20260802120000_worklog_disposition_operation_migration_links.sql";
+    const integrationName = "20260803101626_integration_operations.sql";
+    const foreignKeyName =
+      "20260803103000_worklog_disposition_operation_migration_fk.sql";
+    const originalSql = normalizedMigration(
+      fs.readFileSync(path.join(migrationsDir, originalName), "utf8"),
+    );
+    const integrationSql = normalizedMigration(
+      fs.readFileSync(path.join(migrationsDir, integrationName), "utf8"),
+    );
+
+    expect(sha256(originalSql)).toBe(
+      "0fae6b3511fea967459c6a0bb965f0332a92ba7d47d4dbafce248de2b48dd3d9",
+    );
+    expect(originalSql).not.toContain("execution_owner");
+    expect(originalSql).not.toContain("migrated_operation_id");
+    expect(originalSql).not.toContain("migrated_at");
+    expect(sha256(integrationSql)).toBe(
+      "45b912a2d8ad6bad370a8890e6fda0da840813e11159e49132ead5da27005090",
+    );
+
+    expect(originalName < columnsName).toBe(true);
+    expect(columnsName < integrationName).toBe(true);
+    expect(integrationName < foreignKeyName).toBe(true);
+
+    const columnsSql = fs.readFileSync(
+      path.join(migrationsDir, columnsName),
+      "utf8",
+    );
+    expect(columnsSql).toContain("add column if not exists execution_owner text");
+    expect(columnsSql).toContain(
+      "add column if not exists migrated_operation_id uuid",
+    );
+    expect(columnsSql).toContain("add column if not exists migrated_at timestamptz");
+    expect(columnsSql).toContain(
+      "create unique index if not exists worklog_disposition_migrated_operation_uidx",
+    );
+
+    const foreignKeySql = fs.readFileSync(
+      path.join(migrationsDir, foreignKeyName),
+      "utf8",
+    );
+    expect(foreignKeySql).toContain("if not exists (");
+    expect(foreignKeySql).toContain(
+      "foreign key (migrated_operation_id) references public.integration_operations(id)",
+    );
+  });
 });
+
+function normalizedMigration(sql: string) {
+  return `${sql.replace(/\r\n/g, "\n").replace(/\n*$/, "")}\n`;
+}
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}

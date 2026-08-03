@@ -47,6 +47,7 @@ type LiveScheduleCrewMember = {
   technicianEmail?: string;
   technicianId?: string;
   technicianName?: string;
+  travel?: TravelEstimate;
   userPrincipalName?: string;
 };
 
@@ -111,13 +112,18 @@ export async function POST(request: Request) {
       start: requiredPayloadString(queuedWork.payload, "start"),
     };
 
+    const localEvents = localScheduleEvents(localCommand);
     const writer = createPostgresAtomicScheduleWriter({
       databaseUrl: readDispatchConfig().databaseUrl,
     });
     const { operation } = await writer.persist({
       createdBy: access.email,
-      events: localScheduleEvents(localCommand),
+      events: localEvents,
       operation: queuedWork,
+      reconciliation: {
+        retainedEventIds: localEvents.map((event) => event.id!),
+        scheduleGroupId: command.appointmentId,
+      },
     });
 
     after(() => bestEffortWake(operation.id));
@@ -181,7 +187,9 @@ function localScheduleEvents(
         appointmentId: `${command.appointmentId}-crew-${member.technicianId}`,
         command,
         id: `live-schedule-${command.appointmentId}-crew-${member.technicianId}`,
+        role: "crew",
         technicianId: member.technicianId,
+        travel: member.travel ?? command.travel,
       }),
     ),
   ];
@@ -193,12 +201,14 @@ function localScheduleEvent({
   id,
   technicianId,
   travel,
+  role = "lead",
 }: {
   appointmentId: string;
   command: ValidLiveScheduleCommand;
   id: string;
   technicianId: string;
   travel?: TravelEstimate;
+  role?: "crew" | "lead";
 }): DispatchTestSyncEventInput {
   return {
     appointmentId,
@@ -209,6 +219,11 @@ function localScheduleEvent({
     id,
     payload: {
       liveSync: { status: "pending" },
+      scheduleAssignment: {
+        assignmentKey: `${command.appointmentId}:${technicianId}`,
+        groupId: command.appointmentId,
+        role,
+      },
       travel,
     },
     priority: command.priority,
@@ -239,6 +254,7 @@ function validateCommand(command: LiveScheduleCommand, request: Request) {
     technicianEmail: clean(member.technicianEmail),
     technicianId: clean(member.technicianId),
     technicianName: clean(member.technicianName),
+    travel: member.travel,
     userPrincipalName: clean(member.userPrincipalName),
   }));
   if (crew.some((member) => !member.technicianId || !member.userPrincipalName)) {
@@ -278,6 +294,7 @@ function validateCommand(command: LiveScheduleCommand, request: Request) {
       technicianEmail?: string;
       technicianId: string;
       technicianName?: string;
+      travel?: TravelEstimate;
       userPrincipalName: string;
     }>,
     customer: clean(command.customer),

@@ -144,7 +144,7 @@ describe("live dispatch schedule route", () => {
     );
   });
 
-  it("persists lead and crew assignments together so crew survive refresh", async () => {
+  it("persists lead and two crew with distinct travel context so all survive refresh", async () => {
     await POST(
       requestWith(
         validCommand({
@@ -153,9 +153,18 @@ describe("live dispatch schedule route", () => {
               technicianEmail: "jervy@egit.com.au",
               technicianId: "tech-jervy",
               technicianName: "Jervy",
+              travel: travelEstimate("Bairnsdale", 10),
               userPrincipalName: "jervy@egit.com.au",
             },
+            {
+              technicianEmail: "riley@egit.com.au",
+              technicianId: "tech-riley",
+              technicianName: "Riley",
+              travel: travelEstimate("Bairnsdale", 15),
+              userPrincipalName: "riley@egit.com.au",
+            },
           ],
+          travel: travelEstimate("Sale", 25),
         }),
       ),
     );
@@ -163,12 +172,42 @@ describe("live dispatch schedule route", () => {
     expect(persist).toHaveBeenCalledWith(
       expect.objectContaining({
         events: [
-          expect.objectContaining({ technicianId: "tech-matt" }),
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              scheduleAssignment: {
+                assignmentKey: "pending-live-123:tech-matt",
+                groupId: "pending-live-123",
+                role: "lead",
+              },
+              travel: expect.objectContaining({ travelToSiteMinutes: 25 }),
+            }),
+            technicianId: "tech-matt",
+          }),
           expect.objectContaining({
             appointmentId: "pending-live-123-crew-tech-jervy",
+            payload: expect.objectContaining({
+              scheduleAssignment: expect.objectContaining({ role: "crew" }),
+              travel: expect.objectContaining({ travelToSiteMinutes: 10 }),
+            }),
             technicianId: "tech-jervy",
           }),
+          expect.objectContaining({
+            appointmentId: "pending-live-123-crew-tech-riley",
+            payload: expect.objectContaining({
+              scheduleAssignment: expect.objectContaining({ role: "crew" }),
+              travel: expect.objectContaining({ travelToSiteMinutes: 15 }),
+            }),
+            technicianId: "tech-riley",
+          }),
         ],
+        reconciliation: {
+          retainedEventIds: [
+            "live-schedule-pending-live-123",
+            "live-schedule-pending-live-123-crew-tech-jervy",
+            "live-schedule-pending-live-123-crew-tech-riley",
+          ],
+          scheduleGroupId: "pending-live-123",
+        },
       }),
     );
   });
@@ -213,6 +252,29 @@ function validCommand(overrides: Record<string, unknown> = {}) {
     technicianName: "Matt",
     userPrincipalName: "mattd@egit.com.au",
     ...overrides,
+  };
+}
+
+function travelEstimate(
+  officeOriginName: "Bairnsdale" | "Sale",
+  minutes: number,
+) {
+  const officeOriginId = officeOriginName.toLowerCase() as
+    | "bairnsdale"
+    | "sale";
+  return {
+    officeOriginAddress:
+      officeOriginId === "sale"
+        ? "387 Raymond Street, Sale VIC 3850"
+        : "137 Main Street, Bairnsdale VIC 3875",
+    officeOriginId,
+    officeOriginName,
+    travelBackToOfficeMinutes: minutes,
+    travelCalculatedFrom: "technician_base_office",
+    travelCalculationReason: "Estimated from technician base office",
+    travelEstimated: false,
+    travelMode: "office_to_site_and_back",
+    travelToSiteMinutes: minutes,
   };
 }
 

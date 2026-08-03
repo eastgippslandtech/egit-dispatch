@@ -318,6 +318,7 @@ type PendingSchedule =
     }
   | {
       appointmentId: string;
+      scheduleGroupId: string;
       bookingType: BookingType;
       crewTechnicianIds?: string[];
       durationMinutes: number;
@@ -358,6 +359,19 @@ type DispatchTestSyncEventPayload = {
   start?: string;
   technicianId?: string;
 };
+
+function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
+  if (anchor.scheduleGroupId) {
+    return candidate.scheduleGroupId === anchor.scheduleGroupId;
+  }
+
+  return (
+    candidate.requestId === anchor.requestId &&
+    candidate.date === anchor.date &&
+    candidate.start === anchor.start &&
+    candidate.end === anchor.end
+  );
+}
 
 export function CommandCentrePrototype({
   authDisabled = false,
@@ -1126,12 +1140,13 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      scheduleGroupId: appointment.scheduleGroupId ?? appointment.id,
       bookingType,
       crewTechnicianIds: request
         ? dashboard.appointments
             .filter(
               (candidate) =>
-                candidate.requestId === request.id &&
+                sameScheduledBooking(candidate, appointment) &&
                 candidate.technicianId !== technicianId,
             )
             .map((candidate) => candidate.technicianId)
@@ -1486,6 +1501,7 @@ export function CommandCentrePrototype({
           ),
           technicianId,
           technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: buildTravel(request, technicianId, bookingType),
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
             technicianId,
@@ -1665,7 +1681,10 @@ export function CommandCentrePrototype({
       let liveEvent: LiveScheduleResult | undefined;
       const currentTeamAppointments = request
         ? dashboard.appointments.filter(
-            (appointment) => appointment.requestId === request.id,
+            (appointment) =>
+              currentAppointment
+                ? sameScheduledBooking(appointment, currentAppointment)
+                : false,
           )
         : currentAppointment
           ? [currentAppointment]
@@ -1681,6 +1700,9 @@ export function CommandCentrePrototype({
           ),
           technicianId,
           technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: request
+            ? buildTravel(request, technicianId, bookingType)
+            : undefined,
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
             technicianId,
@@ -1705,7 +1727,7 @@ export function CommandCentrePrototype({
       try {
         if (liveSchedule && request) {
           liveEvent = await publishLiveSchedule({
-            appointmentId: pendingSchedule.appointmentId,
+            appointmentId: pendingSchedule.scheduleGroupId,
             bookingType,
             crew,
             customer: request.customer,
@@ -1788,7 +1810,10 @@ export function CommandCentrePrototype({
 
       let movedAppointments = request
         ? dashboard.appointments.filter(
-            (appointment) => appointment.requestId !== request.id,
+            (appointment) =>
+              !currentTeamAppointments.some(
+                (current) => current.id === appointment.id,
+              ),
           )
         : dashboard.appointments;
       const selectedTechnicianIds = [
@@ -1899,7 +1924,8 @@ export function CommandCentrePrototype({
 
     try {
       const teamAppointments = dashboard.appointments.filter(
-        (appointment) => appointment.requestId === selectedRequest.id,
+        (appointment) =>
+          sameScheduledBooking(appointment, selectedAppointment),
       );
       const leadTechnicianId = teamAppointments.some(
         (appointment) =>
@@ -1928,6 +1954,11 @@ export function CommandCentrePrototype({
           technicianName: technicianLabel(
             dashboard.technicians,
             appointment.technicianId,
+          ),
+          travel: buildTravel(
+            selectedRequest,
+            appointment.technicianId,
+            appointment.bookingType ?? bookingTypeForRequest(selectedRequest),
           ),
           userPrincipalName: technicianOutlookIdentity(
             dashboard.technicians,
@@ -2572,6 +2603,7 @@ async function publishLiveSchedule(event: {
     technicianEmail?: string;
     technicianId: string;
     technicianName: string;
+    travel?: TravelEstimate;
     userPrincipalName: string;
   }>;
   customer: string;

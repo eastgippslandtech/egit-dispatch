@@ -35,6 +35,7 @@ describe("atomic schedule writer", () => {
           record: async (event) => {
             stagedEvents.push(event);
           },
+          removeObsolete: async () => undefined,
         });
         committedEvents.push(...stagedEvents);
         committedOperations.push(...stagedOperations);
@@ -56,7 +57,8 @@ describe("atomic schedule writer", () => {
       replayed: false,
     }));
     const writer = createAtomicScheduleWriter({
-      transaction: async (callback) => callback({ enqueue, record }),
+      transaction: async (callback) =>
+        callback({ enqueue, record, removeObsolete: async () => undefined }),
     });
 
     await writer.persist({ createdBy: "simeon@egit.com.au", events, operation });
@@ -66,6 +68,36 @@ describe("atomic schedule writer", () => {
     expect(record).toHaveBeenNthCalledWith(2, events[1], "simeon@egit.com.au");
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue).toHaveBeenCalledWith(operation);
+  });
+
+  it("removes an obsolete crew assignment inside the schedule transaction", async () => {
+    const record = vi.fn(async () => undefined);
+    const removeObsolete = vi.fn(async () => undefined);
+    const enqueue = vi.fn(async () => ({
+      operation: { id: "operation-1", state: "queued" as const },
+      replayed: false,
+    }));
+    const writer = createAtomicScheduleWriter({
+      transaction: async (callback) =>
+        callback({ enqueue, record, removeObsolete } as never),
+    });
+
+    await writer.persist({
+      createdBy: "simeon@egit.com.au",
+      events,
+      operation,
+      reconciliation: {
+        retainedEventIds: events.map((event) => event.id!),
+        scheduleGroupId: "booking-123",
+      },
+    } as never);
+
+    expect(removeObsolete).toHaveBeenCalledWith({
+      retainedEventIds: ["lead", "crew-jervy"],
+      scheduleGroupId: "booking-123",
+    });
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(enqueue).toHaveBeenCalledOnce();
   });
 });
 

@@ -37,6 +37,41 @@ export type IntegrationSql = {
 export type IntegrationRepository = ReturnType<typeof createIntegrationRepository>;
 
 export function createIntegrationRepository(sql: IntegrationSql) {
+  async function enqueueInCurrentTransaction(input: EnqueueIntegrationOperation) {
+    const inputFingerprint = fingerprintOperationInput(input);
+    const actorEmail = normalizeEmail(input.actorEmail);
+    const existing = (await sql.query("findOperationByKey", [
+      input.idempotencyKey,
+    ])) as IntegrationOperation[];
+    if (existing[0]) {
+      assertMatchingInput(existing[0], inputFingerprint);
+      return { operation: existing[0], replayed: true };
+    }
+
+    const inserted = (await sql.query("insertOperation", [
+      input,
+      inputFingerprint,
+      actorEmail,
+    ])) as IntegrationOperation[];
+    const operation = inserted[0];
+    if (!operation) {
+      const conflicted = (await sql.query("findOperationByKey", [
+        input.idempotencyKey,
+      ])) as IntegrationOperation[];
+      const replay = requiredRow<IntegrationOperation>(
+        conflicted,
+        "Integration operation could not be stored.",
+      );
+      assertMatchingInput(replay, inputFingerprint);
+      return { operation: replay, replayed: true };
+    }
+
+    for (const [stepOrder, step] of input.steps.entries()) {
+      await sql.query("insertStep", [operation.id, step, stepOrder]);
+    }
+    return { operation, replayed: false };
+  }
+
   return {
     async appendAudit(input: IntegrationAuditEvent) {
       await sql.query("appendAudit", [sanitizeAuditEvent(input)]);
@@ -73,41 +108,12 @@ export function createIntegrationRepository(sql: IntegrationSql) {
     },
 
     async enqueue(input: EnqueueIntegrationOperation) {
-      const inputFingerprint = fingerprintOperationInput(input);
-      const actorEmail = normalizeEmail(input.actorEmail);
-      return sql.transaction(async (transaction) => {
-        const existing = (await transaction.query("findOperationByKey", [
-          input.idempotencyKey,
-        ])) as IntegrationOperation[];
-        if (existing[0]) {
-          assertMatchingInput(existing[0], inputFingerprint);
-          return { operation: existing[0], replayed: true };
-        }
-
-        const inserted = (await transaction.query("insertOperation", [
-          input,
-          inputFingerprint,
-          actorEmail,
-        ])) as IntegrationOperation[];
-        const operation = inserted[0];
-        if (!operation) {
-          const conflicted = (await transaction.query("findOperationByKey", [
-            input.idempotencyKey,
-          ])) as IntegrationOperation[];
-          const replay = requiredRow<IntegrationOperation>(
-            conflicted,
-            "Integration operation could not be stored.",
-          );
-          assertMatchingInput(replay, inputFingerprint);
-          return { operation: replay, replayed: true };
-        }
-
-        for (const [stepOrder, step] of input.steps.entries()) {
-          await transaction.query("insertStep", [operation.id, step, stepOrder]);
-        }
-        return { operation, replayed: false };
-      });
+      return sql.transaction((transaction) =>
+        createIntegrationRepository(transaction).enqueueInCurrentTransaction(input),
+      );
     },
+
+    enqueueInCurrentTransaction,
 
     async getHealth(): Promise<IntegrationConnectorHealth[]> {
       return (await sql.query("getHealth", [])) as IntegrationConnectorHealth[];

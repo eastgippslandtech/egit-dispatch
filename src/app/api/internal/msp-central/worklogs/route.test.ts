@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
-import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import { createPostgresWorklogMigrationCoordinator } from "@/server/worklogs/migration";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
-import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 
 import { POST } from "./route";
 
@@ -16,10 +15,6 @@ vi.mock("next/server", async (importOriginal) => ({
 vi.mock("@/server/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
-}));
-
-vi.mock("@/server/integrations/repository", () => ({
-  createPostgresIntegrationRepository: vi.fn(),
 }));
 
 vi.mock("@/server/integrations/wake", () => ({
@@ -38,26 +33,24 @@ vi.mock("@/server/worklogs/outcome-store", () => ({
   createPostgresWorklogOutcomeStore: vi.fn(),
 }));
 
-vi.mock("@/server/worklogs/repository", () => ({
-  createPostgresWorklogDispositionRepository: vi.fn(),
+vi.mock("@/server/worklogs/migration", () => ({
+  createPostgresWorklogMigrationCoordinator: vi.fn(),
 }));
 
 const getAccessMock = vi.mocked(getCommandCentreAccess);
-const createIntegrationRepositoryMock = vi.mocked(
-  createPostgresIntegrationRepository,
+const createMigrationCoordinatorMock = vi.mocked(
+  createPostgresWorklogMigrationCoordinator,
 );
 const resolveOwnerMock = vi.mocked(resolveMspCentralWorklogOwner);
 const createOutcomeStoreMock = vi.mocked(createPostgresWorklogOutcomeStore);
-const createLegacyRepositoryMock = vi.mocked(
-  createPostgresWorklogDispositionRepository,
-);
-const enqueue = vi.fn();
-const findLegacy = vi.fn();
+const migrate = vi.fn();
+const enqueued: Array<{ steps: Array<{ stepKey: string }>; idempotencyKey: string }> = [];
 const listCalendarAssignments = vi.fn();
 
 describe("MSP Central Work Log route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    enqueued.length = 0;
     getAccessMock.mockResolvedValue({
       accessLevel: "staff",
       email: "simeon@egit.com.au",
@@ -65,7 +58,6 @@ describe("MSP Central Work Log route", () => {
       status: "approved",
     });
     resolveOwnerMock.mockResolvedValue({ id: "msp-simeon" });
-    findLegacy.mockResolvedValue(undefined);
     listCalendarAssignments.mockResolvedValue([
       {
         eventId: "event-1",
@@ -73,13 +65,16 @@ describe("MSP Central Work Log route", () => {
         userPrincipalName: "simeon@egit.com.au",
       },
     ]);
-    createLegacyRepositoryMock.mockReturnValue({ find: findLegacy } as never);
     createOutcomeStoreMock.mockReturnValue({ listCalendarAssignments } as never);
-    enqueue.mockResolvedValue({
-      operation: { id: "operation-worklog-1", state: "queued" },
-      replayed: false,
+    migrate.mockImplementation(async ({ command: submitted, createOperation }) => {
+      enqueued.push(createOperation(submitted, false));
+      return {
+        kind: "operation",
+        operation: { id: "operation-worklog-1", state: "queued" },
+        replayed: false,
+      };
     });
-    createIntegrationRepositoryMock.mockReturnValue({ enqueue } as never);
+    createMigrationCoordinatorMock.mockReturnValue({ enqueue: migrate } as never);
   });
 
   it("queues the Work Log before all disposition steps", async () => {
@@ -92,7 +87,7 @@ describe("MSP Central Work Log route", () => {
       operationId: "operation-worklog-1",
       status: "queued",
     });
-    expect(enqueue).toHaveBeenCalledWith(
+    expect(enqueued[0]).toEqual(
       expect.objectContaining({
         actionType: "helpdesk.worklog",
         idempotencyKey: "worklog-command-1",
@@ -103,24 +98,25 @@ describe("MSP Central Work Log route", () => {
         ]),
       }),
     );
-    const queued = enqueue.mock.calls[0]![0];
+    const queued = enqueued[0]!;
     expect(queued.steps.findIndex((step: { stepKey: string }) => step.stepKey === "msp:worklog"))
       .toBeLessThan(queued.steps.findIndex((step: { stepKey: string }) => step.stepKey === "msp:status:resolved"));
   });
 
   it("migrates a legacy saved Work Log without writing it twice", async () => {
-    findLegacy.mockResolvedValueOnce({
-      command: { ...command(), durationMinutes: 30 },
-      idempotencyKey: "worklog-command-1",
-      lastError: "Outcome failed.",
-      requestId: "request-1",
-      state: "recovery_required",
+    migrate.mockImplementationOnce(async ({ command: submitted, createOperation }) => {
+      enqueued.push(createOperation(submitted, true));
+      return {
+        kind: "operation",
+        operation: { id: "operation-worklog-1", state: "queued" },
+        replayed: false,
+      };
     });
 
     const response = await POST(requestWith(command()));
 
     expect(response.status).toBe(202);
-    const queued = enqueue.mock.calls[0]![0];
+    const queued = enqueued[0]!;
     expect(queued.idempotencyKey).toBe("worklog-command-1");
     expect(queued.steps.some((step: { stepKey: string }) => step.stepKey === "msp:worklog"))
       .toBe(false);
@@ -129,12 +125,10 @@ describe("MSP Central Work Log route", () => {
   });
 
   it("does not enqueue a completed legacy operation again", async () => {
-    findLegacy.mockResolvedValueOnce({
-      command: { ...command(), durationMinutes: 30 },
-      idempotencyKey: "worklog-command-1",
-      lastError: null,
-      requestId: "request-1",
-      state: "completed",
+    migrate.mockResolvedValueOnce({
+      kind: "legacy",
+      operationId: "legacy:worklog-command-1",
+      status: "synced",
     });
 
     const response = await POST(requestWith(command()));
@@ -145,7 +139,24 @@ describe("MSP Central Work Log route", () => {
       ok: true,
       status: "synced",
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(enqueued).toEqual([]);
+  });
+
+  it("reports an in-flight legacy-owned Work Log without starting a generic duplicate", async () => {
+    migrate.mockResolvedValueOnce({
+      kind: "legacy",
+      operationId: "legacy:worklog-command-1",
+      status: "syncing",
+    });
+
+    const response = await POST(requestWith(command()));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      operationId: "legacy:worklog-command-1",
+      status: "syncing",
+    });
+    expect(enqueued).toEqual([]);
   });
 });
 

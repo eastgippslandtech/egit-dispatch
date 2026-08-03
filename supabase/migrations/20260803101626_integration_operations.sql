@@ -107,6 +107,10 @@ create index integration_connector_health_freshness_idx
   on public.integration_connector_health (last_checked_at desc)
   where last_checked_at is not null;
 
+alter table public.worklog_disposition_operations
+  add constraint worklog_disposition_migrated_operation_fk
+  foreign key (migrated_operation_id) references public.integration_operations(id);
+
 alter table public.integration_operations enable row level security;
 alter table public.integration_operation_steps enable row level security;
 alter table public.integration_audit_events enable row level security;

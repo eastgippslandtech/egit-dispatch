@@ -11,8 +11,10 @@ import type {
 
 type OperationRow = {
   command: WorklogDispositionCommand;
+  executionOwner: "generic" | "legacy" | null;
   idempotencyKey: string;
   lastError: string | null;
+  migratedOperationId: string | null;
   requestId: string;
   state: WorklogDispositionOperationState;
 };
@@ -26,34 +28,40 @@ export function createPostgresWorklogDispositionRepository({
 } = {}): WorklogDispositionRepository {
   return {
     async begin(command) {
-      await sql`
-        insert into public.worklog_disposition_operations (
-          idempotency_key,
-          request_id,
-          disposition,
-          command_payload
-        )
-        values (
-          ${command.idempotencyKey},
-          ${command.requestId},
-          ${command.disposition ?? null},
-          ${sql.json(command)}
-        )
-        on conflict (idempotency_key) do nothing
-      `;
+      const operation = await sql.begin(async (transaction) => {
+        await transaction`
+          insert into public.worklog_disposition_operations (
+            idempotency_key,
+            request_id,
+            disposition,
+            command_payload
+          )
+          values (
+            ${command.idempotencyKey},
+            ${command.requestId},
+            ${command.disposition ?? null},
+            ${transaction.json(command)}
+          )
+          on conflict (idempotency_key) do nothing
+        `;
 
-      const rows = await sql<OperationRow[]>`
-        select
-          idempotency_key as "idempotencyKey",
-          request_id as "requestId",
-          command_payload as "command",
-          state,
-          last_error as "lastError"
-        from public.worklog_disposition_operations
-        where idempotency_key = ${command.idempotencyKey}
-        limit 1
-      `;
-      const operation = rows[0];
+        const rows = await transaction<OperationRow[]>`
+          update public.worklog_disposition_operations
+          set
+            execution_owner = coalesce(execution_owner, 'legacy'),
+            updated_at = now()
+          where idempotency_key = ${command.idempotencyKey}
+          returning
+            idempotency_key as "idempotencyKey",
+            request_id as "requestId",
+            command_payload as "command",
+            state,
+            last_error as "lastError",
+            execution_owner as "executionOwner",
+            migrated_operation_id::text as "migratedOperationId"
+        `;
+        return rows[0];
+      });
       if (!operation) {
         throw new Error("Work Log disposition operation could not be stored.");
       }
@@ -62,7 +70,7 @@ export function createPostgresWorklogDispositionRepository({
           "This Work Log idempotency key was already used for different work.",
         );
       }
-      return operation;
+      return normalizeOperation(operation);
     },
 
     async find(idempotencyKey) {
@@ -72,12 +80,14 @@ export function createPostgresWorklogDispositionRepository({
           request_id as "requestId",
           command_payload as "command",
           state,
-          last_error as "lastError"
+          last_error as "lastError",
+          execution_owner as "executionOwner",
+          migrated_operation_id::text as "migratedOperationId"
         from public.worklog_disposition_operations
         where idempotency_key = ${idempotencyKey}
         limit 1
       `;
-      return rows[0];
+      return rows[0] ? normalizeOperation(rows[0]) : undefined;
     },
 
     async markCompleted(idempotencyKey) {
@@ -101,6 +111,14 @@ export function createPostgresWorklogDispositionRepository({
     async markWorklogSaved(idempotencyKey) {
       await updateState(sql, idempotencyKey, "worklog_saved", null);
     },
+  };
+}
+
+function normalizeOperation(row: OperationRow): WorklogDispositionOperation {
+  return {
+    ...row,
+    executionOwner: row.executionOwner ?? undefined,
+    migratedOperationId: row.migratedOperationId ?? undefined,
   };
 }
 

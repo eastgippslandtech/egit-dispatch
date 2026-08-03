@@ -1,3 +1,5 @@
+import type postgres from "postgres";
+
 import { getSharedPostgresClient } from "@/server/database/client";
 
 import { mockIsoTime } from "./date-scope";
@@ -334,12 +336,13 @@ export async function listDispatchTestSyncEvents() {
 export async function recordDispatchTestSyncEvent(
   input: DispatchTestSyncEventInput,
   createdBy?: string,
+  transactionSql?: postgres.Sql,
 ) {
   const event = normaliseDispatchTestSyncEvent({
     ...input,
     createdBy: input.createdBy ?? createdBy,
   });
-  const sql = await getDispatchTestSyncClient();
+  const sql = transactionSql ?? getDispatchTestSyncClient();
 
   await sql`
     insert into dispatch_test_schedule_events (
@@ -388,8 +391,9 @@ export async function clearDispatchTestSyncEvents() {
   await sql`delete from dispatch_test_schedule_events`;
 }
 
-async function getDispatchTestSyncClient() {
-  const databaseUrl = process.env.DATABASE_URL;
+export function getDispatchTestSyncClient(
+  databaseUrl = process.env.DATABASE_URL,
+) {
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required for dispatcher-to-mobile test sync.");

@@ -17,6 +17,7 @@ import CommandCentrePage from "./page";
 import {
   bookingCardPriorityClass,
   CommandCentrePrototype,
+  integrationReceiptDisposition,
   pendingLiveAppointmentId,
   reconcileDashboardWithPendingWritebacks,
   requestNotesSummary,
@@ -230,6 +231,127 @@ test("reuses the same optimistic appointment id when a schedule command is retri
   expect(pendingLiveAppointmentId("request-123", "schedule:command-123")).not.toBe(
     pendingLiveAppointmentId("request-123", "schedule:command-456"),
   );
+});
+
+test("classifies provider write receipts without claiming false success", () => {
+  expect(integrationReceiptDisposition("queued")).toEqual({
+    closeForm: true,
+    phase: "pending",
+  });
+  expect(integrationReceiptDisposition("syncing")).toEqual({
+    closeForm: true,
+    phase: "pending",
+  });
+  expect(integrationReceiptDisposition("retrying")).toEqual({
+    closeForm: true,
+    phase: "retrying",
+  });
+  expect(integrationReceiptDisposition("review_required")).toEqual({
+    closeForm: false,
+    phase: "review_required",
+  });
+  expect(integrationReceiptDisposition("synced")).toEqual({
+    closeForm: true,
+    phase: "synced",
+  });
+});
+
+test("keeps the schedule confirmation open when provider sync needs review", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      operationId: "operation-schedule-review",
+      status: "review_required",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: data.requests.map((candidate) =>
+          candidate.id === request.id
+            ? { ...candidate, sourceSystem: "msp-central" as const }
+            : candidate,
+        ),
+      }}
+    />,
+  );
+
+  const requestButton = screen.getByRole("button", {
+    name: `${request.requestNumber} ${request.subject}`,
+  });
+  const requestCard = requestButton.closest("article");
+  if (!requestCard) throw new Error("Expected draggable request card.");
+  const dataTransfer = {
+    effectAllowed: "move",
+    setData: vi.fn(),
+  };
+  fireEvent.dragStart(requestCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(screen.getAllByTestId("timeline-track")[0], {
+    clientX: 120,
+    dataTransfer,
+  });
+
+  await act(async () => undefined);
+  const dialog = screen.getByText("Schedule request").closest("section");
+  if (!dialog) throw new Error("Expected schedule confirmation dialog.");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Confirm schedule" }));
+  await act(async () => undefined);
+
+  expect(
+    screen.getByText(
+      `${request.requestNumber} was saved locally, but provider sync needs review.`,
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Schedule request")).toBeInTheDocument();
+});
+
+test("does not claim manual calendar sync succeeded when review is required", async () => {
+  const data = getDispatchDesignMockData();
+  const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => ({
+        operationId: "operation-calendar-review",
+        status: "review_required",
+      }),
+      ok: true,
+    });
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: data.requests.map((request) => ({
+          ...request,
+          sourceSystem: "msp-central" as const,
+        })),
+      }}
+    />,
+  );
+
+  fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
+  const drawer = screen.getByTestId("command-centre-drawer");
+  const syncButton = within(drawer).getByRole("button", {
+    name: "Create / Update Calendar Event",
+  });
+  expect(syncButton).toBeEnabled();
+  fireEvent.click(syncButton);
+  await act(async () => undefined);
+  expect(fetchMock).toHaveBeenCalled();
+
+  expect(
+    screen.getByText("REQ-100211 calendar sync needs review."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("REQ-100211 synced to MSP Central and Outlook.")).not.toBeInTheDocument();
 });
 
 test("keeps error notices visible longer than success notices", () => {
@@ -688,7 +810,7 @@ test("keeps customer communications separate from a live Work Log", async () => 
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
   expect(await within(dialog).findByText("Job description")).toBeInTheDocument();
   expect(
-    within(dialog).getByText(
+    await within(dialog).findByText(
       "The Zebra label printer is offline after a power outage.",
     ),
   ).toBeInTheDocument();
@@ -997,6 +1119,99 @@ test("creates a new live Helpdesk request from the queue", async () => {
   expect(
     await screen.findByText("Request creation queued. Syncing with MSP Central."),
   ).toBeInTheDocument();
+});
+
+test("keeps request creation open when provider sync needs review", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      json: async () => ({
+        operationId: "operation-create-review",
+        pendingRequestId: "pending:create-review",
+        status: "review_required",
+      }),
+      ok: true,
+    }),
+  );
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+  const dialog = screen.getByRole("dialog", { name: "Create request" });
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
+
+  expect(
+    await within(dialog).findByText(
+      "Request creation needs review before it reaches MSP Central.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Subject")).toHaveValue("Printer offline");
+  expect(screen.getByRole("dialog", { name: "Create request" })).toBeInTheDocument();
+});
+
+test("keeps communication text when provider sync needs review", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+    requests: data.requests.map((request) => ({
+      ...request,
+      sourceSystem: "msp-central" as const,
+    })),
+  });
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      return {
+        json: async () => ({
+          operationId: "operation-comms-review",
+          status: "review_required",
+        }),
+        ok: true,
+      };
+    }
+    return {
+      json: async () => ({
+        customerResponses: [],
+        internalNotes: [],
+        request: selectedRequest,
+        worklogs: [],
+      }),
+      ok: true,
+    };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+  fireEvent.click(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "Open REQ-100284 ticket workspace",
+    }),
+  );
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Comms" }));
+  fireEvent.change(within(dialog).getByLabelText("Communication message"), {
+    target: { value: "Please restart the printer." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send to customer" }));
+
+  expect(
+    await within(dialog).findByText(
+      "Communication needs review before it reaches MSP Central.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Communication message")).toHaveValue(
+    "Please restart the printer.",
+  );
 });
 
 test("turns safe external links in request content into clickable links", () => {

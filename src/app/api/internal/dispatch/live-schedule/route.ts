@@ -5,10 +5,7 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { readDispatchConfig } from "@/server/dispatch/env";
-import {
-  recordDispatchTestSyncEvent,
-  type DispatchTestSyncEventInput,
-} from "@/server/dispatch/test-sync";
+import type { DispatchTestSyncEventInput } from "@/server/dispatch/test-sync";
 import type { BookingType, Priority } from "@/server/dispatch/types";
 import type { TravelEstimate } from "@/server/dispatch/travel";
 import {
@@ -16,7 +13,7 @@ import {
   requireIdempotencyKey,
 } from "@/server/integrations/http";
 import { scheduleOperation } from "@/server/integrations/operations";
-import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import { createPostgresAtomicScheduleWriter } from "@/server/integrations/schedule-write";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 
 type LiveScheduleCommand = {
@@ -75,7 +72,6 @@ export async function POST(request: Request) {
       (await request.json()) as LiveScheduleCommand,
       request,
     );
-    const localEventId = `live-schedule-${command.appointmentId}`;
     const queuedWork = scheduleOperation({
         actorEmail: access.email,
         appointmentId: command.appointmentId,
@@ -115,15 +111,14 @@ export async function POST(request: Request) {
       start: requiredPayloadString(queuedWork.payload, "start"),
     };
 
-    await recordDispatchTestSyncEvent(
-      localScheduleEvent(localCommand, localEventId),
-      access.email,
-    );
-
-    const repository = createPostgresIntegrationRepository({
+    const writer = createPostgresAtomicScheduleWriter({
       databaseUrl: readDispatchConfig().databaseUrl,
     });
-    const { operation } = await repository.enqueue(queuedWork);
+    const { operation } = await writer.persist({
+      createdBy: access.email,
+      events: localScheduleEvents(localCommand),
+      operation: queuedWork,
+    });
 
     after(() => bestEffortWake(operation.id));
 
@@ -169,12 +164,44 @@ async function bestEffortWake(operationId: string) {
   }
 }
 
-function localScheduleEvent(
+function localScheduleEvents(
   command: ValidLiveScheduleCommand,
-  id: string,
-): DispatchTestSyncEventInput {
-  return {
+): DispatchTestSyncEventInput[] {
+  const lead = localScheduleEvent({
     appointmentId: command.appointmentId,
+    command,
+    id: `live-schedule-${command.appointmentId}`,
+    technicianId: command.technicianId,
+    travel: command.travel,
+  });
+  return [
+    lead,
+    ...command.crew.map((member) =>
+      localScheduleEvent({
+        appointmentId: `${command.appointmentId}-crew-${member.technicianId}`,
+        command,
+        id: `live-schedule-${command.appointmentId}-crew-${member.technicianId}`,
+        technicianId: member.technicianId,
+      }),
+    ),
+  ];
+}
+
+function localScheduleEvent({
+  appointmentId,
+  command,
+  id,
+  technicianId,
+  travel,
+}: {
+  appointmentId: string;
+  command: ValidLiveScheduleCommand;
+  id: string;
+  technicianId: string;
+  travel?: TravelEstimate;
+}): DispatchTestSyncEventInput {
+  return {
+    appointmentId,
     bookingType: command.bookingType,
     date: command.date,
     end: command.end,
@@ -182,12 +209,12 @@ function localScheduleEvent(
     id,
     payload: {
       liveSync: { status: "pending" },
-      travel: command.travel,
+      travel,
     },
     priority: command.priority,
     requestId: command.requestId,
     start: command.start,
-    technicianId: command.technicianId,
+    technicianId,
   };
 }
 

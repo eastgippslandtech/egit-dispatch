@@ -8,16 +8,12 @@ import { readDispatchConfig } from "@/server/dispatch/env";
 import { fingerprintPayload } from "@/server/integrations/fingerprint";
 import { integrationRouteErrorStatus } from "@/server/integrations/http";
 import { worklogOperation } from "@/server/integrations/operations";
-import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 import { createMspCentralClient } from "@/server/msp-central/client";
-import {
-  validateWorklogDispositionCommand,
-  type WorklogDispositionCommand,
-} from "@/server/worklogs/disposition";
+import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
+import { createPostgresWorklogMigrationCoordinator } from "@/server/worklogs/migration";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
-import { createPostgresWorklogDispositionRepository } from "@/server/worklogs/repository";
 
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
@@ -29,26 +25,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const submitted = validateWorklogDispositionCommand(await request.json());
+    const command = validateWorklogDispositionCommand(await request.json());
     const config = readDispatchConfig();
-    const legacyRepository = createPostgresWorklogDispositionRepository({
-      databaseUrl: config.databaseUrl,
-    });
-    const legacy = await legacyRepository.find(submitted.idempotencyKey);
-    const command = resolveLegacyCommand(legacy?.command, submitted);
-
-    if (legacy?.state === "completed") {
-      return json(
-        {
-          idempotencyKey: command.idempotencyKey,
-          ok: true,
-          operationId: `legacy:${command.idempotencyKey}`,
-          status: "synced",
-        },
-        200,
-      );
-    }
-
     const mspClient = createMspCentralClient(config);
     const owner = await resolveMspCentralWorklogOwner({
       email: access.email,
@@ -68,30 +46,36 @@ export async function POST(request: Request) {
           ? command.currentBooking.technicianId ?? calendarIdentity(assignment)
           : calendarIdentity(assignment),
     }));
-    const repository = createPostgresIntegrationRepository({
+    const coordinator = createPostgresWorklogMigrationCoordinator({
       databaseUrl: config.databaseUrl,
     });
-    const { operation } = await repository.enqueue(
-      worklogOperation({
-        actorEmail: access.email,
-        calendarAssignments,
-        command,
-        ownerId: owner.id,
-        worklogAlreadySaved:
-          legacy?.state === "worklog_saved" ||
-          legacy?.state === "recovery_required",
-      }),
-    );
-    after(() => bestEffortWake(operation.id));
+    const result = await coordinator.enqueue({
+      command,
+      createOperation: (queuedCommand, worklogAlreadySaved) =>
+        worklogOperation({
+          actorEmail: access.email,
+          calendarAssignments,
+          command: queuedCommand,
+          ownerId: owner.id,
+          worklogAlreadySaved,
+        }),
+    });
+    const operationId =
+      result.kind === "operation" ? result.operation.id : result.operationId;
+    const status =
+      result.kind === "operation" ? result.operation.state : result.status;
+    if (result.kind === "operation") {
+      after(() => bestEffortWake(operationId));
+    }
 
     return json(
       {
         idempotencyKey: command.idempotencyKey,
         ok: true,
-        operationId: operation.id,
-        status: operation.state,
+        operationId,
+        status,
       },
-      202,
+      status === "synced" ? 200 : 202,
     );
   } catch (error) {
     console.error("MSP Central Work Log queue failed", error);
@@ -106,26 +90,6 @@ export async function POST(request: Request) {
       integrationRouteErrorStatus(error),
     );
   }
-}
-
-function resolveLegacyCommand(
-  legacy: WorklogDispositionCommand | undefined,
-  submitted: WorklogDispositionCommand,
-) {
-  if (!legacy) return submitted;
-  if (
-    fingerprintPayload(jsonCompatible(legacy)) !==
-    fingerprintPayload(jsonCompatible(submitted))
-  ) {
-    throw new Error(
-      "This Work Log idempotency key was already used for different work.",
-    );
-  }
-  return legacy;
-}
-
-function jsonCompatible(value: unknown) {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 function calendarIdentity(input: {

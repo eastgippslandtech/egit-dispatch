@@ -115,13 +115,38 @@ type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
 
+type IntegrationReceiptStatus =
+  | "queued"
+  | "syncing"
+  | "retrying"
+  | "synced"
+  | "review_required";
+
 type LiveScheduleResult = {
   id?: string;
   operationId?: string;
   queued?: boolean;
-  status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+  status?: IntegrationReceiptStatus;
   webLink?: string;
 };
+
+export function integrationReceiptDisposition(
+  status?: IntegrationReceiptStatus,
+): {
+  closeForm: boolean;
+  phase: "pending" | "retrying" | "review_required" | "synced";
+} {
+  if (status === "review_required") {
+    return { closeForm: false, phase: "review_required" };
+  }
+  if (status === "retrying") {
+    return { closeForm: true, phase: "retrying" };
+  }
+  if (status === "synced") {
+    return { closeForm: true, phase: "synced" };
+  }
+  return { closeForm: true, phase: "pending" };
+}
 
 const PRIMARY_HEALTH_KEYS = [
   "unscheduled",
@@ -583,14 +608,22 @@ export function CommandCentrePrototype({
       throw new Error("The duplicate or surviving request is no longer available.");
     }
 
-    await publishMspCentralRequestMerge({
+    const result = await publishMspCentralRequestMerge({
       childRequestId: childRequest.id,
       idempotencyKey,
       parentRequestId: parentRequest.id,
     });
+    const receipt = integrationReceiptDisposition(result.status);
+    if (receipt.phase === "review_required") {
+      throw new Error("Merge needs review before it can reach MSP Central.");
+    }
     setMergeRequestId(undefined);
     setToast(
-      `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
+      receipt.phase === "synced"
+        ? `${childRequest.requestNumber} merged in MSP Central.`
+        : receipt.phase === "retrying"
+          ? `${childRequest.requestNumber} merge queued. MSP Central sync is retrying.`
+          : `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
     );
     router.refresh();
   }
@@ -1526,6 +1559,16 @@ export function CommandCentrePrototype({
 
       if (liveSchedule) {
         pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            `${request.requestNumber} was saved locally, but provider sync needs review.`,
+          );
+          router.refresh();
+          return;
+        }
       }
 
       const finalAppointmentId = liveEvent?.id
@@ -1603,9 +1646,7 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? liveEvent?.queued
-            ? `${request.requestNumber} scheduled. Syncing with MSP Central and Outlook.`
-            : `${request.requestNumber} scheduled in MSP Central and Outlook.`
+          ? scheduleReceiptMessage(request.requestNumber, liveEvent?.status)
           : `${request.requestNumber} scheduled in mock mode.`,
       );
     } else {
@@ -1733,6 +1774,16 @@ export function CommandCentrePrototype({
 
       if (liveSchedule && request) {
         pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            "The move was saved locally, but provider sync needs review.",
+          );
+          router.refresh();
+          return;
+        }
       }
 
       let movedAppointments = request
@@ -1829,9 +1880,7 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? liveEvent?.queued
-            ? "Appointment moved. Syncing with MSP Central and Outlook."
-            : "Appointment moved in MSP Central and Outlook."
+          ? moveReceiptMessage(liveEvent?.status)
           : "Appointment moved in mock mode.",
       );
     }
@@ -1930,27 +1979,37 @@ export function CommandCentrePrototype({
         ),
       });
 
-      setDashboard((current) => ({
-        ...current,
-        appointments: current.appointments.map((appointment) =>
-          appointment.requestId === selectedRequest.id
-            ? {
-                ...appointment,
-                outlookEventId:
-                  appointment.technicianId === leadTechnicianId
-                    ? (liveEvent.id ?? appointment.outlookEventId)
-                    : appointment.outlookEventId,
-                outlookWebLink:
-                  appointment.technicianId === leadTechnicianId
-                    ? (liveEvent.webLink ?? appointment.outlookWebLink)
-                    : appointment.outlookWebLink,
-                readOnly: false,
-                status: "confirmed",
-              }
-            : appointment,
-        ),
-      }));
-      setToast(`${selectedRequest.requestNumber} synced to MSP Central and Outlook.`);
+      const receipt = integrationReceiptDisposition(liveEvent.status);
+      if (receipt.phase === "review_required") {
+        setToast(
+          `${selectedRequest.requestNumber} calendar sync needs review.`,
+        );
+        return;
+      }
+
+      if (receipt.phase === "synced") {
+        setDashboard((current) => ({
+          ...current,
+          appointments: current.appointments.map((appointment) =>
+            appointment.requestId === selectedRequest.id
+              ? {
+                  ...appointment,
+                  outlookEventId:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.id ?? appointment.outlookEventId)
+                      : appointment.outlookEventId,
+                  outlookWebLink:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.webLink ?? appointment.outlookWebLink)
+                      : appointment.outlookWebLink,
+                  readOnly: false,
+                  status: "confirmed",
+                }
+              : appointment,
+          ),
+        }));
+      }
+      setToast(manualSyncReceiptMessage(selectedRequest.requestNumber, liveEvent.status));
     } catch (error) {
       setToast(liveScheduleErrorMessage(error));
     }
@@ -2334,7 +2393,7 @@ export function CommandCentrePrototype({
 
           <DetailDrawer
             appointment={selectedAppointment}
-            calendarWriteEnabled={canUseLiveSchedule(dashboard)}
+            calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
             onOpenWorkLog={(requestId, appointmentId) =>
               setWorkLogTarget({ appointmentId, requestId })
             }
@@ -2428,19 +2487,33 @@ export function CommandCentrePrototype({
               setTicketWorkspaceTarget(undefined);
               setWorkLogTarget({ appointmentId, requestId });
             }}
-            onSaved={() => {
+            onSaved={(status) => {
               router.refresh();
-              setToast("Communication queued. Syncing with MSP Central.");
+              const receipt = integrationReceiptDisposition(status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Communication saved in MSP Central."
+                  : receipt.phase === "retrying"
+                    ? "Communication queued. MSP Central sync is retrying."
+                    : "Communication queued. Syncing with MSP Central.",
+              );
             }}
           />
         ) : null}
         {createRequestOpen ? (
           <CreateRequestModal
             onCancel={() => setCreateRequestOpen(false)}
-            onCreated={() => {
+            onCreated={(status) => {
               setCreateRequestOpen(false);
               setQueueView("unscheduled");
-              setToast("Request creation queued. Syncing with MSP Central.");
+              const receipt = integrationReceiptDisposition(status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Request created in MSP Central."
+                  : receipt.phase === "retrying"
+                    ? "Request creation queued. MSP Central sync is retrying."
+                    : "Request creation queued. Syncing with MSP Central.",
+              );
               router.refresh();
             }}
           />
@@ -2566,12 +2639,13 @@ async function publishMspCentralRequestMerge(event: {
     method: "POST",
   });
   const body = (await response.json().catch(() => null)) as
-    | { error?: string }
+    | { error?: string; status?: IntegrationReceiptStatus }
     | null;
 
   if (!response.ok) {
     throw new Error(body?.error ?? "MSP Central request merge failed.");
   }
+  return body ?? {};
 }
 
 async function publishMspCentralWorklog(
@@ -2695,6 +2769,45 @@ function testSyncErrorMessage(error: unknown) {
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
 
   return `Mock schedule did not save: ${message}`;
+}
+
+function scheduleReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} scheduled in MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} scheduled locally. Provider sync is retrying.`;
+  }
+  return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
+}
+
+function moveReceiptMessage(status?: IntegrationReceiptStatus) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return "Appointment moved in MSP Central and Outlook.";
+  }
+  if (receipt.phase === "retrying") {
+    return "Appointment moved locally. Provider sync is retrying.";
+  }
+  return "Appointment moved. Syncing with MSP Central and Outlook.";
+}
+
+function manualSyncReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} synced to MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} sync is queued and retrying.`;
+  }
+  return `${requestNumber} sync queued for MSP Central and Outlook.`;
 }
 
 function liveScheduleErrorMessage(error: unknown) {
@@ -3330,7 +3443,7 @@ function CreateRequestModal({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: () => void;
+  onCreated: (status?: IntegrationReceiptStatus) => void;
 }) {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -3357,7 +3470,12 @@ function CreateRequestModal({
         subject: subject.trim(),
       });
       if (!created.operationId) throw new Error("Request was not queued.");
-      onCreated();
+      const receipt = integrationReceiptDisposition(created.status);
+      if (receipt.phase === "review_required") {
+        setError("Request creation needs review before it reaches MSP Central.");
+        return;
+      }
+      onCreated(created.status);
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -3488,7 +3606,7 @@ function TicketWorkspaceModal({
   liveWriteback: boolean;
   onClose: () => void;
   onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
-  onSaved: () => void;
+  onSaved: (status?: IntegrationReceiptStatus) => void;
   request?: DispatchRequest;
 }) {
   const [tab, setTab] = useState<"comms" | "details">("details");
@@ -3561,16 +3679,21 @@ function TicketWorkspaceModal({
               visibility,
             };
       pendingCommunication.current = command;
-      await publishMspCentralCommunication({
+      const result = await publishMspCentralCommunication({
         idempotencyKey: command.idempotencyKey,
         message: command.message,
         occurredAt: command.occurredAt,
         requestId: request.id,
         visibility: command.visibility,
       });
+      const receipt = integrationReceiptDisposition(result.status);
+      if (receipt.phase === "review_required") {
+        setError("Communication needs review before it reaches MSP Central.");
+        return;
+      }
       pendingCommunication.current = undefined;
       setMessage("");
-      onSaved();
+      onSaved(result.status);
     } catch (sendError) {
       setError(
         sendError instanceof Error

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createIntegrationRepository,
@@ -345,6 +345,19 @@ describe("integration repository", () => {
       ["msp.update", 0],
       ["push.notify", 1],
     ]);
+  });
+
+  it("can enqueue inside a caller-owned transaction without nesting another transaction", async () => {
+    const fake = fakeSql();
+    const transaction = vi.fn(fake.sql.transaction);
+    const repository = createIntegrationRepository({ ...fake.sql, transaction });
+
+    const result = await repository.enqueueInCurrentTransaction(operation());
+
+    expect(result.replayed).toBe(false);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(fake.operations).toHaveLength(1);
+    expect(fake.steps).toHaveLength(2);
   });
 
   it("replays an exact idempotent operation", async () => {

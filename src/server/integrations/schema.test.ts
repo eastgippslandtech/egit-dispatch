@@ -84,6 +84,17 @@ describe("durable integration schema", () => {
     expect(sql).toContain("(request_id, created_at desc)");
     expect(sql).toContain("create index integration_operations_failed_idx");
     expect(sql).toContain("create index integration_connector_health_freshness_idx");
+    expect(sql).toContain(
+      "foreign key (migrated_operation_id) references public.integration_operations(id)",
+    );
+
+    const legacySql = fs.readFileSync(
+      path.join(migrationsDir, "20260801103000_worklog_disposition_operations.sql"),
+      "utf8",
+    );
+    expect(legacySql).toContain("execution_owner text");
+    expect(legacySql).toContain("migrated_operation_id uuid unique");
+    expect(legacySql).toContain("migrated_at timestamptz");
 
     for (const table of [
       "integration_operations",

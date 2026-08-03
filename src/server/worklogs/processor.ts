@@ -8,8 +8,10 @@ export type WorklogDispositionOperationState =
 
 export type WorklogDispositionOperation = {
   command: WorklogDispositionCommand;
+  executionOwner?: "generic" | "legacy";
   idempotencyKey: string;
   lastError: string | null;
+  migratedOperationId?: string;
   requestId: string;
   state: WorklogDispositionOperationState;
 };
@@ -25,7 +27,7 @@ export interface WorklogDispositionRepository {
 export type WorklogDispositionResult = {
   error?: string;
   idempotencyKey: string;
-  status: "completed" | "recovery_required";
+  status: "completed" | "migrated" | "recovery_required";
   worklogSaved: boolean;
 };
 
@@ -43,6 +45,20 @@ export function createWorklogDispositionProcessor({
       command: WorklogDispositionCommand,
     ): Promise<WorklogDispositionResult> {
       const operation = await repository.begin(command);
+
+      if (
+        operation.executionOwner === "generic" ||
+        operation.migratedOperationId
+      ) {
+        return {
+          idempotencyKey: command.idempotencyKey,
+          status: "migrated",
+          worklogSaved:
+            operation.state === "worklog_saved" ||
+            operation.state === "recovery_required" ||
+            operation.state === "completed",
+        };
+      }
 
       if (operation.state === "completed") {
         return completed(command.idempotencyKey);

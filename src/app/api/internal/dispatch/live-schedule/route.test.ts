@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
-import { recordDispatchTestSyncEvent } from "@/server/dispatch/test-sync";
+import { createPostgresAtomicScheduleWriter } from "@/server/integrations/schedule-write";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
-import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 
 import { POST } from "./route";
 
@@ -23,12 +22,8 @@ vi.mock("@/server/auth/session", async (importOriginal) => ({
   getCommandCentreAccess: vi.fn(),
 }));
 
-vi.mock("@/server/dispatch/test-sync", () => ({
-  recordDispatchTestSyncEvent: vi.fn(),
-}));
-
-vi.mock("@/server/integrations/repository", () => ({
-  createPostgresIntegrationRepository: vi.fn(),
+vi.mock("@/server/integrations/schedule-write", () => ({
+  createPostgresAtomicScheduleWriter: vi.fn(),
 }));
 
 vi.mock("@/server/integrations/wake", () => ({
@@ -36,10 +31,9 @@ vi.mock("@/server/integrations/wake", () => ({
 }));
 
 const getAccessMock = vi.mocked(getCommandCentreAccess);
-const recordLocalMock = vi.mocked(recordDispatchTestSyncEvent);
-const createRepositoryMock = vi.mocked(createPostgresIntegrationRepository);
+const createScheduleWriterMock = vi.mocked(createPostgresAtomicScheduleWriter);
 const wakeMock = vi.mocked(wakeIntegrationProcessor);
-const enqueue = vi.fn();
+const persist = vi.fn();
 
 describe("live dispatch schedule route", () => {
   beforeEach(() => {
@@ -51,12 +45,11 @@ describe("live dispatch schedule route", () => {
       name: "Simeon",
       status: "approved",
     });
-    recordLocalMock.mockResolvedValue({} as never);
-    enqueue.mockResolvedValue({
+    persist.mockResolvedValue({
       operation: { id: "operation-schedule-1", state: "queued" },
       replayed: false,
     });
-    createRepositoryMock.mockReturnValue({ enqueue } as never);
+    createScheduleWriterMock.mockReturnValue({ persist } as never);
     wakeMock.mockResolvedValue(undefined);
   });
 
@@ -69,7 +62,7 @@ describe("live dispatch schedule route", () => {
     const response = await POST(requestWith({}));
 
     expect(response.status).toBe(403);
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("requires one stable caller idempotency key", async () => {
@@ -79,8 +72,7 @@ describe("live dispatch schedule route", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringMatching(/idempotency key/i),
     });
-    expect(recordLocalMock).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("persists locally, enqueues provider work, and returns immediately", async () => {
@@ -93,28 +85,28 @@ describe("live dispatch schedule route", () => {
       operationId: "operation-schedule-1",
       status: "queued",
     });
-    expect(recordLocalMock).toHaveBeenCalledBefore(enqueue);
-    expect(recordLocalMock).toHaveBeenCalledWith(
+    expect(persist).toHaveBeenCalledWith(
       expect.objectContaining({
-        appointmentId: "pending-live-123",
-        payload: expect.objectContaining({
-          liveSync: { status: "pending" },
+        createdBy: "simeon@egit.com.au",
+        events: [
+          expect.objectContaining({
+            appointmentId: "pending-live-123",
+            payload: expect.objectContaining({ liveSync: { status: "pending" } }),
+            requestId: "123",
+            technicianId: "tech-matt",
+          }),
+        ],
+        operation: expect.objectContaining({
+          actionType: "dispatch.schedule",
+          actorEmail: "simeon@egit.com.au",
+          idempotencyKey: "schedule-command-123",
+          requestId: "123",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ stepKey: "msp:schedule" }),
+            expect.objectContaining({ stepKey: "outlook:lead:tech-matt" }),
+            expect.objectContaining({ stepKey: "command:link" }),
+          ]),
         }),
-        requestId: "123",
-      }),
-      "simeon@egit.com.au",
-    );
-    expect(enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionType: "dispatch.schedule",
-        actorEmail: "simeon@egit.com.au",
-        idempotencyKey: "schedule-command-123",
-        requestId: "123",
-        steps: expect.arrayContaining([
-          expect.objectContaining({ stepKey: "msp:schedule" }),
-          expect.objectContaining({ stepKey: "outlook:lead:tech-matt" }),
-          expect.objectContaining({ stepKey: "command:link" }),
-        ]),
       }),
     );
     expect(wakeMock).not.toHaveBeenCalled();
@@ -126,7 +118,7 @@ describe("live dispatch schedule route", () => {
   });
 
   it("replays the same command without creating a second provider operation", async () => {
-    enqueue.mockResolvedValueOnce({
+    persist.mockResolvedValueOnce({
       operation: { id: "operation-existing", state: "syncing" },
       replayed: true,
     });
@@ -145,9 +137,39 @@ describe("live dispatch schedule route", () => {
       requestWith(validCommand({ end: "11:07", start: "10:07" })),
     );
 
-    expect(recordLocalMock).toHaveBeenCalledWith(
-      expect.objectContaining({ end: "11:15", start: "10:15" }),
-      "simeon@egit.com.au",
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        events: [expect.objectContaining({ end: "11:15", start: "10:15" })],
+      }),
+    );
+  });
+
+  it("persists lead and crew assignments together so crew survive refresh", async () => {
+    await POST(
+      requestWith(
+        validCommand({
+          crew: [
+            {
+              technicianEmail: "jervy@egit.com.au",
+              technicianId: "tech-jervy",
+              technicianName: "Jervy",
+              userPrincipalName: "jervy@egit.com.au",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({ technicianId: "tech-matt" }),
+          expect.objectContaining({
+            appointmentId: "pending-live-123-crew-tech-jervy",
+            technicianId: "tech-jervy",
+          }),
+        ],
+      }),
     );
   });
 
@@ -167,8 +189,7 @@ describe("live dispatch schedule route", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(recordLocalMock).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 });
 

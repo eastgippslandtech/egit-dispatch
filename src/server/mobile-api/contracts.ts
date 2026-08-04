@@ -4,6 +4,7 @@ export type MobileApiFailureCode =
   | "NOT_APPROVED"
   | "NOT_FOUND"
   | "READ_ONLY_SOURCE"
+  | "TEMPORARILY_UNAVAILABLE"
   | "UNAUTHORIZED";
 
 export interface MobileApiMeta {

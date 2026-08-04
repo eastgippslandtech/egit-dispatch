@@ -21,6 +21,7 @@ const snapshotMock = vi.mocked(getWallboardSnapshot);
 
 describe("mobile presence API", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     authMock.mockReturnValue({
       email: "jervy@egit.com.au",
       staffId: "staff-jervy",
@@ -103,6 +104,63 @@ describe("mobile presence API", () => {
         technicianEmail: "jervy@egit.com.au",
       }),
     );
+    expect(snapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient presence database connection failure", async () => {
+    const startLunch = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("write CONNECT_TIMEOUT"), {
+          code: "CONNECT_TIMEOUT",
+        }),
+      )
+      .mockResolvedValue({ id: "lunch", status: "lunch" });
+    repositoryMock.mockReturnValue({
+      clear: vi.fn(),
+      listActive: vi.fn(),
+      setLeave: vi.fn(),
+      startLunch,
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/mobile/v1/presence", {
+        body: JSON.stringify({ action: "start_lunch" }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(startLunch).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a retryable service error when presence storage stays offline", async () => {
+    const startLunch = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error("write CONNECT_TIMEOUT"), {
+          code: "CONNECT_TIMEOUT",
+        }),
+      );
+    repositoryMock.mockReturnValue({
+      clear: vi.fn(),
+      listActive: vi.fn(),
+      setLeave: vi.fn(),
+      startLunch,
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/mobile/v1/presence", {
+        body: JSON.stringify({ action: "start_lunch" }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(startLunch).toHaveBeenCalledTimes(2);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "TEMPORARILY_UNAVAILABLE" },
+    });
   });
 
   it("returns an auth error when the bearer token is invalid", async () => {

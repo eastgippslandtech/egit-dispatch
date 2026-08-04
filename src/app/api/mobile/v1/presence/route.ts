@@ -40,15 +40,6 @@ export async function POST(request: Request) {
       endsAt?: string;
       reason?: string;
     };
-    const snapshot = await getWallboardSnapshot();
-    const technician = technicianForEmail(snapshot, auth.email);
-    if (!technician) {
-      return mobileError(
-        404,
-        "NOT_FOUND",
-        "Technician presence profile was not found.",
-      );
-    }
     const repository = getConfiguredPresenceOverrideRepository();
     if (!repository) {
       return mobileError(
@@ -57,16 +48,17 @@ export async function POST(request: Request) {
         "Presence persistence is not configured.",
       );
     }
-    const technicianEmail =
-      technician.zohoEmail ?? technician.outlookEmail;
+    const technicianEmail = auth.email;
 
     if (body.action === "start_lunch") {
       return mobileOk({
-        override: await repository.startLunch({
-          createdByEmail: auth.email,
-          source: "technician_app",
-          technicianEmail,
-        }),
+        override: await withPresenceWriteRetry(() =>
+          repository.startLunch({
+            createdByEmail: auth.email,
+            source: "technician_app",
+            technicianEmail,
+          }),
+        ),
       });
     }
 
@@ -79,18 +71,20 @@ export async function POST(request: Request) {
         );
       }
       return mobileOk({
-        override: await repository.setLeave({
-          createdByEmail: auth.email,
-          endsAt: body.endsAt,
-          reason: body.reason,
-          source: "technician_app",
-          technicianEmail,
-        }),
+        override: await withPresenceWriteRetry(() =>
+          repository.setLeave({
+            createdByEmail: auth.email,
+            endsAt: body.endsAt!,
+            reason: body.reason,
+            source: "technician_app",
+            technicianEmail,
+          }),
+        ),
       });
     }
 
     if (body.action === "clear") {
-      await repository.clear({ technicianEmail });
+      await withPresenceWriteRetry(() => repository.clear({ technicianEmail }));
       return mobileOk({ cleared: true });
     }
 
@@ -99,12 +93,40 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error ? error.message : "Presence request failed.";
     const unauthorized = /bearer token/i.test(message);
+    const temporarilyUnavailable = isTransientPresenceError(error);
     return mobileError(
-      unauthorized ? 401 : 400,
-      unauthorized ? "UNAUTHORIZED" : "BAD_REQUEST",
+      unauthorized ? 401 : temporarilyUnavailable ? 503 : 400,
+      unauthorized
+        ? "UNAUTHORIZED"
+        : temporarilyUnavailable
+          ? "TEMPORARILY_UNAVAILABLE"
+          : "BAD_REQUEST",
       message,
     );
   }
+}
+
+async function withPresenceWriteRetry<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isTransientPresenceError(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return operation();
+  }
+}
+
+function isTransientPresenceError(error: unknown) {
+  const code =
+    typeof error === "object" && error && "code" in error
+      ? String(error.code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    ["CONNECT_TIMEOUT", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"].includes(
+      code.toUpperCase(),
+    ) || /connect[_ ]timeout|connection terminated|socket|network/i.test(message)
+  );
 }
 
 function technicianForEmail(

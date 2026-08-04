@@ -5,6 +5,8 @@ import type { PresenceLeave } from "./types";
 type FetchLike = typeof fetch;
 type ZohoPeopleEnv = Record<string, string | undefined>;
 
+const PEOPLE_REQUEST_TIMEOUT_MS = 8_000;
+
 export type ZohoPeopleConfig = {
   accountsUrl: string;
   apiBaseUrl: string;
@@ -76,6 +78,7 @@ export function createZohoPeopleClient({
           "Content-Type": "application/x-www-form-urlencoded",
         },
         method: "POST",
+        signal: requestSignal(),
       },
     );
     if (!response.ok) {
@@ -126,6 +129,7 @@ export function createZohoPeopleClient({
           Authorization: `Zoho-oauthtoken ${token}`,
         },
         method: "GET",
+        signal: requestSignal(),
       },
     );
     if (!response.ok) {
@@ -203,6 +207,10 @@ function melbourneLocalTimestamp(dateKey: string, time: string) {
 
 function trimSlash(value: string) {
   return value.replace(/\/+$/, "");
+}
+
+function requestSignal() {
+  return AbortSignal.timeout(PEOPLE_REQUEST_TIMEOUT_MS);
 }
 
 const MONTHS = [

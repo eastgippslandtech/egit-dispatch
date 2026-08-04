@@ -721,6 +721,15 @@ export function CommandCentrePrototype({
     markTicketUpdateSeen(appointment.requestId);
   }
 
+  function openAppointmentWorkspace(appointment: Appointment) {
+    selectAppointment(appointment);
+    if (!appointment.requestId) return;
+    setTicketWorkspaceTarget({
+      appointmentId: appointment.id,
+      requestId: appointment.requestId,
+    });
+  }
+
   async function mergeRequestIntoParent(
     parentRequestId: string,
     idempotencyKey: string,
@@ -2565,6 +2574,7 @@ export function CommandCentrePrototype({
                   clearSelectionForDateChange(dateKey, "day")
                 }
                 onDragEnd={endDrag}
+                onOpenAppointment={openAppointmentWorkspace}
                 onWeekDrop={handleWeekDrop}
                 onSelectAppointment={selectAppointment}
               />
@@ -2588,6 +2598,7 @@ export function CommandCentrePrototype({
                   beginDrag({ kind: "appointment", appointmentId })
                 }
                 onDragEnd={endDrag}
+                onOpenAppointment={openAppointmentWorkspace}
                 onTimelineDrop={handleTimelineDrop}
                 onTimelineHover={handleTimelineHover}
                 onSelectAppointment={selectAppointment}
@@ -5377,6 +5388,7 @@ export function ReadOnlyDispatchCalendar({
             onBeginAppointmentDrag={ignoreAppointment}
             onDateOpen={ignoreAppointment}
             onDragEnd={ignoreAppointment}
+            onOpenAppointment={ignoreAppointment}
             onSelectAppointment={ignoreAppointment}
             onWeekDrop={ignoreDrop}
           />
@@ -5391,6 +5403,7 @@ export function ReadOnlyDispatchCalendar({
             technicians={data.technicians}
             onBeginAppointmentDrag={ignoreAppointment}
             onDragEnd={ignoreAppointment}
+            onOpenAppointment={ignoreAppointment}
             onSelectAppointment={ignoreAppointment}
             onTimelineDrop={ignoreDrop}
             onTimelineHover={ignoreDrop}
@@ -5747,6 +5760,7 @@ function RequestQueueCard({
         className="w-full p-2.5 text-left"
         type="button"
         onClick={onSelect}
+        onDoubleClick={onOpenWorkspace}
       >
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -5883,6 +5897,7 @@ function TimelineBoard({
   globalSearch,
   onBeginAppointmentDrag,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   onTimelineDrop,
   onTimelineHover,
@@ -5900,6 +5915,7 @@ function TimelineBoard({
   globalSearch: string;
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   onTimelineDrop: (
     payload: DragPayload,
@@ -6135,6 +6151,7 @@ function TimelineBoard({
                       trackWidth={timelineTrackWidth}
                       onBeginAppointmentDrag={onBeginAppointmentDrag}
                       onDragEnd={onDragEnd}
+                      onOpenAppointment={onOpenAppointment}
                       onSelectAppointment={onSelectAppointment}
                     />
                   ) : (
@@ -6162,6 +6179,7 @@ function TimelineBoard({
                       )}
                       onBeginDrag={() => onBeginAppointmentDrag(item.appointment.id)}
                       onDragEnd={onDragEnd}
+                      onOpen={() => onOpenAppointment(item.appointment)}
                       onSelect={() => onSelectAppointment(item.appointment)}
                       trackWidth={timelineTrackWidth}
                     />
@@ -6189,6 +6207,7 @@ function WeekPlanner({
   onBeginAppointmentDrag,
   onDateOpen,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   onWeekDrop,
   readOnly = false,
@@ -6204,6 +6223,7 @@ function WeekPlanner({
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDateOpen: (dateKey: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   onWeekDrop: (
     payload: DragPayload,
@@ -6340,6 +6360,7 @@ function WeekPlanner({
                         )}
                         onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                         onDragEnd={onDragEnd}
+                        onOpen={() => onOpenAppointment(appointment)}
                         onSelect={() => onSelectAppointment(appointment)}
                       />
                     ))}
@@ -6413,6 +6434,10 @@ function WeekPlanner({
                   )}
                   onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                   onDragEnd={onDragEnd}
+                  onOpen={() => {
+                    onOpenAppointment(appointment);
+                    setExpandedCell(undefined);
+                  }}
                   onSelect={() => {
                     onSelectAppointment(appointment);
                     setExpandedCell(undefined);
@@ -6434,6 +6459,7 @@ function WeekAppointmentCard({
   hasUnreadUpdate,
   onBeginDrag,
   onDragEnd,
+  onOpen,
   onSelect,
   request,
 }: {
@@ -6443,6 +6469,7 @@ function WeekAppointmentCard({
   hasUnreadUpdate: boolean;
   onBeginDrag: () => void;
   onDragEnd: () => void;
+  onOpen: () => void;
   onSelect: () => void;
   request?: DispatchRequest;
 }) {
@@ -6464,6 +6491,7 @@ function WeekAppointmentCard({
       }`}
       type="button"
       onClick={onSelect}
+      onDoubleClick={request ? onOpen : undefined}
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
@@ -6573,6 +6601,7 @@ function TimelineOverlapGroup({
   item,
   onBeginAppointmentDrag,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   requests,
   rowOffset,
@@ -6583,6 +6612,7 @@ function TimelineOverlapGroup({
   item: TimelineLayoutItem;
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   requests: DispatchRequest[];
   rowOffset: number;
@@ -6656,6 +6686,9 @@ function TimelineOverlapGroup({
           setOpen(false);
         }}
         onClick={() => onSelectAppointment(frontAppointment)}
+        onDoubleClick={
+          frontRequest ? () => onOpenAppointment(frontAppointment) : undefined
+        }
         onDragEnd={onDragEnd}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
@@ -6718,6 +6751,9 @@ function TimelineOverlapGroup({
                   draggable={!appointment.readOnly}
                   type="button"
                   onClick={() => onSelectAppointment(appointment)}
+                  onDoubleClick={
+                    request ? () => onOpenAppointment(appointment) : undefined
+                  }
                   onDragEnd={onDragEnd}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "move";
@@ -6764,6 +6800,7 @@ function TimelineAppointment({
   laneTop,
   onBeginDrag,
   onDragEnd,
+  onOpen,
   onSelect,
   request,
   searchState,
@@ -6776,6 +6813,7 @@ function TimelineAppointment({
   laneTop: number;
   onBeginDrag: () => void;
   onDragEnd: () => void;
+  onOpen: () => void;
   onSelect: () => void;
   request?: DispatchRequest;
   searchState: SearchState;
@@ -6831,6 +6869,7 @@ function TimelineAppointment({
           onBeginDrag();
         }}
         onClick={onSelect}
+        onDoubleClick={request ? onOpen : undefined}
       >
         <div className="flex items-start justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1 truncate text-[12px] font-bold leading-4">

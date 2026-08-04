@@ -1,6 +1,8 @@
 import type { ZohoCrmConfig } from "./config";
 import type { ZohoCrmAccountRecord } from "./address-enrichment";
 
+const CRM_REQUEST_TIMEOUT_MS = 8_000;
+
 export type ZohoCrmRecord = {
   Account_Name?: string | { id?: string; name?: string };
   Full_Name?: string;
@@ -47,6 +49,7 @@ export class ZohoCrmClient {
       url.searchParams.set("per_page", "200");
       const response = await this.fetchImpl(url, {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        signal: requestSignal(),
       });
       const payload = (await response.json()) as {
         data?: ZohoCrmAccountRecord[];
@@ -71,6 +74,7 @@ export class ZohoCrmClient {
     url.searchParams.set("phone", phone);
     const response = await this.fetchImpl(url, {
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      signal: requestSignal(),
     });
     if (response.status === 204) return [];
     const payload = (await response.json()) as {
@@ -94,7 +98,10 @@ export class ZohoCrmClient {
     url.searchParams.set("client_secret", this.config.clientSecret);
     url.searchParams.set("refresh_token", this.config.refreshToken);
     url.searchParams.set("grant_type", "refresh_token");
-    const response = await this.fetchImpl(url, { method: "POST" });
+    const response = await this.fetchImpl(url, {
+      method: "POST",
+      signal: requestSignal(),
+    });
     const payload = (await response.json()) as {
       access_token?: string;
       api_domain?: string;
@@ -112,4 +119,8 @@ export class ZohoCrmClient {
     };
     return this.access.token;
   }
+}
+
+function requestSignal() {
+  return AbortSignal.timeout(CRM_REQUEST_TIMEOUT_MS);
 }

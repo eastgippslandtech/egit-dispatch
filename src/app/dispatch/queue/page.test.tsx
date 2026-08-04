@@ -75,6 +75,16 @@ test("opens the shared ticket workspace and hands scheduling to the board", asyn
   expect(routerPush).toHaveBeenCalledWith("/dispatch?requestId=100284");
 });
 
+test("opens a queue request workspace on double-click", async () => {
+  render(await DispatchQueuePage());
+
+  fireEvent.doubleClick(
+    screen.getByRole("article", { name: /Packhouse label printer offline/ }),
+  );
+
+  expect(screen.getByRole("dialog", { name: "Ticket workspace" })).toBeInTheDocument();
+});
+
 test("applies a ticket template and resolves Track items in the workspace", async () => {
   render(await DispatchQueuePage());
 

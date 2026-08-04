@@ -24,6 +24,7 @@ import {
 } from "@/server/zoho-crm/address-enrichment";
 
 type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
+type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
@@ -35,10 +36,12 @@ export async function getDispatchDashboardData(
     database = getConfiguredDispatchDashboardDatabase(config.databaseUrl),
     crmClient,
     mspClient,
+    outlookLoader = buildOutlookCalendarDashboardData,
   }: {
     database?: DispatchDashboardDatabase | null;
     crmClient?: ZohoCrmAccountsClient | null;
     mspClient?: MspCentralClient;
+    outlookLoader?: OutlookLoader;
   } = {},
 ): Promise<DispatchDashboardData> {
   const emptyCommandCentreData = getEmptyCommandCentreData();
@@ -64,13 +67,31 @@ export async function getDispatchDashboardData(
     const configuredCrmClient =
       crmClient === undefined ? createConfiguredZohoCrmClient() : crmClient;
     const profiles = getInitialStaffProfiles();
-    const [requestsResult, techniciansResult, crmAccountsResult] =
-      await Promise.allSettled([
+    const fallbackTechnicians = profiles.map(staffProfileToTechnician);
+    const outlookPromise =
+      config.calendarDataSource === "outlook"
+        ? outlookLoader({
+            config,
+            mockData: {
+              ...emptyCommandCentreData,
+              technicians: fallbackTechnicians,
+              timezone: config.timezone,
+            },
+            range: buildGraphPlanningRange(todayDateKey()),
+          })
+        : Promise.resolve(undefined);
+    const [
+      requestsResult,
+      techniciansResult,
+      crmAccountsResult,
+      outlookResult,
+    ] = await Promise.allSettled([
       client.listRequests(),
       client.listTechnicians(),
       configuredCrmClient
         ? loadZohoCrmAccounts(configuredCrmClient, crmClient !== undefined)
         : Promise.resolve([]),
+      outlookPromise,
     ]);
     const rawRequests =
       requestsResult.status === "fulfilled" ? requestsResult.value : [];
@@ -84,7 +105,7 @@ export async function getDispatchDashboardData(
     const technicians =
       techniciansResult.status === "fulfilled"
         ? techniciansResult.value
-        : profiles.map(staffProfileToTechnician);
+        : fallbackTechnicians;
     const mspCentralError =
       requestsResult.status === "rejected"
         ? "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded."
@@ -94,6 +115,12 @@ export async function getDispatchDashboardData(
       console.error(
         "MSP Central request read failed",
         safeError(requestsResult.reason),
+      );
+    }
+    if (crmAccountsResult.status === "rejected") {
+      console.error(
+        "Zoho CRM site address enrichment failed",
+        safeError(crmAccountsResult.reason),
       );
     }
     const mspData: DispatchDashboardData = {
@@ -116,23 +143,32 @@ export async function getDispatchDashboardData(
     };
 
     if (config.calendarDataSource === "outlook") {
-      const outlookData = await buildOutlookCalendarDashboardData({
-        config,
-        mockData: dashboard,
-        range: buildGraphPlanningRange(todayDateKey()),
-      });
+      const outlookData =
+        outlookResult.status === "fulfilled" && outlookResult.value
+          ? outlookResult.value
+          : {
+              ...dashboard,
+              calendarDataSource: "outlook" as const,
+              calendarError:
+                "Outlook calendar read failed. The last Helpdesk data remains available.",
+              calendarReadOnly: config.mode !== "live",
+              calendarStatusLabel:
+                config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
+            };
+      const combined = {
+        ...dashboard,
+        appointments: outlookData.appointments,
+        calendarDataSource: outlookData.calendarDataSource,
+        calendarError: joinErrors(mspCentralError, outlookData.calendarError),
+        calendarReadOnly: outlookData.calendarReadOnly,
+        calendarStatusLabel: outlookData.calendarStatusLabel,
+      };
 
       return addTrainingSamples({
-        ...outlookData,
-        calendarError: joinErrors(mspCentralError, outlookData.calendarError),
+        ...combined,
         dispatchDataSource: "msp-central",
+        healthItems: buildDispatchHealthItems(combined),
       }, config);
-    }
-    if (crmAccountsResult.status === "rejected") {
-      console.error(
-        "Zoho CRM site address enrichment failed",
-        safeError(crmAccountsResult.reason),
-      );
     }
 
     return addTrainingSamples(dashboard, config);

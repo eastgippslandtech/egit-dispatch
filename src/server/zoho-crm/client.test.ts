@@ -43,5 +43,8 @@ describe("ZohoCrmClient Accounts", () => {
     expect(firstAccountsUrl.searchParams.get("per_page")).toBe("200");
     expect(firstAccountsUrl.searchParams.get("page")).toBe("1");
     expect(secondAccountsUrl.searchParams.get("page")).toBe("2");
+    expect(fetchImpl.mock.calls).toSatisfy((calls) =>
+      calls.every(([, options]) => options?.signal instanceof AbortSignal),
+    );
   });
 });

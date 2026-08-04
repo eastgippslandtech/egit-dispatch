@@ -32,7 +32,10 @@ describe("Graph client", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -94,6 +97,7 @@ describe("Graph client", () => {
           Authorization: "Bearer token-value",
         }),
         method: "GET",
+        signal: expect.any(AbortSignal),
       }),
     );
   });

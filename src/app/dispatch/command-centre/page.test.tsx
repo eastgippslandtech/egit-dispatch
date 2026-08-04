@@ -1298,6 +1298,39 @@ test("opens a queue ticket in the full ticket workspace", async () => {
   expect(within(dialog).getByRole("button", { name: "Work Log" })).toBeInTheDocument();
 });
 
+test("opens a queue ticket workspace on double-click", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.doubleClick(
+    within(screen.getByTestId("request-queue")).getByRole("button", {
+      name: "REQ-100284 Packhouse label printer offline",
+    }),
+  );
+
+  expect(screen.getByRole("dialog", { name: "Ticket workspace" })).toBeInTheDocument();
+});
+
+test("opens a request-backed Day booking workspace on double-click", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.doubleClick(screen.getByTestId("timeline-appointment-appt-1"));
+
+  expect(screen.getByRole("dialog", { name: "Ticket workspace" })).toBeInTheDocument();
+});
+
+test("opens a request-backed Week booking workspace on double-click", async () => {
+  render(await CommandCentrePage());
+
+  fireEvent.click(screen.getByRole("button", { name: /week/i }));
+  fireEvent.doubleClick(
+    screen.getByRole("button", {
+      name: /File server disk expansion OneHarvest/,
+    }),
+  );
+
+  expect(screen.getByRole("dialog", { name: "Ticket workspace" })).toBeInTheDocument();
+});
+
 test("shows customer emails and clickable external links in Comms", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();

@@ -2,6 +2,7 @@ import { Monitor, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import { ZohoSubmitButton } from "./zoho-submit-button";
 
 export function CommandCentreSignIn() {
   return (
@@ -25,12 +26,7 @@ export function CommandCentreSignIn() {
           }}
           className="mt-5"
         >
-          <button
-            className="w-full rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 transition hover:brightness-110 active:brightness-95"
-            type="submit"
-          >
-            Sign in with Zoho
-          </button>
+          <ZohoSubmitButton />
         </form>
         <Link
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-md border border-cc-border-strong bg-cc-surface-2 px-4 py-2.5 text-sm font-semibold text-cc-text transition hover:border-cc-orange/60 hover:bg-cc-surface-3 active:brightness-95"
@@ -38,6 +34,38 @@ export function CommandCentreSignIn() {
         >
           <Monitor className="h-4 w-4" aria-hidden="true" />
           Wallboard login
+        </Link>
+      </section>
+    </main>
+  );
+}
+
+export function AuthenticationProblem() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-cc-canvas px-6 text-cc-text">
+      <section className="w-full max-w-md rounded-lg border border-cc-orange/40 bg-cc-surface-1 p-6 shadow-2xl">
+        <div className="flex items-center gap-3">
+          <CommandCentreLogo
+            className="h-20 w-20 shrink-0 object-contain"
+            decorative
+            variant="icon-colour"
+          />
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">
+              Command Centre
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold">Sign-in needs restarting</h1>
+          </div>
+        </div>
+        <p className="mt-5 text-sm text-cc-text-secondary">
+          The Zoho sign-in window expired or was opened more than once. Start a
+          fresh sign-in to continue.
+        </p>
+        <Link
+          className="mt-5 flex w-full items-center justify-center rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 transition hover:brightness-110"
+          href="/auth/sign-in"
+        >
+          Start sign-in again
         </Link>
       </section>
     </main>

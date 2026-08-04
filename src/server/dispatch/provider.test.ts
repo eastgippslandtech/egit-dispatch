@@ -134,6 +134,42 @@ describe("dispatch dashboard provider", () => {
     );
   });
 
+  it("starts Outlook while Helpdesk requests are still loading", async () => {
+    let releaseRequests!: () => void;
+    const requestsPending = new Promise<void>((resolve) => {
+      releaseRequests = resolve;
+    });
+    const mspClient = {
+      listRequests: async () => {
+        await requestsPending;
+        return [];
+      },
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+    const outlookLoader = vi.fn(async ({ mockData }) => ({
+      ...mockData,
+      appointments: [],
+      calendarDataSource: "outlook" as const,
+      calendarReadOnly: false,
+      calendarStatusLabel: "Outlook Read/Write",
+    }));
+
+    const dataPromise = getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DISPATCH_DATA_SOURCE: "msp-central",
+      }),
+      { crmClient: null, mspClient, outlookLoader },
+    );
+
+    await vi.waitFor(() => expect(outlookLoader).toHaveBeenCalledOnce());
+    releaseRequests();
+    await expect(dataPromise).resolves.toMatchObject({
+      calendarDataSource: "outlook",
+      dispatchDataSource: "msp-central",
+    });
+  });
+
   it("enriches live MSP Central requests with an exact Zoho CRM account address", async () => {
     const mspClient = {
       listRequests: async () => [

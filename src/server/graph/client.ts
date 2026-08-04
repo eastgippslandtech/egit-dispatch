@@ -7,6 +7,8 @@ import type {
 
 type FetchLike = typeof fetch;
 
+const GRAPH_REQUEST_TIMEOUT_MS = 8_000;
+
 type GraphClientOptions = {
   clientId?: string;
   clientSecret?: string;
@@ -71,6 +73,7 @@ export function createGraphClient({
           "Content-Type": "application/x-www-form-urlencoded",
         },
         method: "POST",
+        signal: requestSignal(),
       },
     );
 
@@ -115,6 +118,7 @@ export function createGraphClient({
           Prefer: `outlook.timezone="${outlookTimezone}"`,
         },
         method: "GET",
+        signal: requestSignal(),
       });
 
       if (!response.ok) {
@@ -150,6 +154,7 @@ export function createGraphClient({
           Prefer: `outlook.timezone="${outlookTimezone}"`,
         },
         method: "GET",
+        signal: requestSignal(),
       },
     );
 
@@ -177,6 +182,7 @@ export function createGraphClient({
           Authorization: `Bearer ${token}`,
         },
         method: "DELETE",
+        signal: requestSignal(),
       },
     );
 
@@ -202,6 +208,7 @@ export function createGraphClient({
           Prefer: `outlook.timezone="${outlookTimezone}"`,
         },
         method: "POST",
+        signal: requestSignal(),
       },
     );
 
@@ -229,6 +236,7 @@ export function createGraphClient({
           Prefer: `outlook.timezone="${outlookTimezone}"`,
         },
         method: "PATCH",
+        signal: requestSignal(),
       },
     );
 
@@ -250,6 +258,10 @@ export function createGraphClient({
     listCalendarView,
     updateEvent,
   };
+}
+
+function requestSignal() {
+  return AbortSignal.timeout(GRAPH_REQUEST_TIMEOUT_MS);
 }
 
 function trustedGraphNextLink(nextLink?: string) {

@@ -459,6 +459,7 @@ function RequestRow({
         isSelected ? "bg-cc-orange/[0.08] shadow-[inset_3px_0_0_#ff7a2f]" : "hover:bg-white/[0.035]"
       }`}
       onClick={onSelect}
+      onDoubleClick={onOpen}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -478,7 +479,11 @@ function RequestRow({
         <p className="line-clamp-2 text-xs font-semibold text-amber-100">{attention}</p>
         <p className="mt-1 text-[10px] uppercase text-slate-500">{request.status}</p>
       </div>
-      <div className="flex items-center justify-end gap-1 self-center" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="flex items-center justify-end gap-1 self-center"
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+      >
         <button className={rowActionClass} type="button" onClick={onOpen}><MessageSquare className="h-3.5 w-3.5" /> Open workspace</button>
         <button aria-label="Schedule" className={iconActionClass} title="Schedule" type="button" onClick={onSchedule}><CalendarDays className="h-4 w-4" /></button>
         <button aria-label="Merge request" className={iconActionClass} title="Merge request" type="button" onClick={onMerge}><GitMerge className="h-4 w-4" /></button>

@@ -4219,8 +4219,8 @@ export function TicketWorkspaceModal({
               </section>
             </div>
           ) : tab === "comms" ? (
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
-              <div className="grid min-w-0 gap-4">
+            <div className="grid gap-4">
+              <div className="grid min-w-0 gap-4 xl:grid-cols-2">
                 <CommunicationThread
                   emptyLabel="No customer emails or replies are recorded."
                   title="Customer conversation"
@@ -4232,52 +4232,67 @@ export function TicketWorkspaceModal({
                   updates={context?.internalNotes ?? []}
                 />
               </div>
-              <section className="h-fit rounded-md border border-white/10 bg-white/[0.03] p-4">
-                <h3 className="text-sm font-semibold">New communication</h3>
-                <div className="mt-3 grid grid-cols-2 rounded-md border border-white/10 p-1">
-                  {(["customer", "internal"] as const).map((value) => (
-                    <button
-                      key={value}
-                      aria-pressed={visibility === value}
-                      className={`rounded px-2 py-2 text-xs font-semibold ${
-                        visibility === value
-                          ? "bg-cc-orange text-cc-surface-1"
-                          : "text-slate-400"
-                      }`}
-                      type="button"
-                      onClick={() => setVisibility(value)}
-                    >
-                      {value === "customer" ? "Customer reply" : "Internal note"}
-                    </button>
-                  ))}
+              <section
+                className="rounded-md border border-white/10 bg-white/[0.03] p-4"
+                data-testid="communication-composer"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold">New communication</h3>
+                  <div className="grid min-w-64 grid-cols-2 rounded-md border border-white/10 p-1">
+                    {(["customer", "internal"] as const).map((value) => (
+                      <button
+                        key={value}
+                        aria-pressed={visibility === value}
+                        className={`rounded px-2 py-2 text-xs font-semibold ${
+                          visibility === value
+                            ? "bg-cc-orange text-cc-surface-1"
+                            : "text-slate-400"
+                        }`}
+                        type="button"
+                        onClick={() => setVisibility(value)}
+                      >
+                        {value === "customer" ? "Customer reply" : "Internal note"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <label className="mt-4 block text-sm font-semibold">
+                <label className="mt-3 block text-sm font-semibold">
                   Message
                   <textarea
                     aria-label="Communication message"
-                    className="mt-2 min-h-40 w-full rounded-md border border-white/10 bg-[#111d30] p-3 font-normal"
+                    className="mt-2 min-h-56 w-full resize-y rounded-md border border-white/10 bg-[#111d30] p-4 font-normal leading-6"
                     value={message}
                     onChange={(event) => setMessage(event.target.value)}
                   />
                 </label>
-                <button
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
-                  disabled={!liveWriteback || !message.trim() || sending}
-                  type="button"
-                  onClick={sendCommunication}
-                >
-                  <MessageSquare className="h-4 w-4" />
-                  {sending
-                    ? "Sending..."
-                    : visibility === "customer"
-                      ? "Send to customer"
-                      : "Add internal note"}
-                </button>
-                {!liveWriteback ? (
-                  <p className="mt-3 text-xs text-amber-200">
-                    Communications require a live MSP Central request.
-                  </p>
-                ) : null}
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    {!liveWriteback ? (
+                      <p className="text-xs text-amber-200">
+                        Communications require a live MSP Central request.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400">
+                        {visibility === "customer"
+                          ? "This reply will be visible to the customer."
+                          : "This note will remain internal."}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    className="flex min-w-52 items-center justify-center gap-2 rounded-md bg-cc-orange px-5 py-2.5 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+                    disabled={!liveWriteback || !message.trim() || sending}
+                    type="button"
+                    onClick={sendCommunication}
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    {sending
+                      ? "Sending..."
+                      : visibility === "customer"
+                        ? "Send to customer"
+                        : "Add internal note"}
+                  </button>
+                </div>
               </section>
             </div>
           ) : (

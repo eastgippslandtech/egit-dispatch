@@ -1343,6 +1343,10 @@ test("shows customer emails and clickable external links in Comms", async () => 
     "href",
     "https://jobs.example.com/123",
   );
+  const composer = within(dialog).getByTestId("communication-composer");
+  expect(
+    within(composer).getByLabelText("Communication message"),
+  ).toHaveClass("min-h-56", "w-full");
   expect(within(dialog).getByRole("button", { name: "Send to customer" })).toBeInTheDocument();
 });
 

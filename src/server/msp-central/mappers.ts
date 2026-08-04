@@ -15,6 +15,7 @@ import {
 import { bookingTypeForRequest } from "@/server/dispatch/booking";
 import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type {
+  MspCentralRawNotification,
   MspCentralRawRequest,
   MspCentralRawRequestNote,
   MspCentralRawTechnician,
@@ -387,6 +388,28 @@ export function mapMspCentralRequestNotes(
   });
 
   return { customerResponses, internalNotes };
+}
+
+export function mapMspCentralRequestNotifications(
+  notifications: MspCentralRawNotification[] = [],
+) {
+  return notifications.flatMap((notification, index) => {
+    if (notification.type?.trim().toLowerCase() !== "reply") return [];
+    const body = htmlToPlainText(notification.description);
+    if (!body) return [];
+
+    return [
+      {
+        author:
+          readString(notification.sender?.name) ??
+          readString(notification.sender?.email_id) ??
+          "Helpdesk",
+        body,
+        createdAt: readDateTime(notification.sent_time),
+        id: readString(notification.id) ?? `request-notification-${index}`,
+      } satisfies MspCentralRequestUpdate,
+    ];
+  });
 }
 
 export function mapMspCentralRequestWorklogs(

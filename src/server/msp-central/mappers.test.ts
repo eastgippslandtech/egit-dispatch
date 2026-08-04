@@ -5,6 +5,7 @@ import { getInitialStaffProfiles } from "@/server/staff/profiles";
 import {
   mapMspCentralPriority,
   mapMspCentralRequest,
+  mapMspCentralRequestNotifications,
   mapMspCentralRequestNotes,
   mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
@@ -302,6 +303,26 @@ describe("MSP Central request mappers", () => {
 
     expect(mapped.customerResponses.map(({ id }) => id)).toEqual(["reply-1"]);
     expect(mapped.internalNotes.map(({ id }) => id)).toEqual(["note-1"]);
+  });
+
+  it("maps MSP email notifications into the customer conversation", () => {
+    expect(
+      mapMspCentralRequestNotifications([
+        {
+          description: "<p>Your printer is back online.</p>",
+          id: "notification-1",
+          sender: { email_id: "simeon@egit.com.au", name: "Simeon" },
+          sent_time: { value: "1785801600000" },
+          type: "reply",
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        author: "Simeon",
+        body: "Your printer is back online.",
+        id: "notification-1",
+      }),
+    ]);
   });
 
   it("prefers MSP technician ID and warns on display-name-only matches", () => {

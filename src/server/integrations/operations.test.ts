@@ -298,9 +298,9 @@ describe("integration operation builders", () => {
   });
 
   it.each([
-    ["customer", true],
-    ["internal", false],
-  ] as const)("maps %s Comms visibility explicitly", (visibility, showToRequester) => {
+    ["customer", "msp.send_reply", true],
+    ["internal", "msp.add_note", false],
+  ] as const)("maps %s Comms to the correct MSP action", (visibility, action, showToRequester) => {
     const operation = communicationOperation({
       actorEmail: "jervy@egit.com.au",
       body: "The replacement has arrived.",
@@ -311,7 +311,7 @@ describe("integration operation builders", () => {
     });
 
     expect(operation.steps[0]).toMatchObject({
-      action: "msp.add_note",
+      action,
       payload: { notifyTechnician: false, showToRequester, visibility },
       stepKey: "msp:communication",
     });

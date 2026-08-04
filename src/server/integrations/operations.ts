@@ -285,7 +285,12 @@ export function communicationOperation(
     requestId: input.requestId,
     sourceVersion: input.sourceVersion,
     steps: [
-      step("msp_central", "msp.add_note", "msp:communication", payload),
+      step(
+        "msp_central",
+        visibility === "customer" ? "msp.send_reply" : "msp.add_note",
+        "msp:communication",
+        payload,
+      ),
       refreshStep(input.requestId),
     ],
   });

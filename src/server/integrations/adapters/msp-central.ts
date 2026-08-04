@@ -1,5 +1,6 @@
 import type {
   MspCentralClient,
+  MspCentralRawNotification,
   MspCentralRawRequestNote,
   MspCentralRawWorklog,
   MspCentralTimestamp,
@@ -41,6 +42,29 @@ export function createMspCentralAdapters({
             description: payload.description,
             requestId: payload.requestId,
             visibility: payload.visibility,
+          });
+          return {};
+        },
+      });
+    }),
+    "msp.send_reply": nonIdempotent(async (step) => {
+      const payload = notePayload(step);
+      if (!client.addRequestReply || !client.listRequestNotifications) {
+        throw new PermanentIntegrationError(
+          "MSP Central email reply writeback is unavailable.",
+        );
+      }
+      return executeWithReconciliation({
+        step,
+        reconcile: async () =>
+          reconcileReply(
+            await client.listRequestNotifications!(payload.requestId),
+            payload,
+          ),
+        write: async () => {
+          await client.addRequestReply!({
+            description: payload.description,
+            requestId: payload.requestId,
           });
           return {};
         },
@@ -238,6 +262,25 @@ function reconcileNote(
         new Date(payload.occurredAt).getTime(),
       ) &&
       contentFingerprint(note.description ?? "") === expectedFingerprint,
+  );
+  const externalId = String(match?.id ?? "").trim();
+  return externalId ? { externalId } : undefined;
+}
+
+function reconcileReply(
+  notifications: MspCentralRawNotification[],
+  payload: ReturnType<typeof notePayload>,
+) {
+  const expectedFingerprint = contentFingerprint(payload.description);
+  const match = notifications.find(
+    (notification) =>
+      notification.type?.trim().toLowerCase() === "reply" &&
+      withinReconciliationWindow(
+        timestampMilliseconds(notification.sent_time),
+        new Date(payload.occurredAt).getTime(),
+      ) &&
+      contentFingerprint(notification.description ?? "") ===
+        expectedFingerprint,
   );
   const externalId = String(match?.id ?? "").trim();
   return externalId ? { externalId } : undefined;

@@ -7,6 +7,7 @@ import {
   loadMspCentralFixtureResponses,
 } from "./fixtures";
 import {
+  mapMspCentralRequestNotifications,
   mapMspCentralRequestNotes,
   mapMspCentralRequestWorklogs,
   mapMspCentralRequests,
@@ -26,6 +27,8 @@ import type {
   MspCentralRequestDetailResponse,
   MspCentralRequestListResponse,
   MspCentralRequestNoteListResponse,
+  MspCentralRequestNotificationListResponse,
+  MspCentralRequestUpdate,
   MspCentralRequestWorklogListResponse,
   MspCentralTechnicianListResponse,
 } from "./types";
@@ -65,6 +68,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
   const profiles = getInitialStaffProfiles();
 
   return {
+    async addRequestReply() {
+      return undefined;
+    },
     async addRequestWorklog() {
       return undefined;
     },
@@ -93,6 +99,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
       };
     },
     async listRequestNotes() {
+      return [];
+    },
+    async listRequestNotifications() {
       return [];
     },
     async listRequestWorklogs() {
@@ -170,6 +179,47 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
   });
 
   return {
+    async addRequestReply(input) {
+      assertConfigured();
+      const requestPayload = await getJson<MspCentralRequestDetailResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}`,
+      );
+      const request = requestPayload.request;
+      const requesterEmail =
+        cleanEmail(request?.requester?.email_id) ??
+        cleanEmail(request?.requester?.email) ??
+        cleanEmail(request?.requester_email);
+      if (!request || !requesterEmail) {
+        throw new MspCentralConfigurationError(
+          "MSP Central requester email is unavailable for this reply.",
+        );
+      }
+      const requestReference = String(
+        request.request_number ?? request.id ?? input.requestId,
+      ).trim();
+      const requestSubject = String(request.subject ?? "Helpdesk request").trim();
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/requests/${encodeURIComponent(input.requestId)}/notifications`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({
+              notification: {
+                description: input.description,
+                subject: `Re: [Request ID :##${requestReference}##] : ${requestSubject}`,
+                to: [{ email_id: requesterEmail }],
+                type: "reply",
+              },
+            }),
+          }),
+          method: "POST",
+        },
+      );
+      if (!mspCentralActionSucceeded(payload)) {
+        throw new MspCentralConfigurationError(
+          "MSP Central email reply failed.",
+        );
+      }
+    },
     async addRequestNote(input) {
       assertConfigured();
       const payload = await requestJson<MspCentralActionResponse>(
@@ -343,10 +393,12 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         sourceSystem: "msp-central",
       })[0];
 
-      const [notesResult, worklogsResult] = await Promise.allSettled([
-        fetchRequestNotes(requestId),
-        fetchRequestWorklogs(requestId),
-      ]);
+      const [notesResult, notificationsResult, worklogsResult] =
+        await Promise.allSettled([
+          fetchRequestNotes(requestId),
+          fetchRequestNotifications(requestId),
+          fetchRequestWorklogs(requestId),
+        ]);
 
       if (notesResult.status === "rejected") {
         console.error(
@@ -361,13 +413,32 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         );
       }
 
-      return {
-        ...(notesResult.status === "fulfilled"
+      if (notificationsResult.status === "rejected") {
+        console.error(
+          "MSP Central request notifications read failed",
+          safeError(notificationsResult.reason),
+        );
+      }
+
+      const mappedNotes =
+        notesResult.status === "fulfilled"
           ? mapMspCentralRequestNotes(notesResult.value)
-          : { customerResponses: [], internalNotes: [] }),
+          : { customerResponses: [], internalNotes: [] };
+      const notificationReplies =
+        notificationsResult.status === "fulfilled"
+          ? mapMspCentralRequestNotifications(notificationsResult.value)
+          : [];
+
+      return {
+        customerResponses: mergeRequestUpdates(
+          mappedNotes.customerResponses,
+          notificationReplies,
+        ),
+        internalNotes: mappedNotes.internalNotes,
         notesWarning:
-          notesResult.status === "rejected"
-            ? "Latest ticket notes could not be loaded."
+          notesResult.status === "rejected" ||
+          notificationsResult.status === "rejected"
+            ? "Some ticket communications could not be loaded."
             : undefined,
         request,
         worklogs:
@@ -398,6 +469,12 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       const url = requestChildListUrl(apiRoot, requestId, "notes");
       const payload = await getJson<MspCentralRequestNoteListResponse>(url);
       return payload.notes ?? payload.request_notes ?? [];
+    },
+    async listRequestNotifications(requestId) {
+      const url = requestChildListUrl(apiRoot, requestId, "notifications");
+      return (
+        await getJson<MspCentralRequestNotificationListResponse>(url)
+      ).notifications ?? [];
     },
     async listRequests(params) {
       assertConfigured();
@@ -545,6 +622,16 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     });
   }
 
+  async function fetchRequestNotifications(requestId: string) {
+    return fetchRequestEntryPages({
+      path: "notifications",
+      readEntries: (payload: MspCentralRequestNotificationListResponse) =>
+        payload.notifications ?? [],
+      requestId,
+      sortField: "sent_time",
+    });
+  }
+
   async function fetchRequestWorklogs(requestId: string) {
     return fetchRequestEntryPages({
       path: "worklogs",
@@ -563,10 +650,12 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     path,
     readEntries,
     requestId,
+    sortField = "created_time",
   }: {
-    path: "notes" | "worklogs";
+    path: "notes" | "notifications" | "worklogs";
     readEntries: (payload: TPayload) => TEntry[];
     requestId: string;
+    sortField?: "created_time" | "sent_time";
   }): Promise<TEntry[]> {
     const entries: TEntry[] = [];
     let startIndex = 1;
@@ -580,7 +669,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
         JSON.stringify({
           list_info: {
             row_count: MSP_REQUEST_PAGE_SIZE,
-            sort_field: "created_time",
+            sort_field: sortField,
             sort_order: "desc",
             start_index: startIndex,
           },
@@ -727,7 +816,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 function requestChildListUrl(
   apiRoot: string,
   requestId: string,
-  child: "notes" | "worklogs",
+  child: "notes" | "notifications" | "worklogs",
 ) {
   const url = new URL(
     `${apiRoot}/requests/${encodeURIComponent(requestId)}/${child}`,
@@ -737,13 +826,18 @@ function requestChildListUrl(
     JSON.stringify({
       list_info: {
         row_count: 100,
-        sort_field: "created_time",
+        sort_field: child === "notifications" ? "sent_time" : "created_time",
         sort_order: "desc",
         start_index: 1,
       },
     }),
   );
   return url.toString();
+}
+
+function cleanEmail(value?: string | null) {
+  const email = value?.trim().toLowerCase();
+  return email && email.includes("@") ? email : undefined;
 }
 
 function commandFingerprintMarker(commandFingerprint: string) {
@@ -996,6 +1090,27 @@ function buildMspCentralApiRoot(config: DispatchConfig) {
 
 function uniqueNamedRows(rows: Array<{ id: string; name: string }>) {
   return [...new Map(rows.map((row) => [row.id, row])).values()];
+}
+
+function mergeRequestUpdates(
+  ...groups: MspCentralRequestUpdate[][]
+): MspCentralRequestUpdate[] {
+  const seen = new Set<string>();
+  return groups
+    .flat()
+    .filter((update) => {
+      const key = [
+        update.author.trim().toLowerCase(),
+        update.body.replace(/\s+/g, " ").trim().toLowerCase(),
+        update.createdAt ?? "",
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) =>
+      String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")),
+    );
 }
 
 function safeError(error: unknown) {

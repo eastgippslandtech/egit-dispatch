@@ -177,6 +177,10 @@ describe("MSP Central live client", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ notifications: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({
           worklogs: [
             {
@@ -212,6 +216,11 @@ describe("MSP Central live client", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
+      expect.stringContaining("/requests/123/notifications"),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
       expect.stringContaining("/requests/123/worklogs"),
       expect.objectContaining({ method: "GET" }),
     );
@@ -241,7 +250,7 @@ describe("MSP Central live client", () => {
     ]);
   });
 
-  it("loads customer email replies from the live MSP Central notes response shape", async () => {
+  it("loads customer email replies from the MSP notification conversation", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -263,17 +272,23 @@ describe("MSP Central live client", () => {
         ok: true,
         json: async () => ({
           list_info: { has_more_rows: false },
-          notes: [
+          notes: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          notifications: [
             {
-              created_by: {
+              sender: {
                 email_id: "client@example.com",
-                is_technician: false,
                 name: "Client User",
               },
-              created_time: { value: "1783501200000" },
+              sent_time: { value: "1783501200000" },
               description: "<p>I have replied with the requested details.</p>",
               id: "email-reply-1",
-              show_to_requester: true,
+              type: "reply",
             },
           ],
         }),
@@ -1001,14 +1016,29 @@ describe("MSP Central live client", () => {
     });
   });
 
-  it("adds customer-facing and internal request communications", async () => {
+  it("sends customer Comms as a reply notification and keeps internal Comms as a note", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: "msp-access-token" }),
       })
-      .mockResolvedValue({
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: { email_id: "customer@example.com" },
+            subject: "Printer offline",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      })
+      .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ response_status: { status: "success" } }),
       });
@@ -1025,10 +1055,9 @@ describe("MSP Central live client", () => {
       }),
     );
 
-    await client.addRequestNote?.({
+    await client.addRequestReply?.({
       description: "Your printer is back online.",
       requestId: "123",
-      visibility: "customer",
     });
     await client.addRequestNote?.({
       description: "Watch the switch port for errors.",
@@ -1036,13 +1065,19 @@ describe("MSP Central live client", () => {
       visibility: "internal",
     });
 
-    const customerBody = fetchMock.mock.calls[1][1].body as URLSearchParams;
-    const internalBody = fetchMock.mock.calls[2][1].body as URLSearchParams;
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("/requests/123/notifications"),
+      expect.objectContaining({ method: "POST" }),
+    );
+    const customerBody = fetchMock.mock.calls[2][1].body as URLSearchParams;
+    const internalBody = fetchMock.mock.calls[3][1].body as URLSearchParams;
     expect(JSON.parse(customerBody.get("input_data") ?? "{}")).toMatchObject({
-      request_note: {
+      notification: {
         description: "Your printer is back online.",
-        notify_technician: false,
-        show_to_requester: true,
+        subject: "Re: [Request ID :##REQ-123##] : Printer offline",
+        to: [{ email_id: "customer@example.com" }],
+        type: "reply",
       },
     });
     expect(JSON.parse(internalBody.get("input_data") ?? "{}")).toMatchObject({

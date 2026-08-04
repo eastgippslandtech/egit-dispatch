@@ -101,6 +101,24 @@ export type MspCentralRequestNoteListResponse = {
   request_notes?: MspCentralRawRequestNote[];
 };
 
+export type MspCentralRawNotification = {
+  description?: string | null;
+  id?: string | number | null;
+  sender?: {
+    email_id?: string | null;
+    name?: string | null;
+  } | null;
+  sent_time?: MspCentralTimestamp | null;
+  subject?: string | null;
+  to?: Array<{ email_id?: string | null }> | null;
+  type?: string | null;
+};
+
+export type MspCentralRequestNotificationListResponse = {
+  list_info?: MspCentralListInfo | null;
+  notifications?: MspCentralRawNotification[];
+};
+
 export type MspCentralRawWorklog = {
   created_by?: {
     email_id?: string | null;
@@ -178,6 +196,10 @@ export type MspCentralClient = {
     requestId: string;
     visibility: "customer" | "internal";
   }): Promise<void>;
+  addRequestReply?(input: {
+    description: string;
+    requestId: string;
+  }): Promise<void>;
   addRequestWorklog?(input: {
     description: string;
     durationMinutes: number;
@@ -212,6 +234,9 @@ export type MspCentralClient = {
   listRequestNotes?(
     requestId: string,
   ): Promise<MspCentralRawRequestNote[]>;
+  listRequestNotifications?(
+    requestId: string,
+  ): Promise<MspCentralRawNotification[]>;
   listRequests(params?: MspCentralListRequestsParams): Promise<DispatchRequest[]>;
   listRequestWorklogs?(
     requestId: string,

@@ -24,6 +24,7 @@ describe("MSP Central integration adapters", () => {
       ),
     ).toMatchObject({
       "msp.add_note": "non_idempotent",
+      "msp.send_reply": "non_idempotent",
       "msp.add_worklog": "non_idempotent",
       "msp.merge_requests": "non_idempotent",
       "msp.schedule_request": "idempotent",
@@ -183,26 +184,26 @@ describe("MSP Central integration adapters", () => {
     expect(addRequestWorklog).not.toHaveBeenCalled();
   });
 
-  it("reconciles customer Comms using content and requester visibility", async () => {
+  it("sends customer Comms as an email reply notification", async () => {
     const adapters = createMspCentralAdapters({
       client: client({
-        addRequestNote: vi
+        addRequestReply: vi
           .fn()
           .mockRejectedValue(Object.assign(new Error("connection reset"), { code: "ECONNRESET" })),
-        listRequestNotes: vi.fn().mockResolvedValue([
+        listRequestNotifications: vi.fn().mockResolvedValue([
           {
-            created_time: { value: "1785801600000" },
             description: "<p>Your printer is back online.</p>",
-            id: "note-3",
-            show_to_requester: true,
+            id: "reply-3",
+            sent_time: { value: "1785801600000" },
+            type: "reply",
           },
         ]),
       }),
     });
 
     await expect(
-      adapters["msp.add_note"].execute(
-        step("msp.add_note", {
+      adapters["msp.send_reply"].execute(
+        step("msp.send_reply", {
           description: "Your printer is back online.",
           occurredAt: new Date(1785801600000).toISOString(),
           requestId: "request-42",
@@ -210,7 +211,29 @@ describe("MSP Central integration adapters", () => {
           visibility: "customer",
         }),
       ),
-    ).resolves.toMatchObject({ externalId: "note-3", reconciled: true });
+    ).resolves.toMatchObject({ externalId: "reply-3", reconciled: true });
+  });
+
+  it("keeps internal Comms as a private request note", async () => {
+    const addRequestNote = vi.fn().mockResolvedValue(undefined);
+    const adapters = createMspCentralAdapters({
+      client: client({ addRequestNote }),
+    });
+
+    await adapters["msp.add_note"].execute(
+      step("msp.add_note", {
+        description: "Watch the switch port for errors.",
+        occurredAt: "2026-08-04T10:00:00+10:00",
+        requestId: "request-42",
+        visibility: "internal",
+      }),
+    );
+
+    expect(addRequestNote).toHaveBeenCalledWith({
+      description: "Watch the switch port for errors.",
+      requestId: "request-42",
+      visibility: "internal",
+    });
   });
 
   it("maps definite provider failures without leaking into blind retries", async () => {
@@ -260,23 +283,23 @@ describe("MSP Central integration adapters", () => {
   it("does not reconcile an old identical customer message", async () => {
     const adapters = createMspCentralAdapters({
       client: client({
-        addRequestNote: vi
+        addRequestReply: vi
           .fn()
           .mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
-        listRequestNotes: vi.fn().mockResolvedValue([
+        listRequestNotifications: vi.fn().mockResolvedValue([
           {
-            created_time: { value: "1780000000000" },
             description: "Your printer is back online.",
-            id: "old-note",
-            show_to_requester: true,
+            id: "old-reply",
+            sent_time: { value: "1780000000000" },
+            type: "reply",
           },
         ]),
       }),
     });
 
     await expect(
-      adapters["msp.add_note"].execute(
-        step("msp.add_note", {
+      adapters["msp.send_reply"].execute(
+        step("msp.send_reply", {
           description: "Your printer is back online.",
           occurredAt: "2026-08-04T10:00:00+10:00",
           requestId: "request-42",
@@ -453,6 +476,7 @@ function step(
 function client(overrides: Record<string, unknown> = {}) {
   return {
     addRequestNote: vi.fn().mockResolvedValue(undefined),
+    addRequestReply: vi.fn().mockResolvedValue(undefined),
     addRequestWorklog: vi.fn().mockResolvedValue(undefined),
     assignRequest: vi.fn().mockResolvedValue(undefined),
     clearRequestSchedule: vi.fn().mockResolvedValue(undefined),
@@ -461,6 +485,7 @@ function client(overrides: Record<string, unknown> = {}) {
     getTechnician: vi.fn(),
     listCustomers: vi.fn(),
     listRequestNotes: vi.fn().mockResolvedValue([]),
+    listRequestNotifications: vi.fn().mockResolvedValue([]),
     listRequests: vi.fn(),
     listRequestWorklogs: vi.fn().mockResolvedValue([]),
     listSites: vi.fn(),

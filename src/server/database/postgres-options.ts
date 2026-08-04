@@ -8,7 +8,9 @@ export function getServerlessPostgresOptions(
       statement_timeout: 8_000,
     },
     idle_timeout: 5,
-    max: 1,
+    // Keep a small pool so one slow transaction cannot block unrelated
+    // wallboard reads and background integration recovery work.
+    max: 4,
     max_lifetime: 10 * 60,
     prepare: false,
     ssl,

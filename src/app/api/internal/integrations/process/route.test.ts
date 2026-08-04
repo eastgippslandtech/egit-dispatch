@@ -47,7 +47,7 @@ describe("integration process route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(processDue).toHaveBeenCalledWith({ limit: 25 });
+    expect(processDue).toHaveBeenCalledWith({ limit: 3 });
     await expect(response.json()).resolves.toEqual({
       claimed: 4,
       processingErrors: 0,
@@ -56,6 +56,12 @@ describe("integration process route", () => {
       reviewRequired: 1,
       succeeded: 2,
     });
+  });
+
+  it("uses the safe batch size when the scheduler does not provide a limit", async () => {
+    await POST(request());
+
+    expect(processDue).toHaveBeenCalledWith({ limit: 3 });
   });
 
   it("returns a safe unavailable response when the batch cannot start", async () => {

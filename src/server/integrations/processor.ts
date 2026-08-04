@@ -24,12 +24,14 @@ export function createIntegrationProcessor({
   jitter = defaultJitter,
   registry,
   repository,
+  stepTimeoutMs = 12_000,
   workerId,
 }: {
   clock?: () => Date;
   jitter?: (delayMs: number, step: IntegrationOperationStep) => number;
   registry: IntegrationAdapterRegistry;
   repository: ProcessorRepository;
+  stepTimeoutMs?: number;
   workerId: string;
 }) {
   return {
@@ -78,7 +80,7 @@ export function createIntegrationProcessor({
 
     let result;
     try {
-      result = await adapter.execute(step);
+      result = await executeWithTimeout(adapter.execute(step), stepTimeoutMs);
     } catch (error) {
       const failure = classifyIntegrationError(error, {
         writeSafety: adapter.writeSafety,
@@ -173,6 +175,30 @@ export function createIntegrationProcessor({
       input,
     );
   }
+}
+
+function executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        Object.assign(new Error("Integration provider step timed out."), {
+          code: "ETIMEDOUT",
+        }),
+      );
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function retryDelayMs(attemptCount: number) {

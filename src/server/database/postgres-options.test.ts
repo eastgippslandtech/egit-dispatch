@@ -8,6 +8,7 @@ import {
 describe("serverless Postgres connection URL", () => {
   it("bounds ordinary queries and lock waits", () => {
     expect(getServerlessPostgresOptions()).toMatchObject({
+      max: 4,
       connection: {
         lock_timeout: 2_000,
         statement_timeout: 8_000,

@@ -24,6 +24,8 @@ type PeopleClient = {
 };
 
 export async function getWallboardSnapshot({
+  auxiliaryTimeoutMs = 5_000,
+  dashboardTimeoutMs = 25_000,
   getDashboard = getTestSyncedDispatchDashboardData,
   now = new Date(),
   peopleClient,
@@ -31,6 +33,8 @@ export async function getWallboardSnapshot({
   repository = getConfiguredPresenceOverrideRepository(),
   talkTimeRepository = getConfiguredYeastarRepository(),
 }: {
+  auxiliaryTimeoutMs?: number;
+  dashboardTimeoutMs?: number;
   getDashboard?: () => Promise<DispatchDashboardData>;
   now?: Date;
   peopleClient?: PeopleClient;
@@ -38,18 +42,41 @@ export async function getWallboardSnapshot({
   repository?: Pick<PresenceOverrideRepository, "listActive"> | null;
   talkTimeRepository?: { getWeeklyTalkTotals(now?: Date): Promise<Record<string, number>> } | null;
 } = {}): Promise<WallboardSnapshot> {
+  const sourceWarnings: string[] = [];
   const [rawDashboard, overrides, weeklyExternalTalkSeconds] = await Promise.all([
-    getDashboard(),
-    repository ? repository.listActive(now) : Promise.resolve([]),
+    withTimeout(
+      getDashboard(),
+      dashboardTimeoutMs,
+      "Command Centre dashboard read timed out.",
+    ),
+    repository
+      ? withTimeout(
+          repository.listActive(now),
+          auxiliaryTimeoutMs,
+          "Manual presence updates timed out.",
+        ).catch((error) => {
+          sourceWarnings.push(
+            "Manual presence updates are temporarily unavailable.",
+          );
+          console.error("Presence override read failed", safeError(error));
+          return [];
+        })
+      : Promise.resolve([]),
     talkTimeRepository
-      ? talkTimeRepository.getWeeklyTalkTotals(now).catch((error) => {
+      ? withTimeout(
+          talkTimeRepository.getWeeklyTalkTotals(now),
+          auxiliaryTimeoutMs,
+          "External talk-time read timed out.",
+        ).catch((error) => {
+          sourceWarnings.push(
+            "External talk-time totals are temporarily unavailable.",
+          );
           console.error("Yeastar talk-time read failed", safeError(error));
           return {};
         })
       : Promise.resolve({}),
   ]);
   const dashboard = sanitizeDashboard(rawDashboard);
-  const sourceWarnings: string[] = [];
   let leaves: PresenceLeave[] = [];
   let peopleStatus: WallboardSnapshot["peopleStatus"] = "not_configured";
 
@@ -130,4 +157,22 @@ function safeError(error: unknown) {
   return error instanceof Error
     ? { message: error.message }
     : { message: "Unknown Zoho People error." };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

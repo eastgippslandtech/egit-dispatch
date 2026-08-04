@@ -110,6 +110,36 @@ describe("wallboard snapshot service", () => {
     );
   });
 
+  it("keeps the wallboard responsive when optional presence sources stall", async () => {
+    const dashboard = {
+      ...getEmptyCommandCentreData(),
+      appointments: [],
+      technicians: [technician],
+    };
+
+    const snapshot = await getWallboardSnapshot({
+      auxiliaryTimeoutMs: 1,
+      getDashboard: vi.fn().mockResolvedValue(dashboard),
+      now: new Date("2026-07-26T02:15:00.000Z"),
+      peopleConfig: null,
+      repository: {
+        listActive: vi.fn(() => new Promise(() => undefined)),
+      },
+      talkTimeRepository: {
+        getWeeklyTalkTotals: vi.fn(() => new Promise(() => undefined)),
+      },
+    });
+
+    expect(snapshot.presences[0]).toMatchObject({ status: "closed" });
+    expect(snapshot.weeklyExternalTalkSeconds).toEqual({});
+    expect(snapshot.sourceWarnings).toEqual(
+      expect.arrayContaining([
+        "Manual presence updates are temporarily unavailable.",
+        "External talk-time totals are temporarily unavailable.",
+      ]),
+    );
+  });
+
   it("redacts private appointment content from the wallboard payload", async () => {
     const dashboard = {
       ...getEmptyCommandCentreData(),

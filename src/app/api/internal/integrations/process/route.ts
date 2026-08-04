@@ -3,6 +3,7 @@ import { createConfiguredIntegrationWorker } from "@/server/integrations/runtime
 import { integrationCronAuthorized } from "@/server/yeastar/route-auth";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
 
 function boundedLimit(body: unknown) {
   const value =
-    body && typeof body === "object" ? Number(Reflect.get(body, "limit")) : 10;
-  if (!Number.isFinite(value)) return 10;
-  return Math.min(25, Math.max(1, Math.trunc(value)));
+    body && typeof body === "object" ? Number(Reflect.get(body, "limit")) : 3;
+  if (!Number.isFinite(value)) return 3;
+  return Math.min(3, Math.max(1, Math.trunc(value)));
 }

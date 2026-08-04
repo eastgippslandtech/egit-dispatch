@@ -390,6 +390,33 @@ describe("integration processor", () => {
     expect(result.processingErrors).toBe(1);
     expect(secondExecute).toHaveBeenCalledOnce();
   });
+
+  it("retries an idempotent provider step that exceeds its execution budget", async () => {
+    const harness = createHarness([makeStep()]);
+    const processor = createIntegrationProcessor({
+      clock: () => now,
+      jitter: (delay) => delay,
+      registry: createIntegrationAdapterRegistry({
+        "outlook.upsert": {
+          execute: vi.fn(() => new Promise(() => undefined)),
+          writeSafety: "idempotent",
+        },
+      }),
+      repository: harness.repository,
+      stepTimeoutMs: 1,
+      workerId: "worker-a",
+    });
+
+    await expect(processor.processDue({ limit: 1 })).resolves.toMatchObject({
+      retrying: 1,
+      succeeded: 0,
+    });
+    expect(harness.failed[0]).toMatchObject({
+      error: "Integration provider step timed out.",
+      reconciliationRequired: false,
+      reviewRequired: false,
+    });
+  });
 });
 
 function makeStep(

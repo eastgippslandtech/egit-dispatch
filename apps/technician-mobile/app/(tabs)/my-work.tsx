@@ -22,7 +22,7 @@ export default function MyWorkRoute() {
     null,
   );
   const schedule = useSchedule({ from: today, to: "2026-08-31" });
-  const sections = buildSections(schedule.jobs, today);
+  const sections = buildMyWorkSections(schedule.jobs, today);
   const selectedSection = useMemo(
     () =>
       selectedSectionTitle
@@ -133,8 +133,11 @@ function formatSyncTime(value: string | null) {
   }).format(new Date(value));
 }
 
-function buildSections(jobs: MobileJob[], today: string) {
+export function buildMyWorkSections(jobs: MobileJob[], today: string) {
   const activeJobs = jobs.filter((job) => job.status !== "Completed");
+  const assignedHelpdeskJobs = uniqueRequests(
+    activeJobs.filter((job) => job.permissions.canWriteWorklog),
+  );
   return [
     {
       emptyCopy: "No work is scheduled for today.",
@@ -148,7 +151,7 @@ function buildSections(jobs: MobileJob[], today: string) {
     },
     {
       emptyCopy: "There is no active assigned work.",
-      jobs: activeJobs,
+      jobs: assignedHelpdeskJobs,
       title: "Assigned to me",
     },
     {
@@ -172,6 +175,17 @@ function buildSections(jobs: MobileJob[], today: string) {
       title: "Recently completed",
     },
   ];
+}
+
+function uniqueRequests(jobs: MobileJob[]) {
+  const seen = new Set<string>();
+
+  return jobs.filter((job) => {
+    const key = job.requestNumber?.trim().toLowerCase() || job.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 const styles = StyleSheet.create({

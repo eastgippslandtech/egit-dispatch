@@ -7,7 +7,9 @@ import {
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import MyWorkRoute from "../../../app/(tabs)/my-work";
+import MyWorkRoute, {
+  buildMyWorkSections,
+} from "../../../app/(tabs)/my-work";
 import TodayRoute from "../../../app/(tabs)/today";
 import {
   AppProviders,
@@ -318,6 +320,37 @@ describe("native schedule screens", () => {
         textAlign: "center",
       });
     }
+  });
+
+  it("counts unique actionable Helpdesk requests as assigned work", () => {
+    const helpdeskJob = MOBILE_JOB_FIXTURES.find(
+      (job) => job.id === "firewall-riley",
+    );
+    const outlookEvent = MOBILE_JOB_FIXTURES.find(
+      (job) => job.id === "outlook-block-riley",
+    );
+
+    if (!helpdeskJob || !outlookEvent) {
+      throw new Error("Assigned-work fixtures are required.");
+    }
+
+    const sections = buildMyWorkSections(
+      [
+        helpdeskJob,
+        {
+          ...helpdeskJob,
+          id: "firewall-riley-follow-up-booking",
+          startAt: "2026-07-10T09:00:00+10:00",
+        },
+        outlookEvent,
+      ],
+      "2026-07-09",
+    );
+    const assigned = sections.find(
+      (section) => section.title === "Assigned to me",
+    );
+
+    expect(assigned?.jobs).toEqual([helpdeskJob]);
   });
 });
 

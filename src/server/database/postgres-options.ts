@@ -2,7 +2,10 @@ export function getServerlessPostgresOptions(
   ssl: "require" | false = "require",
 ) {
   return {
-    connect_timeout: 3,
+    // Supavisor can take a few seconds to accept a fresh serverless connection
+    // during bursts. Keep this above the observed pooler latency so a healthy
+    // database is not treated as unavailable while a warm connection is made.
+    connect_timeout: 10,
     connection: {
       lock_timeout: 2_000,
       statement_timeout: 8_000,

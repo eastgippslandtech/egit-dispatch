@@ -8,10 +8,9 @@ export function getServerlessPostgresOptions(
       statement_timeout: 8_000,
     },
     idle_timeout: 5,
-    // Vercel creates a pool per warm function instance. Supabase's transaction
-    // pooler already multiplexes those clients, so one connection per instance
-    // avoids exhausting shared pooler clients during concurrent page refreshes.
-    max: 1,
+    // Keep the per-instance pool bounded while allowing dashboard, presence,
+    // and integration reads to make progress without serializing behind one query.
+    max: 3,
     max_lifetime: 10 * 60,
     prepare: false,
     ssl,

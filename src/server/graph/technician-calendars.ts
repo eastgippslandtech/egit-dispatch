@@ -84,7 +84,7 @@ export async function readTechnicianCalendarAppointments({
     tenantId: config.microsoft.tenantId,
     timezone: config.microsoft.timezone,
   });
-  const appointments = await Promise.all(
+  const results = await Promise.allSettled(
     technicians.map(async (technician) => {
       const events = await client.listCalendarView({
         ...range,
@@ -101,8 +101,25 @@ export async function readTechnicianCalendarAppointments({
       );
     }),
   );
+  const appointments = results
+    .filter(
+      (result): result is PromiseFulfilledResult<Appointment[]> =>
+        result.status === "fulfilled",
+    )
+    .flatMap((result) => result.value);
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
 
-  return appointments.flat().map(markClosedDayIssue);
+  for (const failure of failures) {
+    console.error("Outlook technician calendar read failed", safeGraphError(failure.reason));
+  }
+
+  if (technicians.length > 0 && appointments.length === 0 && failures.length === results.length) {
+    throw failures[0].reason;
+  }
+
+  return appointments.map(markClosedDayIssue);
 }
 
 export function safeGraphError(error: unknown) {

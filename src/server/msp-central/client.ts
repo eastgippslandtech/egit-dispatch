@@ -22,6 +22,10 @@ import {
   MspOAuthAccessTokenCoordinator,
 } from "./token-cache";
 import { getConfiguredMspOAuthTokenStore } from "./token-store";
+import {
+  getConfiguredMspOAuthCredentialStore,
+  type MspOAuthCredentialStore,
+} from "./credential-store";
 import type {
   MspCentralClient,
   MspCentralRequestDetailResponse,
@@ -50,12 +54,17 @@ type MspCentralActionResponse = {
 
 let accessTokenCoordinator: MspOAuthAccessTokenCoordinator | undefined;
 
-export function createMspCentralClient(config: DispatchConfig): MspCentralClient {
+export function createMspCentralClient(
+  config: DispatchConfig,
+  { credentialStore = getConfiguredMspOAuthCredentialStore() }: {
+    credentialStore?: MspOAuthCredentialStore | null;
+  } = {},
+): MspCentralClient {
   if (config.dispatchDataSource === "msp-central-fixture") {
     return createMspCentralFixtureClient(config);
   }
 
-  return createMspCentralLiveClient(config);
+  return createMspCentralLiveClient(config, credentialStore);
 }
 
 export function resetMspCentralAccessTokenCacheForTests() {
@@ -155,7 +164,10 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
   };
 }
 
-function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
+function createMspCentralLiveClient(
+  config: DispatchConfig,
+  credentialStore: MspOAuthCredentialStore | null,
+): MspCentralClient {
   const configured = Boolean(
     config.mspCentral.baseUrl &&
       config.mspCentral.portal &&
@@ -173,7 +185,9 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     );
   };
   const apiRoot = buildMspCentralApiRoot(config);
-  const getAccessToken = () => getCachedAccessToken(config);
+  const serviceCredentialPromise = loadServiceCredential(credentialStore);
+  const getAccessToken = () =>
+    getCachedAccessToken(config, serviceCredentialPromise);
   const requestSnapshotStore = getConfiguredMspRequestSnapshotStore({
     portal: config.mspCentral.portal,
   });
@@ -1028,13 +1042,39 @@ async function refreshAccessToken(config: DispatchConfig) {
   };
 }
 
-async function getCachedAccessToken(config: DispatchConfig) {
-  const key = accessTokenCacheKey(config);
+async function getCachedAccessToken(
+  config: DispatchConfig,
+  serviceCredentialPromise: Promise<{ refreshToken: string } | null>,
+) {
+  const serviceCredential = await serviceCredentialPromise;
+  const refreshToken =
+    serviceCredential?.refreshToken ?? config.mspCentral.refreshToken;
+  const effectiveConfig = {
+    ...config,
+    mspCentral: { ...config.mspCentral, refreshToken },
+  };
+  const key = accessTokenCacheKey(effectiveConfig);
   accessTokenCoordinator ??= new MspOAuthAccessTokenCoordinator({
     store: getConfiguredMspOAuthTokenStore(),
   });
 
-  return accessTokenCoordinator.getToken(key, () => refreshAccessToken(config));
+  return accessTokenCoordinator.getToken(key, () =>
+    refreshAccessToken(effectiveConfig),
+  );
+}
+
+async function loadServiceCredential(
+  store: MspOAuthCredentialStore | null,
+) {
+  if (!store) {
+    return null;
+  }
+
+  try {
+    return await store.getCredential();
+  } catch {
+    return null;
+  }
 }
 
 function accessTokenCacheKey(config: DispatchConfig) {

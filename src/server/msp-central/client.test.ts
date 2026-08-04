@@ -250,6 +250,47 @@ describe("MSP Central live client", () => {
     ]);
   });
 
+  it("prefers a reauthorised refresh token stored in Command Centre", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "reauthorised-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ requests: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const credentialStore = {
+      getCredential: vi.fn(async () => ({
+        apiDomain: "https://servicedeskplus.net.au",
+        refreshToken: "stored-refresh-token",
+      })),
+      saveCredential: vi.fn(),
+    };
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://servicedeskplus.net.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "stale-env-refresh-token",
+      }),
+      { credentialStore },
+    );
+
+    await client.listRequests();
+
+    const tokenRequest = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(String(tokenRequest.body)).toContain(
+      "refresh_token=stored-refresh-token",
+    );
+    expect(String(tokenRequest.body)).not.toContain("stale-env-refresh-token");
+  });
+
   it("loads customer email replies from the MSP notification conversation", async () => {
     const fetchMock = vi
       .fn()

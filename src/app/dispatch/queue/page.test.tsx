@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
@@ -40,6 +40,10 @@ beforeEach(() => {
   getDashboard.mockResolvedValue(getDispatchDesignMockData());
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 test("renders the separate operational queue with board navigation", async () => {
   render(await DispatchQueuePage());
 
@@ -61,7 +65,7 @@ test("switches to the signed-in technician queue", async () => {
   expect(screen.queryByText("Packhouse label printer offline")).not.toBeInTheDocument();
 });
 
-test("opens the shared ticket workspace and hands scheduling to the board", async () => {
+test("opens scheduling inside the queue from the shared ticket workspace", async () => {
   render(await DispatchQueuePage());
 
   const row = screen.getByRole("article", { name: /Packhouse label printer offline/ });
@@ -72,7 +76,52 @@ test("opens the shared ticket workspace and hands scheduling to the board", asyn
   expect(within(workspace).getByRole("tab", { name: "Comms" })).toBeInTheDocument();
   expect(within(workspace).getByRole("tab", { name: "Tracks" })).toBeInTheDocument();
   fireEvent.click(within(workspace).getByRole("button", { name: "Schedule" }));
-  expect(routerPush).toHaveBeenCalledWith("/dispatch?requestId=100284");
+  expect(screen.getByRole("dialog", { name: "Schedule request" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Booking date")).toBeInTheDocument();
+  expect(routerPush).not.toHaveBeenCalled();
+});
+
+test("opens rescheduling inside the queue for an assigned appointment", async () => {
+  render(await DispatchQueuePage());
+
+  fireEvent.click(screen.getByRole("button", { name: /Assigned/ }));
+  const row = screen.getByRole("article", { name: /File server disk expansion/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Reschedule" }));
+
+  expect(screen.getByRole("dialog", { name: "Move appointment" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Booking date")).toHaveValue("2026-07-08");
+  expect(routerPush).not.toHaveBeenCalled();
+});
+
+test("confirms a schedule from the queue and refreshes it in place", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response("{}", { status: 200 }));
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", {
+    name: /Packhouse label printer offline/,
+  });
+  fireEvent.click(within(row).getByRole("button", { name: "Schedule" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Confirm mock schedule" }),
+  );
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/internal/dispatch/test-sync/events",
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "Schedule request" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(routerRefresh).toHaveBeenCalled();
+  expect(routerPush).not.toHaveBeenCalled();
+
+  fetchMock.mockRestore();
 });
 
 test("opens a queue request workspace on double-click", async () => {

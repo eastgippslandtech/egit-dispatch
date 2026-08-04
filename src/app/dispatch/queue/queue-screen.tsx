@@ -49,6 +49,7 @@ import type {
   WorklogType,
 } from "@/server/worklogs/disposition";
 import { roundWorklogMinutes } from "@/server/worklogs/time";
+import { QueueScheduleModal } from "./queue-schedule-modal";
 
 type WorkLogTarget = { appointmentId?: string; requestId: string };
 
@@ -75,6 +76,7 @@ export function DispatchQueueScreen({
   const [selectedRequestId, setSelectedRequestId] = useState<string>();
   const [workspaceRequestId, setWorkspaceRequestId] = useState<string>();
   const [mergeRequestId, setMergeRequestId] = useState<string>();
+  const [scheduleRequestId, setScheduleRequestId] = useState<string>();
   const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string>();
@@ -132,10 +134,23 @@ export function DispatchQueueScreen({
   const workLogRequest = dashboard.requests.find(
     (request) => request.id === workLogTarget?.requestId,
   );
+  const scheduleTargetRequest = dashboard.requests.find(
+    (request) => request.id === scheduleRequestId,
+  );
+  const scheduleTargetAppointment = requestAppointments(
+    dashboard.appointments,
+    scheduleRequestId,
+  )[0] ??
+    (scheduleTargetRequest
+      ? scheduledRequestFallback(scheduleTargetRequest)
+      : undefined);
   const selectedAppointment = requestAppointments(
     dashboard.appointments,
     selectedRequest?.id,
   )[0];
+  const selectedScheduleAppointment =
+    selectedAppointment ??
+    (selectedRequest ? scheduledRequestFallback(selectedRequest) : undefined);
   const liveWriteback = (request?: DispatchRequest) =>
     dashboard.dispatchDataSource === "msp-central" &&
     request?.sourceSystem === "msp-central";
@@ -147,7 +162,9 @@ export function DispatchQueueScreen({
   }
 
   function scheduleRequest(requestId: string) {
-    router.push(`/dispatch?requestId=${encodeURIComponent(requestId)}`);
+    setSelectedRequestId(requestId);
+    setWorkspaceRequestId(undefined);
+    setScheduleRequestId(requestId);
   }
 
   async function mergeInto(parentRequestId: string, idempotencyKey: string) {
@@ -358,6 +375,10 @@ export function DispatchQueueScreen({
                 attention={requestAttentionReason(request, seenRequestIds)}
                 isSelected={selectedRequest?.id === request.id}
                 request={request}
+                scheduled={Boolean(
+                  request.scheduledStart ||
+                    requestAppointments(dashboard.appointments, request.id).length > 0,
+                )}
                 technicianName={technicianName(dashboard, request.technicianId)}
                 unread={hasUnreadRequestUpdate(request, seenRequestIds)}
                 onMerge={() => setMergeRequestId(request.id)}
@@ -370,7 +391,7 @@ export function DispatchQueueScreen({
         </section>
 
         <RequestPreview
-          appointment={selectedAppointment}
+          appointment={selectedScheduleAppointment}
           dashboard={dashboard}
           request={selectedRequest}
           onMerge={() => selectedRequest && setMergeRequestId(selectedRequest.id)}
@@ -394,6 +415,19 @@ export function DispatchQueueScreen({
           onSaved={() => {
             setWorkspaceRequestId(undefined);
             setToast("Communication queued in MSP Central.");
+            router.refresh();
+          }}
+        />
+      ) : null}
+      {scheduleTargetRequest ? (
+        <QueueScheduleModal
+          appointment={scheduleTargetAppointment}
+          dashboard={dashboard}
+          request={scheduleTargetRequest}
+          onCancel={() => setScheduleRequestId(undefined)}
+          onScheduled={(message) => {
+            setScheduleRequestId(undefined);
+            setToast(message);
             router.refresh();
           }}
         />
@@ -439,6 +473,7 @@ function RequestRow({
   onSchedule,
   onSelect,
   request,
+  scheduled,
   technicianName: owner,
   unread,
 }: {
@@ -449,6 +484,7 @@ function RequestRow({
   onSchedule: () => void;
   onSelect: () => void;
   request: DispatchRequest;
+  scheduled: boolean;
   technicianName: string;
   unread: boolean;
 }) {
@@ -485,7 +521,7 @@ function RequestRow({
         onDoubleClick={(event) => event.stopPropagation()}
       >
         <button className={rowActionClass} type="button" onClick={onOpen}><MessageSquare className="h-3.5 w-3.5" /> Open workspace</button>
-        <button aria-label="Schedule" className={iconActionClass} title="Schedule" type="button" onClick={onSchedule}><CalendarDays className="h-4 w-4" /></button>
+        <button aria-label={scheduled ? "Reschedule" : "Schedule"} className={iconActionClass} title={scheduled ? "Reschedule" : "Schedule"} type="button" onClick={onSchedule}><CalendarDays className="h-4 w-4" /></button>
         <button aria-label="Merge request" className={iconActionClass} title="Merge request" type="button" onClick={onMerge}><GitMerge className="h-4 w-4" /></button>
       </div>
     </article>
@@ -544,6 +580,59 @@ function PreviewDetail({ label, value }: { label: string; value: string }) {
 
 function requestAppointments(appointments: Appointment[], requestId?: string) {
   return requestId ? appointments.filter((appointment) => appointment.requestId === requestId) : [];
+}
+
+function scheduledRequestFallback(
+  request: DispatchRequest,
+): Appointment | undefined {
+  if (!request.scheduledStart || !request.technicianId) return undefined;
+
+  const start = melbourneDateTime(request.scheduledStart);
+  const end = melbourneDateTime(
+    request.scheduledEnd ??
+      new Date(new Date(request.scheduledStart).getTime() + 60 * 60_000).toISOString(),
+  );
+  if (!start || !end) return undefined;
+
+  return {
+    bookingType: request.bookingType,
+    customer: request.customer,
+    date: start.date,
+    end: end.time,
+    id: `request-schedule-${request.id}`,
+    requestId: request.id,
+    siteAddress: request.siteAddress,
+    siteArea: request.siteArea,
+    siteTown: request.siteTown,
+    source: "sdp",
+    start: start.time,
+    status: "sdp-only",
+    technicianId: request.technicianId,
+    title: request.subject,
+  };
+}
+
+function melbourneDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-AU", {
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23",
+      minute: "2-digit",
+      month: "2-digit",
+      timeZone: "Australia/Melbourne",
+      year: "numeric",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value]),
+  );
+
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+  };
 }
 
 function requestSearchText(request: DispatchRequest) {

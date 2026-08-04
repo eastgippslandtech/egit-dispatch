@@ -369,7 +369,7 @@ type DropPreview = {
   warning: boolean;
 };
 
-type PendingSchedule =
+export type PendingSchedule =
   | {
       bookingType: BookingType;
       crewTechnicianIds?: string[];
@@ -2826,7 +2826,7 @@ export function CommandCentrePrototype({
   );
 }
 
-async function publishDispatchTestSyncEvent(
+export async function publishDispatchTestSyncEvent(
   event: DispatchTestSyncEventPayload,
 ) {
   const response = await fetch("/api/internal/dispatch/test-sync/events", {
@@ -2845,7 +2845,7 @@ async function publishDispatchTestSyncEvent(
   }
 }
 
-async function publishLiveSchedule(event: {
+export async function publishLiveSchedule(event: {
   appointmentId: string;
   bookingType?: BookingType;
   crew?: Array<{
@@ -3475,6 +3475,7 @@ function MergeRequestSummary({
 }
 
 export function ScheduleConfirmModal({
+  error,
   liveSchedule,
   onCancel,
   onBookingTypeChange,
@@ -3488,12 +3489,13 @@ export function ScheduleConfirmModal({
   request,
   technicians,
 }: {
+  error?: string;
   liveSchedule: boolean;
   onCancel: () => void;
   onBookingTypeChange: (bookingType: BookingType) => void;
   onConfirm: () => Promise<void> | void;
   onCrewChange?: (technicianId: string, selected: boolean) => void;
-  onDateChange: (date: string) => void;
+  onDateChange?: (date: string) => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
   onTechnicianChange: (technicianId: string) => void;
@@ -3534,6 +3536,9 @@ export function ScheduleConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 sm:p-6">
       <section
+        aria-label={
+          pending.kind === "request" ? "Schedule request" : "Move appointment"
+        }
         aria-modal="true"
         className="max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
         role="dialog"
@@ -3592,11 +3597,7 @@ export function ScheduleConfirmModal({
           )}
         </div>
 
-        <div
-          className={`mt-4 grid grid-cols-2 gap-3 ${
-            pending.kind === "appointment" ? "lg:grid-cols-5" : "lg:grid-cols-4"
-          }`}
-        >
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
           <label className="block text-sm font-semibold text-slate-200">
             Lead technician
             <select
@@ -3613,19 +3614,17 @@ export function ScheduleConfirmModal({
               ))}
             </select>
           </label>
-          {pending.kind === "appointment" ? (
-            <label className="block text-sm font-semibold text-slate-200">
-              Booking date
-              <input
-                aria-label="Booking date"
-                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100 [color-scheme:dark]"
-                disabled={saving}
-                type="date"
-                value={pending.date}
-                onChange={(event) => onDateChange(event.target.value)}
-              />
-            </label>
-          ) : null}
+          <label className="block text-sm font-semibold text-slate-200">
+            Booking date
+            <input
+              aria-label="Booking date"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100 [color-scheme:dark]"
+              disabled={saving}
+              type="date"
+              value={pending.date}
+              onChange={(event) => onDateChange?.(event.target.value)}
+            />
+          </label>
           <label className="block text-sm font-semibold text-slate-200">
             Start time
             <select
@@ -3768,6 +3767,12 @@ export function ScheduleConfirmModal({
             No conflicts detected.
           </div>
         )}
+
+        {error ? (
+          <div className="mt-4 rounded-md border border-rose-300/25 bg-rose-400/10 px-3 py-2 text-sm font-semibold text-rose-100" role="alert">
+            {error}
+          </div>
+        ) : null}
 
         {saving ? (
           <div

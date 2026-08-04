@@ -115,35 +115,8 @@ export function createPostgresMspRequestSnapshotStore(
   sql: postgres.Sql,
   cacheKey: string,
 ): MspRequestSnapshotStore {
-  let tableReady: Promise<void> | undefined;
-  const ensureTable = async () => {
-    tableReady ??= (async () => {
-      await sql`
-        create table if not exists public.msp_request_snapshots (
-          cache_key text primary key,
-          requests jsonb not null default '[]'::jsonb,
-          fetched_at timestamptz,
-          retry_after timestamptz,
-          refresh_lease_until timestamptz,
-          updated_at timestamptz not null default now()
-        )
-      `;
-      await sql`
-        alter table public.msp_request_snapshots enable row level security
-      `;
-      await sql`
-        revoke all on table public.msp_request_snapshots from anon, authenticated
-      `;
-    })().catch((error) => {
-      tableReady = undefined;
-      throw error;
-    });
-    await tableReady;
-  };
-
   return {
     async blockUntil(timestamp) {
-      await ensureTable();
       await sql`
         insert into public.msp_request_snapshots (
           cache_key, retry_after, refresh_lease_until, updated_at
@@ -157,7 +130,6 @@ export function createPostgresMspRequestSnapshotStore(
       `;
     },
     async get() {
-      await ensureTable();
       const rows = await sql<
         Array<{
           fetchedAt: Date | null;
@@ -182,7 +154,6 @@ export function createPostgresMspRequestSnapshotStore(
       };
     },
     async releaseRefreshLease() {
-      await ensureTable();
       await sql`
         update public.msp_request_snapshots
         set refresh_lease_until = null, updated_at = now()
@@ -190,7 +161,6 @@ export function createPostgresMspRequestSnapshotStore(
       `;
     },
     async save(requests, fetchedAt) {
-      await ensureTable();
       await sql`
         insert into public.msp_request_snapshots (
           cache_key, requests, fetched_at, retry_after,
@@ -208,7 +178,6 @@ export function createPostgresMspRequestSnapshotStore(
       `;
     },
     async tryAcquireRefreshLease(now, leaseUntil) {
-      await ensureTable();
       const rows = await sql<Array<{ cacheKey: string }>>`
         insert into public.msp_request_snapshots (
           cache_key, refresh_lease_until, updated_at

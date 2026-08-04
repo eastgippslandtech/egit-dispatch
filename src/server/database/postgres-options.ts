@@ -3,6 +3,10 @@ export function getServerlessPostgresOptions(
 ) {
   return {
     connect_timeout: 10,
+    connection: {
+      lock_timeout: 2_000,
+      statement_timeout: 8_000,
+    },
     idle_timeout: 5,
     max: 1,
     max_lifetime: 10 * 60,

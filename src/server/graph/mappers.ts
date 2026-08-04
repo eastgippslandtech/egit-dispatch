@@ -97,6 +97,7 @@ export function mapGraphEventToAppointment(
     outlookWebLink: event.webLink,
     readOnly: true,
     requestId: requestNumber,
+    scheduleGroupId: serviceDetails.scheduleGroupId,
     siteAddress: serviceDetails.address,
     siteArea: serviceDetails.site,
     source: "outlook",
@@ -136,6 +137,7 @@ function parseServiceDetails(bodyPreview?: string) {
       structuredField(bodyPreview, "Booking Type"),
     ),
     company: structuredField(bodyPreview, "Company"),
+    scheduleGroupId: structuredField(bodyPreview, "Command-Centre-Booking"),
     site: structuredField(bodyPreview, "Site"),
   };
 }

@@ -13,7 +13,6 @@ type TokenRow = {
 };
 
 let storeSingleton: MspOAuthTokenStore | undefined;
-let tableReady: Promise<void> | undefined;
 
 export function getConfiguredMspOAuthTokenStore(
   databaseUrl = process.env.DATABASE_URL,
@@ -31,40 +30,8 @@ export function getConfiguredMspOAuthTokenStore(
 export function createPostgresMspOAuthTokenStore(
   sql: postgres.Sql,
 ): MspOAuthTokenStore {
-  const ensureTable = async () => {
-    tableReady ??= (async () => {
-      await sql`
-        create table if not exists public.msp_oauth_access_tokens (
-          cache_key text primary key,
-          access_token text,
-          expires_at timestamptz,
-          refresh_blocked_until timestamptz,
-          refresh_lease_until timestamptz,
-          updated_at timestamptz not null default now(),
-          constraint msp_oauth_access_token_pair check (
-            (access_token is null and expires_at is null)
-            or (access_token is not null and expires_at is not null)
-          )
-        )
-      `;
-      await sql`
-        alter table public.msp_oauth_access_tokens enable row level security
-      `;
-      await sql`
-        revoke all on table public.msp_oauth_access_tokens
-        from anon, authenticated
-      `;
-    })().catch((error) => {
-      tableReady = undefined;
-      throw error;
-    });
-
-    await tableReady;
-  };
-
   return {
     async blockRefresh(cacheKey, blockedUntil) {
-      await ensureTable();
       await sql`
         update public.msp_oauth_access_tokens
         set
@@ -76,7 +43,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async getRefreshBlockedUntil(cacheKey) {
-      await ensureTable();
       const rows = await sql<Array<{ refreshBlockedUntil: Date | null }>>`
         select refresh_blocked_until as "refreshBlockedUntil"
         from public.msp_oauth_access_tokens
@@ -88,7 +54,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async getToken(cacheKey) {
-      await ensureTable();
       const rows = await sql<TokenRow[]>`
         select
           access_token as "accessToken",
@@ -110,7 +75,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async invalidateToken(cacheKey, rejectedAccessToken) {
-      await ensureTable();
       await sql`
         update public.msp_oauth_access_tokens
         set
@@ -123,7 +87,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async releaseRefreshLease(cacheKey) {
-      await ensureTable();
       await sql`
         update public.msp_oauth_access_tokens
         set
@@ -134,7 +97,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async saveToken(cacheKey, token: SharedMspOAuthToken) {
-      await ensureTable();
       await sql`
         insert into public.msp_oauth_access_tokens (
           cache_key,
@@ -163,7 +125,6 @@ export function createPostgresMspOAuthTokenStore(
     },
 
     async tryAcquireRefreshLease(cacheKey, now, leaseUntil) {
-      await ensureTable();
       const rows = await sql<Array<{ cacheKey: string }>>`
         insert into public.msp_oauth_access_tokens (
           cache_key,

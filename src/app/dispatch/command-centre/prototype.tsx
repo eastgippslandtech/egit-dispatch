@@ -1652,15 +1652,36 @@ export function CommandCentrePrototype({
 
       const liveSchedule = canUseLiveSchedule(dashboard, request);
       let liveEvent: LiveScheduleResult | undefined;
+      const existingRequestAppointments = dashboard.appointments.filter(
+        (appointment) => appointment.requestId === request.id,
+      );
+      const previousAssignments = existingRequestAppointments
+        .filter((appointment) => appointment.outlookEventId)
+        .map((appointment) => ({
+          eventId: appointment.outlookEventId as string,
+          technicianId: appointment.technicianId,
+          userPrincipalName:
+            appointment.calendarOwnerEmail ??
+            technicianOutlookIdentity(
+              dashboard.technicians,
+              appointment.technicianId,
+            ),
+        }));
       const idempotencyKey =
         pendingSchedule.idempotencyKey ??
         `schedule:${request.id}:${pendingSchedule.date}:${pendingSchedule.start}:${pendingSchedule.end}:${pendingSchedule.technicianId}`;
-      const appointmentId = liveSchedule
-        ? pendingLiveAppointmentId(request.id, idempotencyKey)
-        : `mock-${request.id}-${Date.now()}`;
+      const appointmentId =
+        existingRequestAppointments.find((appointment) => appointment.scheduleGroupId)
+          ?.scheduleGroupId ??
+        (liveSchedule
+          ? pendingLiveAppointmentId(request.id, idempotencyKey)
+          : `mock-${request.id}-${Date.now()}`);
       const bookingType = pendingSchedule.bookingType;
       const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
         (technicianId) => ({
+          eventId: existingRequestAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          )?.outlookEventId,
           technicianEmail: technicianMspCentralIdentity(
             dashboard.technicians,
             technicianId,
@@ -1684,11 +1705,20 @@ export function CommandCentrePrototype({
             customer: request.customer,
             date: pendingSchedule.date,
             end: pendingSchedule.end,
+            eventId: existingRequestAppointments.find(
+              (appointment) =>
+                appointment.technicianId === pendingSchedule.technicianId,
+            )?.outlookEventId,
             idempotencyKey,
             location: request.siteAddress ?? request.site,
             priority: request.priority,
+            previousAssignments,
             requestId: request.id,
             requestNumber: request.requestNumber,
+            scheduleAction:
+              existingRequestAppointments.length > 0
+                ? "rescheduled"
+                : "scheduled",
             start: pendingSchedule.start,
             subject: request.subject,
             technicianId: pendingSchedule.technicianId,
@@ -1763,7 +1793,9 @@ export function CommandCentrePrototype({
         : appointmentId;
       let appointments = scheduleRequest({
         appointmentId: finalAppointmentId,
-        appointments: dashboard.appointments,
+        appointments: dashboard.appointments.filter(
+          (appointment) => appointment.requestId !== request.id,
+        ),
         bookingType,
         date: pendingSchedule.date,
         durationMinutes: pendingSchedule.durationMinutes,

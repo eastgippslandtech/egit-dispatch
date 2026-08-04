@@ -582,6 +582,94 @@ test("rescheduling a refreshed crew appointment sends the parent schedule group"
   expect(screen.getByText("Thursday 9 July 2026")).toBeInTheDocument();
 });
 
+test("queue scheduling reassigns an existing linked booking instead of duplicating it", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    sourceSystem: "msp-central" as const,
+  };
+  const simeon = data.technicians.find(
+    (technician) => technician.displayName === "Simeon",
+  )!;
+  const jervy = data.technicians.find(
+    (technician) => technician.displayName === "Jervy",
+  )!;
+  const existing = {
+    ...data.appointments[0],
+    calendarOwnerEmail: simeon.outlookUserPrincipalName ?? simeon.outlookEmail,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "existing-simeon-booking",
+    outlookEventId: "outlook-simeon-event",
+    requestId: request.id,
+    scheduleAssignmentRole: "lead" as const,
+    scheduleGroupId: "existing-schedule-group",
+    start: "10:00",
+    technicianId: simeon.id,
+    title: request.subject,
+  };
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      appointmentId: "existing-schedule-group",
+      operationId: "operation-reassign-1",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [existing],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+        selectedRequestId: request.id,
+      }}
+    />,
+  );
+
+  const requestCard = screen
+    .getByRole("button", { name: `${request.requestNumber} ${request.subject}` })
+    .closest("article");
+  if (!requestCard) throw new Error("Expected draggable request card.");
+  const dataTransfer = { effectAllowed: "move", setData: vi.fn() };
+  fireEvent.dragStart(requestCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(
+    screen.getAllByTestId("timeline-track")[
+      data.technicians.findIndex((technician) => technician.id === jervy.id)
+    ],
+    { clientX: 120, dataTransfer },
+  );
+  await act(async () => undefined);
+  const dialog = screen.getByRole("dialog");
+  await act(async () => {
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm schedule" }),
+    );
+  });
+
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    appointmentId: "existing-schedule-group",
+    previousAssignments: [
+      {
+        eventId: "outlook-simeon-event",
+        technicianId: simeon.id,
+        userPrincipalName: simeon.outlookUserPrincipalName ?? simeon.outlookEmail,
+      },
+    ],
+    technicianId: jervy.id,
+  });
+  expect(
+    screen.queryByTestId("timeline-appointment-existing-simeon-booking"),
+  ).not.toBeInTheDocument();
+});
+
 test("does not claim manual calendar sync succeeded when review is required", async () => {
   const data = getDispatchDesignMockData();
   const fetchMock = vi.fn().mockResolvedValue({

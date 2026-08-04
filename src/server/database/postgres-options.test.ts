@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeServerlessDatabaseUrl } from "./postgres-options";
+import {
+  getServerlessPostgresOptions,
+  normalizeServerlessDatabaseUrl,
+} from "./postgres-options";
 
 describe("serverless Postgres connection URL", () => {
+  it("bounds ordinary queries and lock waits", () => {
+    expect(getServerlessPostgresOptions()).toMatchObject({
+      connection: {
+        lock_timeout: 2_000,
+        statement_timeout: 8_000,
+      },
+    });
+  });
+
   it("uses the Supabase transaction pooler instead of session mode", () => {
     expect(
       normalizeServerlessDatabaseUrl(

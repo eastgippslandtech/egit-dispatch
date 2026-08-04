@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MspCentralRawRequest } from "./types";
 import {
+  createPostgresMspRequestSnapshotStore,
   loadMspRequestsWithSnapshot,
   type MspRequestSnapshotStore,
 } from "./request-snapshot";
+import type postgres from "postgres";
 
 const cachedRequest: MspCentralRawRequest = {
   id: "cached-1",
@@ -25,6 +27,27 @@ function createStore(
 }
 
 describe("MSP Central request snapshots", () => {
+  it("does not run schema DDL during an ordinary snapshot read", async () => {
+    const queries: string[] = [];
+    const sql = Object.assign(
+      vi.fn(async (strings: TemplateStringsArray) => {
+        queries.push(strings.join("?"));
+        return [];
+      }),
+      { json: vi.fn((value) => value) },
+    );
+    const store = createPostgresMspRequestSnapshotStore(
+      sql as unknown as postgres.Sql,
+      "requests:portal",
+    );
+
+    await store.get();
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("from public.msp_request_snapshots");
+    expect(queries[0]).not.toMatch(/create table|alter table|revoke all/i);
+  });
+
   it("serves a fresh snapshot without calling MSP Central", async () => {
     const store = createStore({
       fetchedAt: 9_990,

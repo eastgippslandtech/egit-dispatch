@@ -108,6 +108,7 @@ describe("Graph event mapper", () => {
     const appointment = mapGraphEventToAppointment(
       event({
         bodyPreview: [
+          "Command-Centre-Booking: dispatch-group-123",
           "Request: REQ-237815",
           "Company: ASI Solutions",
           "Site: Gippsland office",
@@ -120,6 +121,7 @@ describe("Graph event mapper", () => {
     );
 
     expect(appointment.bookingType).toBe("Remote");
+    expect(appointment.scheduleGroupId).toBe("dispatch-group-123");
   });
 
   it.each([

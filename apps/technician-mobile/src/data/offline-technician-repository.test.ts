@@ -43,6 +43,26 @@ describe("offline technician repository", () => {
     ]);
   });
 
+  it("exposes cached schedule data without waiting for the network", async () => {
+    await database.saveCachedJob(firewallJob, firewallJob.updatedAt);
+    const repository = createOfflineTechnicianRepository({
+      database,
+      queue,
+      remote: {
+        getCurrentStaff: async () => firewallJob.technician,
+        getJob: async () => firewallJob,
+        listSchedule: async () => new Promise<never>(() => undefined),
+      },
+    });
+
+    await expect(
+      repository.listCachedSchedule?.({
+        from: "2026-07-09",
+        to: "2026-07-09",
+      }),
+    ).resolves.toEqual([firewallJob]);
+  });
+
   it("preserves the complete enriched activity timeline for offline job detail", async () => {
     const enrichedJob = {
       ...firewallJob,

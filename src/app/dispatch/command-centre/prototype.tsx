@@ -455,6 +455,8 @@ export function CommandCentrePrototype({
   const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
   const pendingWritebackRequestIds = useRef(new Set<string>());
+  const dashboardRefreshPending = useRef(false);
+  const dashboardRefreshSafetyTimer = useRef<number | undefined>(undefined);
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [now, setNow] = useState(() => new Date());
@@ -523,6 +525,11 @@ export function CommandCentrePrototype({
   }, [toast]);
 
   useEffect(() => {
+    dashboardRefreshPending.current = false;
+    if (dashboardRefreshSafetyTimer.current) {
+      window.clearTimeout(dashboardRefreshSafetyTimer.current);
+      dashboardRefreshSafetyTimer.current = undefined;
+    }
     const cached = readCachedDashboard(window.localStorage);
     const resolvedData = resolveDashboardWithCache(data, cached);
     if (shouldCacheDashboard(data)) {
@@ -543,14 +550,28 @@ export function CommandCentrePrototype({
   }, [data]);
 
   useEffect(() => {
-    const refresh = () => router.refresh();
+    const refresh = () => {
+      if (document.hidden || dashboardRefreshPending.current) return;
+      dashboardRefreshPending.current = true;
+      router.refresh();
+      dashboardRefreshSafetyTimer.current = window.setTimeout(() => {
+        dashboardRefreshPending.current = false;
+        dashboardRefreshSafetyTimer.current = undefined;
+      }, 20_000);
+    };
     const retry = window.setInterval(refresh, 30_000);
     window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
+    const refreshWhenVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(retry);
       window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (dashboardRefreshSafetyTimer.current) {
+        window.clearTimeout(dashboardRefreshSafetyTimer.current);
+      }
     };
   }, [router]);
 

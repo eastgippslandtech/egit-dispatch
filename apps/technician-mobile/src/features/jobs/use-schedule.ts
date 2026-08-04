@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import type { DateRange, MobileJob } from "../../contracts/mobile";
@@ -23,6 +23,11 @@ export function useSchedule(range: DateRange): ScheduleState {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [settledRangeKey, setSettledRangeKey] = useState<string | null>(null);
   const rangeKey = `${range.from}:${range.to}`;
+  const currentRangeKeyRef = useRef(rangeKey);
+  const settledRangeKeyRef = useRef<string | null>(null);
+  const inFlightRef = useRef<
+    { key: string; promise: Promise<void> } | undefined
+  >(undefined);
 
   const stableRange = useMemo(
     () => ({ from: range.from, to: range.to }),
@@ -32,60 +37,84 @@ export function useSchedule(range: DateRange): ScheduleState {
     [rangeKey],
   );
 
+  useEffect(() => {
+    currentRangeKeyRef.current = rangeKey;
+  }, [rangeKey]);
+
   const refresh = useCallback(async () => {
+    const existing = inFlightRef.current;
+    if (existing?.key === rangeKey) {
+      return existing.promise;
+    }
+
+    const hasCurrentData = settledRangeKeyRef.current === rangeKey;
     setRefreshing(true);
+    setLoading(!hasCurrentData);
     setError(null);
 
-    try {
-      setJobs(await repository.listSchedule(stableRange));
-      setSettledRangeKey(rangeKey);
-      setLastSyncedAt(new Date().toISOString());
-    } catch (scheduleError) {
-      setJobs([]);
-      setSettledRangeKey(rangeKey);
-      setError(formatScheduleError(scheduleError));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [rangeKey, repository, stableRange]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    repository
+    const promise = repository
       .listSchedule(stableRange)
       .then((nextJobs) => {
-        if (!cancelled) {
-          setJobs(nextJobs);
-          setSettledRangeKey(rangeKey);
-          setError(null);
-          setLastSyncedAt(new Date().toISOString());
-        }
+        if (currentRangeKeyRef.current !== rangeKey) return;
+        setJobs(nextJobs);
+        setSettledRangeKey(rangeKey);
+        settledRangeKeyRef.current = rangeKey;
+        setLastSyncedAt(new Date().toISOString());
       })
       .catch((scheduleError: unknown) => {
-        if (!cancelled) {
-          setJobs([]);
-          setSettledRangeKey(rangeKey);
-          setError(formatScheduleError(scheduleError));
-        }
+        if (currentRangeKeyRef.current !== rangeKey) return;
+        setError(formatScheduleError(scheduleError));
       })
       .finally(() => {
-        if (!cancelled) {
+        if (inFlightRef.current?.promise === promise) {
+          inFlightRef.current = undefined;
+        }
+        if (currentRangeKeyRef.current === rangeKey) {
           setLoading(false);
           setRefreshing(false);
         }
       });
 
-    return () => {
-      cancelled = true;
-    };
+    inFlightRef.current = { key: rangeKey, promise };
+    return promise;
   }, [rangeKey, repository, stableRange]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      void refresh();
-    }, 60_000);
+    let cancelled = false;
+    const cachedSchedule = repository.listCachedSchedule?.(stableRange);
+    cachedSchedule
+      ?.then((cachedJobs) => {
+        if (
+          !cancelled &&
+          currentRangeKeyRef.current === rangeKey &&
+          settledRangeKeyRef.current !== rangeKey &&
+          cachedJobs.length > 0
+        ) {
+          setJobs(cachedJobs);
+          setSettledRangeKey(rangeKey);
+          settledRangeKeyRef.current = rangeKey;
+          setLoading(false);
+        }
+      })
+      .catch(() => undefined);
+
+    void refresh();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeKey, refresh, repository, stableRange]);
+
+  useEffect(() => {
+    let stopped = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refresh();
+      if (!stopped) {
+        pollTimer = setTimeout(poll, 60_000);
+      }
+    };
+    pollTimer = setTimeout(poll, 60_000);
     const subscription = AppState.addEventListener?.("change", (state) => {
       if (state === "active") {
         void refresh();
@@ -93,7 +122,8 @@ export function useSchedule(range: DateRange): ScheduleState {
     });
 
     return () => {
-      clearInterval(interval);
+      stopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
       subscription?.remove();
     };
   }, [refresh]);

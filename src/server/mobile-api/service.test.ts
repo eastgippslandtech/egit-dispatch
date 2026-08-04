@@ -306,7 +306,7 @@ describe("mobile API service", () => {
     });
   });
 
-  it("reconciles an Outlook copy of an MSP request into a writable mobile job", async () => {
+  it("defers reconciliation of an Outlook copy so schedule reads do not wait for MSP Central", async () => {
     const linkedRequest = getDispatchDesignMockData().requests[0];
     const linkedAppointment: Appointment = {
       ...outlookAppointment,
@@ -315,22 +315,19 @@ describe("mobile API service", () => {
       outlookLinkedRequestNumber: linkedRequest.requestNumber,
       title: `${linkedRequest.requestNumber} ${linkedRequest.subject}`,
     };
-    const linkedDatabaseJob: DatabaseJobRow = {
-      ...dbJob,
-      id: "link-reconciled-1",
-      outlookEventId: "event-linked-1",
-      sdpRequestId: linkedRequest.id,
-      sdpRequestNumber: linkedRequest.requestNumber,
-    };
-    const listJobsForStaff = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([linkedDatabaseJob]);
     const save = vi.fn().mockResolvedValue(undefined);
+    let reconciliationTask: (() => Promise<void>) | undefined;
 
     const response = await listMobileJobs({
       auth: rileyMobileAuth,
-      database: createDatabase({ listJobsForStaff }),
+      database: createDatabase({
+        async listJobsForStaff() {
+          return [];
+        },
+      }),
+      deferReconciliation(task) {
+        reconciliationTask = task;
+      },
       from: "2026-07-14",
       linkStore: { save },
       mspClient: {
@@ -339,6 +336,21 @@ describe("mobile API service", () => {
       outlookCalendar: createOutlookCalendar([linkedAppointment]),
       to: "2026-07-14",
     });
+
+    expect(save).not.toHaveBeenCalled();
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "outlook-tech-riley-event-linked-1",
+      outlookEventId: "event-linked-1",
+      source: "outlook",
+      permissions: expect.objectContaining({
+        canComplete: false,
+        canStartTimer: false,
+        canWriteWorklog: false,
+      }),
+    });
+
+    await reconciliationTask?.();
 
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -349,18 +361,6 @@ describe("mobile API service", () => {
         technicianEmail: "riley@egit.com.au",
       }),
     );
-    expect(response.jobs).toHaveLength(1);
-    expect(response.jobs[0]).toMatchObject({
-      id: "link-reconciled-1",
-      outlookEventId: "event-linked-1",
-      source: "msp_central",
-      permissions: expect.objectContaining({
-        canComplete: true,
-        canStartTimer: true,
-        canWriteWorklog: true,
-        readOnlyReason: null,
-      }),
-    });
   });
 
   it("adds dispatcher test-sync schedules to the technician mobile job list", async () => {

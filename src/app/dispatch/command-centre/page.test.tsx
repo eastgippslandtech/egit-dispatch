@@ -1473,6 +1473,16 @@ test("refreshes live queue data while Command Centre remains open", async () => 
   expect(routerRefreshMock).toHaveBeenCalledOnce();
 });
 
+test("deduplicates focus and visibility refreshes while a dashboard load is pending", async () => {
+  render(await CommandCentrePage());
+
+  window.dispatchEvent(new Event("focus"));
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+
+  expect(routerRefreshMock).toHaveBeenCalledOnce();
+});
+
 test("merges the queue duplicate into a searched surviving parent after confirmation", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();

@@ -102,6 +102,7 @@ export async function getMobileMe({ auth }: { auth: MobileAuthContext }) {
 export async function listMobileJobs({
   auth,
   database = getConfiguredMobileDatabase(),
+  deferReconciliation,
   from,
   linkStore = getConfiguredDispatchLinkStore(),
   mspClient = getConfiguredMobileMspClient(),
@@ -110,6 +111,7 @@ export async function listMobileJobs({
 }: {
   auth: MobileAuthContext;
   database?: MobileDatabase | null;
+  deferReconciliation?: (task: () => Promise<void>) => void;
   from: string;
   linkStore?: DispatchLinkStore | null;
   mspClient?: MspCentralClient | null;
@@ -118,42 +120,36 @@ export async function listMobileJobs({
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
     const staff = await requireDatabaseStaff(database, auth.email);
-    let jobs = await database.listJobsForStaff({
-      from,
-      staffId: staff.id,
-      to,
-    });
-    const testJobs = await listTestSyncedMobileJobs({ auth, from, to });
-    const outlookJobs = await listOutlookMobileJobs({
-      from,
-      outlookCalendar,
-      staff,
-      to,
-    });
-    const reconciled = await reconcileLinkedOutlookJobs({
-      jobs: jobs.map(mapDatabaseJob),
-      linkStore,
-      mspClient,
-      outlookJobs,
-      staff,
-    });
-    if (reconciled) {
-      jobs = await database.listJobsForStaff({ from, staffId: staff.id, to });
-    }
+    const [jobs, testJobs, outlookJobs] = await Promise.all([
+      database.listJobsForStaff({ from, staffId: staff.id, to }),
+      listTestSyncedMobileJobs({ auth, from, to }),
+      listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
+    ]);
+    const mappedJobs = jobs.map(mapDatabaseJob);
+
+    deferReconciliation?.(() =>
+      reconcileLinkedOutlookJobs({
+        jobs: mappedJobs,
+        linkStore,
+        mspClient,
+        outlookJobs,
+        staff,
+      }).then(() => undefined),
+    );
     const linkedOutlookEventIds = new Set(
-      [...jobs.map(mapDatabaseJob), ...testJobs]
+      [...mappedJobs, ...testJobs]
         .map((job) => job.outlookEventId)
         .filter((eventId): eventId is string => Boolean(eventId)),
     );
     const linkedRequestNumbers = new Set(
-      [...jobs.map(mapDatabaseJob), ...testJobs]
+      [...mappedJobs, ...testJobs]
         .map((job) => normalizeRequestNumber(job.requestNumber))
         .filter((requestNumber): requestNumber is string => Boolean(requestNumber)),
     );
 
     return {
       jobs: [
-        ...jobs.map(mapDatabaseJob),
+        ...mappedJobs,
         ...testJobs,
         ...outlookJobs.filter(
           (job) =>

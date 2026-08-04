@@ -17,6 +17,7 @@ import type {
 
 export interface TechnicianRepository {
   getCurrentStaff(): Promise<MobileStaff>;
+  listCachedSchedule?(range: DateRange): Promise<MobileJob[]>;
   listSchedule(range: DateRange): Promise<MobileJob[]>;
   getJob(jobId: string): Promise<MobileJob>;
   startTimer(command: StartTimerCommand): Promise<ActiveTimer>;

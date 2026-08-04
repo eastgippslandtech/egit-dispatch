@@ -1,4 +1,4 @@
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 
 import { readDispatchConfig } from "@/server/dispatch/env";
 import { getConfiguredDispatchLinkStore } from "@/server/dispatch/link-store";
@@ -23,6 +23,7 @@ export function createConfiguredIntegrationWorker() {
     ...createCommandCentreAdapters({
       dispatchLinkStore: getConfiguredDispatchLinkStore(databaseUrl),
       invalidate: async () => {
+        revalidateTag("command-centre-dashboard", "max");
         revalidatePath("/dispatch");
         revalidatePath("/dispatch/queue");
         revalidatePath("/wallboard");

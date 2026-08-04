@@ -113,6 +113,10 @@ export function createOfflineTechnicianRepository({
       return filterJobsForRange(cachedJobs, range);
     },
 
+    async listCachedSchedule(range: DateRange): Promise<MobileJob[]> {
+      return filterJobsForRange(await database.listCachedJobs(), range);
+    },
+
     async getJob(jobId: string): Promise<MobileJob> {
       let refreshFailed = false;
       if (remote) {

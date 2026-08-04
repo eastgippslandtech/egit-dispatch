@@ -1,6 +1,9 @@
 import postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "./postgres-options";
+import {
+  getServerlessPostgresOptions,
+  normalizeServerlessDatabaseUrl,
+} from "./postgres-options";
 
 const clients = new Map<string, postgres.Sql>();
 
@@ -8,11 +11,15 @@ export function getSharedPostgresClient(
   databaseUrl: string,
   ssl: "require" | false = "require",
 ) {
-  const key = `${ssl}:${databaseUrl}`;
+  const serverlessDatabaseUrl = normalizeServerlessDatabaseUrl(databaseUrl);
+  const key = `${ssl}:${serverlessDatabaseUrl}`;
   const existing = clients.get(key);
   if (existing) return existing;
 
-  const client = postgres(databaseUrl, getServerlessPostgresOptions(ssl));
+  const client = postgres(
+    serverlessDatabaseUrl,
+    getServerlessPostgresOptions(ssl),
+  );
   clients.set(key, client);
   return client;
 }

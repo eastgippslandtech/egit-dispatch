@@ -120,6 +120,13 @@ import {
   useTrackedIntegrationOperations,
 } from "./operation-status";
 import {
+  clearCachedDashboard,
+  readCachedDashboard,
+  resolveDashboardWithCache,
+  shouldCacheDashboard,
+  writeCachedDashboard,
+} from "./dashboard-cache";
+import {
   applyTravelToAppointment,
   buildAppointmentTravel,
   getAppointmentBlockedWindow,
@@ -516,15 +523,20 @@ export function CommandCentrePrototype({
   }, [toast]);
 
   useEffect(() => {
+    const cached = readCachedDashboard(window.localStorage);
+    const resolvedData = resolveDashboardWithCache(data, cached);
+    if (shouldCacheDashboard(data)) {
+      writeCachedDashboard(window.localStorage, data);
+    }
     setDashboard((current) => {
       for (const requestId of pendingWritebackRequestIds.current) {
-        if (authoritativeScheduleMatches(current, data, requestId)) {
+        if (authoritativeScheduleMatches(current, resolvedData, requestId)) {
           pendingWritebackRequestIds.current.delete(requestId);
         }
       }
       return reconcileDashboardWithPendingWritebacks(
         current,
-        data,
+        resolvedData,
         pendingWritebackRequestIds.current,
       );
     });
@@ -5570,7 +5582,10 @@ function CommandHeader({
             <button
               className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200"
               type="button"
-              onClick={() => signOut({ callbackUrl: "/auth/sign-in" })}
+              onClick={() => {
+                clearCachedDashboard(window.localStorage);
+                void signOut({ callbackUrl: "/auth/sign-in" });
+              }}
             >
               <LogOut className="h-4 w-4" />
               Sign out

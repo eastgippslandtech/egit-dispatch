@@ -1,6 +1,9 @@
 import postgres from "postgres";
 
-import { getServerlessPostgresOptions } from "@/server/database/postgres-options";
+import {
+  getServerlessPostgresOptions,
+  normalizeServerlessDatabaseUrl,
+} from "@/server/database/postgres-options";
 
 const SECRET_NAME = "command_centre_integration_cron_secret";
 
@@ -17,7 +20,10 @@ export async function configureYeastarScheduler({
   if (!origin.startsWith("https://")) {
     throw new Error("The integration scheduler requires an HTTPS application URL.");
   }
-  const sql = postgres(databaseUrl, getServerlessPostgresOptions());
+  const sql = postgres(
+    normalizeServerlessDatabaseUrl(databaseUrl),
+    getServerlessPostgresOptions(),
+  );
   try {
     await sql.unsafe("create extension if not exists pg_net with schema extensions");
     await sql.unsafe("create extension if not exists pg_cron with schema pg_catalog");

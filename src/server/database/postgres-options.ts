@@ -10,3 +10,19 @@ export function getServerlessPostgresOptions(
     ssl,
   } as const;
 }
+
+export function normalizeServerlessDatabaseUrl(databaseUrl: string) {
+  try {
+    const url = new URL(databaseUrl);
+    if (
+      url.hostname.endsWith(".pooler.supabase.com") &&
+      (!url.port || url.port === "5432")
+    ) {
+      url.port = "6543";
+      return url.toString();
+    }
+  } catch {
+    return databaseUrl;
+  }
+  return databaseUrl;
+}

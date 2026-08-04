@@ -17,6 +17,8 @@ export async function ProtectedWallboardScreen() {
     return <AccessNotApproved email={access.email} name={access.name} />;
   }
 
+  const initialSnapshot = await getWallboardSnapshot();
+
   return (
     <WallboardScreen
       authDisabled={
@@ -24,7 +26,8 @@ export async function ProtectedWallboardScreen() {
       }
       canAccessDispatch={access.accessLevel === "staff"}
       deploymentVersion={getDeploymentVersion()}
-      initialSnapshot={await getWallboardSnapshot()}
+      initialNow={initialSnapshot.updatedAt}
+      initialSnapshot={initialSnapshot}
     />
   );
 }

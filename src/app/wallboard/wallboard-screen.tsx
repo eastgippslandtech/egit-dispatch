@@ -65,17 +65,22 @@ export function WallboardScreen({
   authDisabled = false,
   canAccessDispatch,
   deploymentVersion,
+  initialNow,
   initialSnapshot,
 }: {
   authDisabled?: boolean;
   canAccessDispatch: boolean;
   deploymentVersion: string;
+  initialNow: string;
   initialSnapshot: WallboardSnapshot;
 }) {
+  const initialDate = new Date(initialNow);
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [selectedDateKey, setSelectedDateKey] = useState(() => todayDateKey());
+  const [selectedDateKey, setSelectedDateKey] = useState(() =>
+    todayDateKey(initialDate),
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("day");
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState(initialDate);
   const [refreshDelayed, setRefreshDelayed] = useState(false);
   const lastAutoAdvancedDateKey = useRef<string | undefined>(undefined);
 

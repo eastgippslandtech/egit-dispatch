@@ -241,6 +241,71 @@ describe("MSP Central live client", () => {
     ]);
   });
 
+  it("loads customer email replies from the live MSP Central notes response shape", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            customer: { name: "Client Company" },
+            id: "123",
+            request_number: "REQ-123",
+            subject: "Printer offline",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          notes: [
+            {
+              created_by: {
+                email_id: "client@example.com",
+                is_technician: false,
+                name: "Client User",
+              },
+              created_time: { value: "1783501200000" },
+              description: "<p>I have replied with the requested details.</p>",
+              id: "email-reply-1",
+              show_to_requester: true,
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ worklogs: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const context = await client.getRequestContext("123");
+
+    expect(context.customerResponses).toEqual([
+      expect.objectContaining({
+        author: "Client User",
+        body: "I have replied with the requested details.",
+        id: "email-reply-1",
+      }),
+    ]);
+  });
+
   it("loads every page of request notes and worklogs", async () => {
     const requestedStarts: Record<"notes" | "worklogs", number[]> = {
       notes: [],

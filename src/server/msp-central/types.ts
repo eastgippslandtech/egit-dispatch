@@ -97,6 +97,7 @@ export type MspCentralListInfo = {
 
 export type MspCentralRequestNoteListResponse = {
   list_info?: MspCentralListInfo | null;
+  notes?: MspCentralRawRequestNote[];
   request_notes?: MspCentralRawRequestNote[];
 };
 

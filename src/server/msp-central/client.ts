@@ -396,8 +396,8 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     },
     async listRequestNotes(requestId) {
       const url = requestChildListUrl(apiRoot, requestId, "notes");
-      return (await getJson<MspCentralRequestNoteListResponse>(url))
-        .request_notes ?? [];
+      const payload = await getJson<MspCentralRequestNoteListResponse>(url);
+      return payload.notes ?? payload.request_notes ?? [];
     },
     async listRequests(params) {
       assertConfigured();
@@ -540,7 +540,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     return fetchRequestEntryPages({
       path: "notes",
       readEntries: (payload: MspCentralRequestNoteListResponse) =>
-        payload.request_notes ?? [],
+        payload.notes ?? payload.request_notes ?? [],
       requestId,
     });
   }

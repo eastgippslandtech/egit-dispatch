@@ -364,29 +364,33 @@ export function DispatchQueueScreen({
           </div>
 
           <div className="grid shrink-0 grid-cols-[minmax(260px,1.7fr)_130px_120px_160px_210px] gap-3 border-b border-cc-border bg-black/10 px-3 py-2 text-[10px] font-bold uppercase text-slate-500">
-            <span>Request</span><span>Customer</span><span>Owner</span><span>Attention</span><span>Actions</span>
+            <span>Request</span><span>Customer</span><span>Owner / booking</span><span>Attention</span><span>Actions</span>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {requests.length === 0 ? (
               <div className="grid h-40 place-items-center text-sm text-slate-400">No requests in this queue</div>
-            ) : requests.map((request) => (
-              <RequestRow
-                key={request.id}
-                attention={requestAttentionReason(request, seenRequestIds)}
-                isSelected={selectedRequest?.id === request.id}
-                request={request}
-                scheduled={Boolean(
-                  request.scheduledStart ||
-                    requestAppointments(dashboard.appointments, request.id).length > 0,
-                )}
-                technicianName={technicianName(dashboard, request.technicianId)}
-                unread={hasUnreadRequestUpdate(request, seenRequestIds)}
-                onMerge={() => setMergeRequestId(request.id)}
-                onOpen={() => openWorkspace(request.id)}
-                onSchedule={() => scheduleRequest(request.id)}
-                onSelect={() => setSelectedRequestId(request.id)}
-              />
-            ))}
+            ) : requests.map((request) => {
+              const appointment = requestScheduleAppointment(
+                dashboard.appointments,
+                request,
+              );
+              return (
+                <RequestRow
+                  key={request.id}
+                  attention={requestAttentionReason(request, seenRequestIds)}
+                  bookingLabel={formatQueueBooking(appointment)}
+                  isSelected={selectedRequest?.id === request.id}
+                  request={request}
+                  scheduled={Boolean(appointment)}
+                  technicianName={technicianName(dashboard, request.technicianId)}
+                  unread={hasUnreadRequestUpdate(request, seenRequestIds)}
+                  onMerge={() => setMergeRequestId(request.id)}
+                  onOpen={() => openWorkspace(request.id)}
+                  onSchedule={() => scheduleRequest(request.id)}
+                  onSelect={() => setSelectedRequestId(request.id)}
+                />
+              );
+            })}
           </div>
         </section>
 
@@ -467,6 +471,7 @@ export function DispatchQueueScreen({
 
 function RequestRow({
   attention,
+  bookingLabel,
   isSelected,
   onMerge,
   onOpen,
@@ -478,6 +483,7 @@ function RequestRow({
   unread,
 }: {
   attention: string;
+  bookingLabel?: string;
   isSelected: boolean;
   onMerge: () => void;
   onOpen: () => void;
@@ -510,7 +516,14 @@ function RequestRow({
         <p className="truncate font-semibold">{request.customer}</p>
         <p className="truncate text-xs text-slate-400">{request.site}</p>
       </div>
-      <div className="self-center text-xs font-semibold text-slate-300">{owner}</div>
+      <div className="min-w-0 self-center">
+        <p className="truncate text-xs font-semibold text-slate-300">{owner}</p>
+        {bookingLabel ? (
+          <p className="mt-1 truncate text-[10px] font-semibold text-cc-orange">
+            {bookingLabel}
+          </p>
+        ) : null}
+      </div>
       <div className="self-center">
         <p className="line-clamp-2 text-xs font-semibold text-amber-100">{attention}</p>
         <p className="mt-1 text-[10px] uppercase text-slate-500">{request.status}</p>
@@ -559,6 +572,9 @@ function RequestPreview({
             <PreviewDetail label="Contact" value={`${request.requester} · ${request.contact}`} />
             <PreviewDetail label="Status" value={request.status} />
             <PreviewDetail label="Owner" value={technicianName(dashboard, request.technicianId)} />
+            {appointment ? (
+              <PreviewDetail label="Booked" value={formatQueueBooking(appointment) ?? "Scheduled"} />
+            ) : null}
             <PreviewDetail label="Attention" value={requestAttentionReason(request)} />
           </div>
           <div className="mt-4 grid gap-2">
@@ -580,6 +596,39 @@ function PreviewDetail({ label, value }: { label: string; value: string }) {
 
 function requestAppointments(appointments: Appointment[], requestId?: string) {
   return requestId ? appointments.filter((appointment) => appointment.requestId === requestId) : [];
+}
+
+function requestScheduleAppointment(
+  appointments: Appointment[],
+  request: DispatchRequest,
+) {
+  return (
+    requestAppointments(appointments, request.id)
+      .filter((appointment) => appointment.date)
+      .sort((first, second) =>
+        `${first.date}T${first.start}`.localeCompare(`${second.date}T${second.start}`),
+      )[0] ?? scheduledRequestFallback(request)
+  );
+}
+
+function formatQueueBooking(appointment?: Appointment) {
+  if (!appointment?.date) return undefined;
+  const [year, month, day] = appointment.date.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return undefined;
+
+  const dateLabel = new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+    weekday: "short",
+  }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+
+  return `${dateLabel} · ${formatQueueTime(appointment.start)}–${formatQueueTime(appointment.end)}`;
+}
+
+function formatQueueTime(value: string) {
+  const [hour = "00", minute = "00"] = value.split(":");
+  return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
 }
 
 function scheduledRequestFallback(

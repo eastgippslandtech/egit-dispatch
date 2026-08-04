@@ -86,6 +86,7 @@ test("opens rescheduling inside the queue for an assigned appointment", async ()
 
   fireEvent.click(screen.getByRole("button", { name: /Assigned/ }));
   const row = screen.getByRole("article", { name: /File server disk expansion/ });
+  expect(within(row).getByText("Wed 8 July · 09:30–10:45")).toBeInTheDocument();
   fireEvent.click(within(row).getByRole("button", { name: "Reschedule" }));
 
   expect(screen.getByRole("dialog", { name: "Move appointment" })).toBeInTheDocument();

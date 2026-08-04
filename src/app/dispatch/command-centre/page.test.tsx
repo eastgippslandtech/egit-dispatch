@@ -558,8 +558,14 @@ test("rescheduling a refreshed crew appointment sends the parent schedule group"
       name: "Reschedule",
     }),
   );
+  const dialog = screen.getByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Booking date"), {
+    target: { value: "2026-07-09" },
+  });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm schedule" }),
+    );
   });
 
   expect(fetchMock).toHaveBeenCalledOnce();
@@ -567,11 +573,13 @@ test("rescheduling a refreshed crew appointment sends the parent schedule group"
   expect(url).toBe("/api/internal/dispatch/live-schedule");
   expect(JSON.parse(String(init.body))).toMatchObject({
     appointmentId: "parent-link-1",
+    date: "2026-07-09",
     previousAssignments: expect.arrayContaining([
       expect.objectContaining({ eventId: "event-lead" }),
       expect.objectContaining({ eventId: "event-crew" }),
     ]),
   });
+  expect(screen.getByText("Thursday 9 July 2026")).toBeInTheDocument();
 });
 
 test("does not claim manual calendar sync succeeded when review is required", async () => {

@@ -1422,6 +1422,50 @@ export function CommandCentrePrototype({
     });
   }
 
+  function updatePendingDate(date: string) {
+    setPendingSchedule((current) => {
+      if (!current || !date) {
+        return current;
+      }
+
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
+        date,
+        end: current.end,
+        request,
+        start: current.start,
+        technicianId: current.technicianId,
+        travel: current.travel,
+      });
+
+      return {
+        ...current,
+        date,
+        warnings: buildWarnings({
+          appointmentId:
+            current.kind === "appointment" ? current.appointmentId : undefined,
+          date,
+          end: current.end,
+          start: current.start,
+          technicianId: current.technicianId,
+          travelAppointment,
+        }),
+      };
+    });
+  }
+
   function updatePendingTechnician(technicianId: string) {
     setPendingSchedule((current) => {
       if (!current) {
@@ -2014,6 +2058,7 @@ export function CommandCentrePrototype({
         kind: "appointment",
         appointmentId: selectedLeadAppointmentId,
       });
+      setSelectedDateKey(pendingSchedule.date);
       setToast(
         liveSchedule
           ? moveReceiptMessage(liveEvent?.status)
@@ -2575,6 +2620,7 @@ export function CommandCentrePrototype({
             onConfirm={confirmPendingSchedule}
             onCrewChange={updatePendingCrew}
             onBookingTypeChange={updatePendingBookingType}
+            onDateChange={updatePendingDate}
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
             onTechnicianChange={updatePendingTechnician}
@@ -3336,6 +3382,7 @@ export function ScheduleConfirmModal({
   onBookingTypeChange,
   onConfirm,
   onCrewChange,
+  onDateChange,
   onDurationChange,
   onStartChange,
   onTechnicianChange,
@@ -3348,6 +3395,7 @@ export function ScheduleConfirmModal({
   onBookingTypeChange: (bookingType: BookingType) => void;
   onConfirm: () => Promise<void> | void;
   onCrewChange?: (technicianId: string, selected: boolean) => void;
+  onDateChange: (date: string) => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
   onTechnicianChange: (technicianId: string) => void;
@@ -3446,7 +3494,11 @@ export function ScheduleConfirmModal({
           )}
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div
+          className={`mt-4 grid grid-cols-2 gap-3 ${
+            pending.kind === "appointment" ? "lg:grid-cols-5" : "lg:grid-cols-4"
+          }`}
+        >
           <label className="block text-sm font-semibold text-slate-200">
             Lead technician
             <select
@@ -3463,6 +3515,19 @@ export function ScheduleConfirmModal({
               ))}
             </select>
           </label>
+          {pending.kind === "appointment" ? (
+            <label className="block text-sm font-semibold text-slate-200">
+              Booking date
+              <input
+                aria-label="Booking date"
+                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100 [color-scheme:dark]"
+                disabled={saving}
+                type="date"
+                value={pending.date}
+                onChange={(event) => onDateChange(event.target.value)}
+              />
+            </label>
+          ) : null}
           <label className="block text-sm font-semibold text-slate-200">
             Start time
             <select

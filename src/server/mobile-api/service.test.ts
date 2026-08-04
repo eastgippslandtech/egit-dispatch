@@ -237,18 +237,12 @@ describe("mobile API service", () => {
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
   });
 
-  it("starts loading assigned jobs without waiting for the staff profile lookup", async () => {
-    let resolveStaff: ((staff: DatabaseStaffRow) => void) | undefined;
+  it("loads assigned jobs with the database staff profile id", async () => {
     const listJobsForStaff = vi.fn().mockResolvedValue([dbJob]);
-    const responsePromise = listMobileJobs({
+    const response = await listMobileJobs({
       auth: rileyMobileAuth,
       database: createDatabase({
-        findStaffByZohoEmail: vi.fn(
-          () =>
-            new Promise<DatabaseStaffRow>((resolve) => {
-              resolveStaff = resolve;
-            }),
-        ),
+        findStaffByZohoEmail: vi.fn().mockResolvedValue(dbStaff),
         listJobsForStaff,
       }),
       from: "2026-07-14",
@@ -256,16 +250,12 @@ describe("mobile API service", () => {
       to: "2026-07-14",
     });
 
-    await Promise.resolve();
-
     expect(listJobsForStaff).toHaveBeenCalledWith({
       from: "2026-07-14",
-      staffId: rileyMobileAuth.staffId,
+      staffId: dbStaff.id,
       to: "2026-07-14",
     });
-
-    resolveStaff?.(dbStaff);
-    await expect(responsePromise).resolves.toMatchObject({
+    expect(response).toMatchObject({
       jobs: [expect.objectContaining({ id: dbJobId })],
     });
   });

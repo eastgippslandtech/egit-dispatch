@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const { signOutMock } = vi.hoisted(() => ({ signOutMock: vi.fn() }));
 
@@ -97,6 +97,37 @@ test("renders a full-width wallboard with team presence and no dispatcher sideba
   expect(screen.queryByPlaceholderText("Search requests")).not.toBeInTheDocument();
 });
 
+test("does not overlap wallboard refreshes when a live read is slow", async () => {
+  vi.useFakeTimers();
+  let resolveRefresh: ((response: Response) => void) | undefined;
+  const fetchMock = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        resolveRefresh = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await WallboardPage());
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(fetchMock).toHaveBeenCalledOnce();
+
+  resolveRefresh?.(
+    new Response(JSON.stringify(await snapshotMock()), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    }),
+  );
+  await act(async () => {
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 test("shows overlapping wallboard bookings in separate vertical lanes", async () => {
   const dashboard = getDispatchDesignMockData();
   const technician = dashboard.technicians[0];
@@ -191,6 +222,11 @@ test("hides Dispatch and returns local sessions to wallboard sign-in on sign-out
   expect(signOutMock).toHaveBeenCalledWith({
     callbackUrl: "/auth/wallboard-sign-in",
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 test("redirects unauthenticated wallboard viewers to local wallboard sign in", async () => {

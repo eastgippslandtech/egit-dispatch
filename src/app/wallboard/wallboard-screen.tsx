@@ -86,9 +86,22 @@ export function WallboardScreen({
 
   useEffect(() => {
     let stopped = false;
+    let refreshTimer: number | undefined;
+    let refreshing = false;
+
+    function scheduleRefresh() {
+      if (stopped) return;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => void refresh(), 30_000);
+    }
 
     async function refresh() {
-      if (document.visibilityState === "hidden") return;
+      if (stopped || refreshing) return;
+      if (document.visibilityState === "hidden") {
+        scheduleRefresh();
+        return;
+      }
+      refreshing = true;
       const refreshedAt = new Date();
       setNow(refreshedAt);
       setSelectedDateKey((current) => {
@@ -123,17 +136,23 @@ export function WallboardScreen({
         }
       } catch {
         if (!stopped) setRefreshDelayed(true);
+      } finally {
+        refreshing = false;
+        scheduleRefresh();
       }
     }
 
-    const interval = window.setInterval(refresh, 30_000);
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible" && !refreshing) {
+        if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+        void refresh();
+      }
     };
+    scheduleRefresh();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       stopped = true;
-      window.clearInterval(interval);
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [deploymentVersion]);

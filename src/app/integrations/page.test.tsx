@@ -94,7 +94,7 @@ describe("FailedActions", () => {
           action("operation-review", "review_required"),
           action("operation-retry", "retrying"),
         ]}
-        busyOperationId={undefined}
+        busyAction={undefined}
         onCancel={vi.fn()}
         onRetry={vi.fn()}
       />,
@@ -117,7 +117,7 @@ describe("FailedActions", () => {
     render(
       <FailedActions
         actions={[action("operation-review", "review_required")]}
-        busyOperationId={undefined}
+        busyAction={undefined}
         onCancel={onCancel}
         onRetry={vi.fn()}
       />,
@@ -135,7 +135,7 @@ describe("FailedActions", () => {
     render(
       <FailedActions
         actions={[action("operation-review", "review_required")]}
-        busyOperationId={undefined}
+        busyAction={undefined}
         onCancel={vi.fn()}
         onRetry={onRetry}
       />,
@@ -146,6 +146,25 @@ describe("FailedActions", () => {
     expect(onRetry).not.toHaveBeenCalled();
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalledWith("operation-review", true);
+  });
+
+  it("shows which recovery action is pending", () => {
+    render(
+      <FailedActions
+        actions={[action("operation-review", "review_required")]}
+        busyAction={{
+          action: "retry",
+          confirmedAbsent: false,
+          operationId: "operation-review",
+        }}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Retrying..." }))
+      .toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Retrying..." })).toBeDisabled();
   });
 });
 

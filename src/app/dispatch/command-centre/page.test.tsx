@@ -17,14 +17,18 @@ import CommandCentrePage from "./page";
 import {
   CommandCentrePrototype,
   bookingCardPriorityClass,
+  CreateRequestModal,
   integrationReceiptDisposition,
+  MergeRequestModal,
   pendingLiveAppointmentId,
   reconcileDashboardWithPendingWritebacks,
   resolveWorkLogAppointment,
   requestNotesSummary,
   safeRequestContentParts,
   ScheduleConfirmModal,
+  TicketWorkspaceModal,
   toastAutoDismissMs,
+  WorkLogModal,
 } from "./prototype";
 
 const routerRefreshMock = vi.fn();
@@ -395,12 +399,167 @@ test("shows immediate proof that schedule confirmation was accepted", () => {
   fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
 
   expect(onConfirm).toHaveBeenCalledOnce();
-  expect(screen.getByRole("button", { name: "Scheduling..." })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Scheduling..." }))
+    .toBeDisabled();
+  expect(screen.getByRole("button", { name: "Scheduling..." }))
+    .toHaveAttribute("aria-busy", "true");
   expect(screen.getByRole("status")).toHaveTextContent(
     "Saving booking and starting background sync",
   );
   fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
   expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("shows clear pending feedback while creating a request", () => {
+  render(
+    <CreateRequestModal
+      onCancel={vi.fn()}
+      onCreated={vi.fn()}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("Subject"), {
+    target: { value: "Prepare a new laptop" },
+  });
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+
+  const button = screen.getByRole("button", { name: "Creating request..." });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("aria-busy", "true");
+});
+
+test("shows clear pending feedback while merging a request", () => {
+  const data = getDispatchDesignMockData();
+  render(
+    <MergeRequestModal
+      childRequest={data.requests[0]}
+      requests={data.requests}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn(() => new Promise(() => undefined))}
+    />,
+  );
+
+  fireEvent.change(screen.getByPlaceholderText("Search request number, subject or customer"), {
+    target: { value: data.requests[1].requestNumber },
+  });
+  fireEvent.click(screen.getByRole("button", {
+    name: `Select ${data.requests[1].requestNumber} as surviving parent`,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Review merge" }));
+  fireEvent.click(screen.getByRole("button", { name: "Merge duplicate into parent" }));
+
+  const button = screen.getByRole("button", { name: "Merging requests..." });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("aria-busy", "true");
+});
+
+test("shows clear pending feedback while saving a Work Log", () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], scheduledStart: undefined, scheduledEnd: undefined };
+  render(
+    <WorkLogModal
+      liveWriteback={false}
+      request={request}
+      technician="Simeon"
+      technicians={data.technicians}
+      onCancel={vi.fn()}
+      onSave={vi.fn(() => new Promise(() => undefined))}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("Work Log notes"), {
+    target: { value: "Prepared and tested the device." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save Work Log" }));
+
+  const button = screen.getByRole("button", { name: "Saving Work Log..." });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("aria-busy", "true");
+});
+
+test("shows clear pending feedback while sending a customer communication", () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Promise(() => undefined);
+      return Promise.resolve(new Response(JSON.stringify({
+        customerResponses: [],
+        internalNotes: [],
+        request,
+        worklogs: [],
+      }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    }),
+  );
+  render(
+    <TicketWorkspaceModal
+      appointments={[]}
+      liveWriteback
+      request={request}
+      onClose={vi.fn()}
+      onOpenWorkLog={vi.fn()}
+      onSaved={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("tab", { name: "Comms" }));
+  fireEvent.change(screen.getByLabelText("Communication message"), {
+    target: { value: "Your device is ready for collection." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send to customer" }));
+
+  const button = screen.getByRole("button", { name: "Sending..." });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("aria-busy", "true");
+});
+
+test("shows clear pending feedback while applying a Track", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    notes: "",
+    sourceSystem: "msp-central" as const,
+    subject: "General computer issue",
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return new Promise(() => undefined);
+      if (url.includes("/workflow")) {
+        return Promise.resolve(new Response(JSON.stringify({ workflow: null }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        customerResponses: [],
+        internalNotes: [],
+        request,
+        worklogs: [],
+      }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    }),
+  );
+  render(
+    <TicketWorkspaceModal
+      appointments={[]}
+      liveWriteback
+      request={request}
+      onClose={vi.fn()}
+      onOpenWorkLog={vi.fn()}
+      onSaved={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("tab", { name: "Tracks" }));
+  const applyButton = await screen.findByRole("button", { name: "Apply ticket template" });
+  fireEvent.click(applyButton);
+
+  const button = screen.getByRole("button", { name: "Saving Track..." });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("aria-busy", "true");
 });
 
 test("reuses the same optimistic appointment id when a schedule command is retried", () => {

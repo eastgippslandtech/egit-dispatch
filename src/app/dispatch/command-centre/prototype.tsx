@@ -3230,6 +3230,7 @@ export function MergeRequestModal({
           ? mergeError.message
           : "MSP Central request merge failed.",
       );
+    } finally {
       setSaving(false);
     }
   }
@@ -3390,12 +3391,13 @@ export function MergeRequestModal({
                 Back
               </button>
               <button
+                aria-busy={saving}
                 className="rounded-md bg-rose-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50"
                 disabled={saving}
                 type="button"
                 onClick={confirmMerge}
               >
-                {saving ? "Merging..." : "Merge duplicate into parent"}
+                {saving ? "Merging requests..." : "Merge duplicate into parent"}
               </button>
             </div>
           </>
@@ -3746,16 +3748,14 @@ export function ScheduleConfirmModal({
             Cancel
           </button>
           <button
+            aria-busy={saving}
             className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-wait disabled:opacity-70"
             disabled={saving}
             type="button"
             onClick={confirmSchedule}
           >
             {saving ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                Scheduling...
-              </>
+              "Scheduling..."
             ) : liveSchedule ? (
               "Confirm schedule"
             ) : (
@@ -3906,12 +3906,13 @@ export function CreateRequestModal({
             Cancel
           </button>
           <button
+            aria-busy={saving}
             className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
             disabled={!subject.trim() || saving}
             type="button"
             onClick={submit}
           >
-            {saving ? "Creating..." : "Create request"}
+            {saving ? "Creating request..." : "Create request"}
           </button>
         </div>
       </section>
@@ -3951,6 +3952,7 @@ export function TicketWorkspaceModal({
     "loading" | "loaded" | "saving"
   >(liveWriteback ? "loading" : "loaded");
   const [workflowError, setWorkflowError] = useState<string>();
+  const [workflowBusyAction, setWorkflowBusyAction] = useState<string>();
   const [selectedTemplateId, setSelectedTemplateId] = useState(
     () => classifyTicketTemplate(request ?? { subject: "" })?.templateId ?? "general-support",
   );
@@ -4053,6 +4055,7 @@ export function TicketWorkspaceModal({
     );
     if (!template || workflowStatus === "saving") return;
     setWorkflowError(undefined);
+    setWorkflowBusyAction("apply");
     setWorkflowStatus("saving");
     try {
       const next = liveWriteback
@@ -4079,6 +4082,7 @@ export function TicketWorkspaceModal({
           : "Ticket template could not be applied.",
       );
     } finally {
+      setWorkflowBusyAction(undefined);
       setWorkflowStatus("loaded");
     }
   }
@@ -4089,6 +4093,7 @@ export function TicketWorkspaceModal({
   ) {
     if (!workflow || workflowStatus === "saving") return;
     setWorkflowError(undefined);
+    setWorkflowBusyAction(`${item.id}:${status}`);
     setWorkflowStatus("saving");
     try {
       const update = {
@@ -4114,6 +4119,7 @@ export function TicketWorkspaceModal({
           : "Track item could not be saved.",
       );
     } finally {
+      setWorkflowBusyAction(undefined);
       setWorkflowStatus("loaded");
     }
   }
@@ -4335,12 +4341,13 @@ export function TicketWorkspaceModal({
                     )}
                   </div>
                   <button
+                    aria-busy={sending}
                     className="flex min-w-52 items-center justify-center gap-2 rounded-md bg-cc-orange px-5 py-2.5 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
                     disabled={!liveWriteback || !message.trim() || sending}
                     type="button"
                     onClick={sendCommunication}
                   >
-                    <MessageSquare className="h-4 w-4" />
+                    {!sending ? <MessageSquare className="h-4 w-4" /> : null}
                     {sending
                       ? "Sending..."
                       : visibility === "customer"
@@ -4353,6 +4360,7 @@ export function TicketWorkspaceModal({
           ) : (
             <TrackWorkspace
               error={workflowError}
+              busyAction={workflowBusyAction}
               loading={workflowStatus === "loading"}
               saving={workflowStatus === "saving"}
               selectedTemplateId={selectedTemplateId}
@@ -4420,6 +4428,7 @@ function CommunicationThread({
 }
 
 function TrackWorkspace({
+  busyAction,
   error,
   loading,
   onApply,
@@ -4434,6 +4443,7 @@ function TrackWorkspace({
   trackValues,
   workflow,
 }: {
+  busyAction?: string;
   error?: string;
   loading: boolean;
   onApply: () => void;
@@ -4492,12 +4502,13 @@ function TrackWorkspace({
           </select>
         </label>
         <button
+          aria-busy={busyAction === "apply"}
           className="mt-3 w-full rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
           disabled={saving}
           type="button"
           onClick={onApply}
         >
-          {saving ? "Saving..." : workflow ? "Replace Track" : "Apply ticket template"}
+          {busyAction === "apply" ? "Saving Track..." : workflow ? "Replace Track" : "Apply ticket template"}
         </button>
         <p className="mt-3 text-xs leading-5 text-slate-400">
           Replacing a Track starts the selected version with fresh checklist items. The change is recorded in ticket history.
@@ -4585,14 +4596,16 @@ function TrackWorkspace({
                     onChange={(event) => onReasonChange(item.id, event.target.value)}
                   />
                   <button
+                    aria-busy={busyAction === `${item.id}:not_applicable`}
                     className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold disabled:opacity-40"
                     disabled={saving}
                     type="button"
                     onClick={() => onStatusChange(item, "not_applicable")}
                   >
-                    Not applicable
+                    {busyAction === `${item.id}:not_applicable` ? "Saving..." : "Not applicable"}
                   </button>
                   <button
+                    aria-busy={busyAction === `${item.id}:${item.status === "completed" ? "pending" : "completed"}`}
                     className={`rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-40 ${
                       item.status === "completed"
                         ? "border border-white/10 bg-white/5 text-slate-200"
@@ -4602,7 +4615,9 @@ function TrackWorkspace({
                     type="button"
                     onClick={() => onStatusChange(item, item.status === "completed" ? "pending" : "completed")}
                   >
-                    {item.status === "completed" ? "Reopen" : "Complete"}
+                    {busyAction === `${item.id}:${item.status === "completed" ? "pending" : "completed"}`
+                      ? "Saving..."
+                      : item.status === "completed" ? "Reopen" : "Complete"}
                   </button>
                 </div>
               </article>
@@ -5297,13 +5312,14 @@ export function WorkLogModal({
             Cancel
           </button>
           <button
+            aria-busy={submitting}
             className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
             disabled={!outcomeComplete || submitting}
             type="button"
             onClick={submitWorklog}
           >
             {submitting
-              ? "Saving..."
+              ? "Saving Work Log..."
               : !scheduled
                 ? "Save Work Log"
                 : disposition === "complete"

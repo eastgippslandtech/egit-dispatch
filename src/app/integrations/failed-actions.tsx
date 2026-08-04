@@ -21,12 +21,16 @@ export type FailedActionSummary = {
 
 export function FailedActions({
   actions,
-  busyOperationId,
+  busyAction,
   onCancel,
   onRetry,
 }: {
   actions: FailedActionSummary[];
-  busyOperationId?: string;
+  busyAction?: {
+    action: "cancel" | "retry";
+    confirmedAbsent: boolean;
+    operationId: string;
+  };
   onCancel: (operationId: string) => void;
   onRetry: (operationId: string, confirmedAbsent?: boolean) => void;
 }) {
@@ -44,7 +48,12 @@ export function FailedActions({
         ) : (
           <div className="divide-y divide-white/[0.07]">
             {actions.map((action) => {
-              const busy = busyOperationId === action.id;
+              const busy = busyAction?.operationId === action.id;
+              const retrying =
+                busy && busyAction.action === "retry" && !busyAction.confirmedAbsent;
+              const retryingConfirmedAbsent =
+                busy && busyAction.action === "retry" && busyAction.confirmedAbsent;
+              const cancelling = busy && busyAction.action === "cancel";
               return (
                 <article
                   key={action.id}
@@ -72,17 +81,20 @@ export function FailedActions({
                     ) : null}
                     {action.state === "review_required" ? (
                       <button
+                        aria-busy={retrying}
                         className="inline-flex items-center gap-1.5 rounded-md border border-sky-300/20 bg-sky-400/10 px-2.5 py-1.5 text-xs font-semibold text-sky-100 disabled:opacity-50"
                         disabled={busy}
                         title="Retry this action after reviewing the provider error"
                         type="button"
                         onClick={() => onRetry(action.id, false)}
                       >
-                        <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> Retry
+                        {retrying ? null : <RefreshCw className="h-3.5 w-3.5" />}
+                        {retrying ? "Retrying..." : "Retry"}
                       </button>
                     ) : null}
                     {action.state === "review_required" ? (
                       <button
+                        aria-busy={retryingConfirmedAbsent}
                         className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/25 bg-amber-400/10 px-2.5 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-50"
                         disabled={busy}
                         title="Use only after confirming the provider has no matching record"
@@ -93,11 +105,17 @@ export function FailedActions({
                           }
                         }}
                       >
-                        <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} /> Confirm absent and retry
+                        {retryingConfirmedAbsent ? null : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
+                        {retryingConfirmedAbsent
+                          ? "Retrying confirmed action..."
+                          : "Confirm absent and retry"}
                       </button>
                     ) : null}
                     {action.state === "queued" || action.state === "review_required" || action.state === "retrying" ? (
                       <button
+                        aria-busy={cancelling}
                         className="inline-flex items-center gap-1.5 rounded-md border border-rose-300/20 bg-rose-400/10 px-2.5 py-1.5 text-xs font-semibold text-rose-100 disabled:opacity-50"
                         disabled={busy}
                         title="Cancel this queued provider action"
@@ -108,7 +126,8 @@ export function FailedActions({
                           }
                         }}
                       >
-                        <XCircle className="h-3.5 w-3.5" /> Cancel
+                        {cancelling ? null : <XCircle className="h-3.5 w-3.5" />}
+                        {cancelling ? "Cancelling..." : "Cancel"}
                       </button>
                     ) : null}
                   </div>

@@ -4,6 +4,7 @@ import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 import { isWallboardLoginConfigured } from "@/server/auth/wallboard-login";
 
 import { wallboardSignIn } from "./actions";
+import { WallboardSubmitButton } from "./submit-button";
 
 type WallboardSignInPageProps = {
   searchParams: Promise<{ error?: string | string[] }>;
@@ -86,13 +87,7 @@ export default async function WallboardSignInPage({
               type="password"
             />
           </div>
-          <button
-            className="w-full rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 transition hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-55"
-            disabled={!configured}
-            type="submit"
-          >
-            Sign in to Wallboard
-          </button>
+          <WallboardSubmitButton configured={configured} />
         </form>
 
         <Link

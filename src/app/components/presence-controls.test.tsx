@@ -93,4 +93,28 @@ describe("Dispatch presence controls", () => {
       ),
     );
   });
+
+  it("shows the pending presence action and prevents another submission", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(snapshot), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<PresenceControls technicians={[technician]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Team status" }));
+    const panel = await screen.findByRole("dialog", { name: "Team status" });
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Start Lunch for Jervy" }),
+    );
+
+    const button = within(panel).getByRole("button", { name: "Starting Lunch..." });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+  });
 });

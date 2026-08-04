@@ -21,6 +21,9 @@ export function PresenceControls({
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<WallboardSnapshot | null>(null);
   const [busyTechnicianId, setBusyTechnicianId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    "clear" | "set_leave" | "start_lunch" | null
+  >(null);
   const [leaveTechnicianId, setLeaveTechnicianId] = useState<string | null>(null);
   const [leaveReason, setLeaveReason] = useState("Annual leave");
   const [leaveEndsAt, setLeaveEndsAt] = useState("");
@@ -57,6 +60,7 @@ export function PresenceControls({
         },
   ) {
     setBusyTechnicianId(technicianId);
+    setBusyAction(body.action);
     setError("");
     try {
       const response = await fetch("/api/internal/presence", {
@@ -73,6 +77,7 @@ export function PresenceControls({
       );
     } finally {
       setBusyTechnicianId(null);
+      setBusyAction(null);
     }
   }
 
@@ -168,7 +173,12 @@ export function PresenceControls({
                           <div className="flex shrink-0 items-center gap-1.5">
                             {isManual ? (
                               <button
-                                aria-label={`Clear status for ${technician.displayName}`}
+                                aria-busy={isBusy && busyAction === "clear"}
+                                aria-label={
+                                  isBusy && busyAction === "clear"
+                                    ? "Clearing status..."
+                                    : `Clear status for ${technician.displayName}`
+                                }
                                 className="flex items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10 disabled:opacity-50"
                                 disabled={isBusy}
                                 type="button"
@@ -179,13 +189,20 @@ export function PresenceControls({
                                   })
                                 }
                               >
-                                <RotateCcw className="h-3.5 w-3.5" />
-                                Clear
+                                {isBusy && busyAction === "clear" ? null : (
+                                  <RotateCcw className="h-3.5 w-3.5" />
+                                )}
+                                {isBusy && busyAction === "clear" ? "Clearing..." : "Clear"}
                               </button>
                             ) : (
                               <>
                                 <button
-                                  aria-label={`Start Lunch for ${technician.displayName}`}
+                                  aria-busy={isBusy && busyAction === "start_lunch"}
+                                  aria-label={
+                                    isBusy && busyAction === "start_lunch"
+                                      ? "Starting Lunch..."
+                                      : `Start Lunch for ${technician.displayName}`
+                                  }
                                   className="flex items-center gap-1.5 rounded border border-amber-300/25 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-400/20 disabled:opacity-50"
                                   disabled={isBusy}
                                   type="button"
@@ -196,12 +213,15 @@ export function PresenceControls({
                                     })
                                   }
                                 >
-                                  <Coffee className="h-3.5 w-3.5" />
-                                  Lunch
+                                  {isBusy && busyAction === "start_lunch" ? null : (
+                                    <Coffee className="h-3.5 w-3.5" />
+                                  )}
+                                  {isBusy && busyAction === "start_lunch" ? "Starting Lunch..." : "Lunch"}
                                 </button>
                                 <button
                                   aria-label={`Set Leave for ${technician.displayName}`}
-                                  className="flex items-center gap-1.5 rounded border border-violet-300/25 bg-violet-400/10 px-2 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-400/20"
+                                  className="flex items-center gap-1.5 rounded border border-violet-300/25 bg-violet-400/10 px-2 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-400/20 disabled:opacity-50"
+                                  disabled={isBusy}
                                   type="button"
                                   onClick={() => {
                                     setLeaveTechnicianId(technician.id);
@@ -245,6 +265,7 @@ export function PresenceControls({
                               />
                             </label>
                             <button
+                              aria-busy={isBusy && busyAction === "set_leave"}
                               className="rounded bg-cc-orange px-2.5 py-1.5 text-xs font-bold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
                               disabled={!leaveEndsAt || isBusy}
                               type="button"
@@ -257,7 +278,7 @@ export function PresenceControls({
                                 })
                               }
                             >
-                              Confirm Leave
+                              {isBusy && busyAction === "set_leave" ? "Saving Leave..." : "Confirm Leave"}
                             </button>
                           </div>
                         ) : null}

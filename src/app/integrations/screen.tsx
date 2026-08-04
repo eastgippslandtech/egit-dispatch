@@ -24,7 +24,11 @@ export function IntegrationsConsole() {
   const [snapshot, setSnapshot] = useState<IntegrationSnapshot>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [busyOperationId, setBusyOperationId] = useState<string>();
+  const [busyAction, setBusyAction] = useState<{
+    action: "cancel" | "retry";
+    confirmedAbsent: boolean;
+    operationId: string;
+  }>();
   const mounted = useRef(true);
   const refreshSequence = useRef(0);
 
@@ -93,7 +97,7 @@ export function IntegrationsConsole() {
     action: "cancel" | "retry",
     confirmedAbsent = false,
   ) {
-    setBusyOperationId(operationId);
+    setBusyAction({ action, confirmedAbsent, operationId });
     setNotice(undefined);
     try {
       const response = await fetch(
@@ -121,7 +125,7 @@ export function IntegrationsConsole() {
       if (!mounted.current) return;
       setError(actionError instanceof Error ? actionError.message : "The recovery action could not be completed.");
     } finally {
-      if (mounted.current) setBusyOperationId(undefined);
+      if (mounted.current) setBusyAction(undefined);
     }
   }
 
@@ -158,7 +162,7 @@ export function IntegrationsConsole() {
         {snapshot ? (
           <>
             <IntegrationHealth connectors={snapshot.connectors} counts={snapshot.counts} />
-            <FailedActions actions={snapshot.actions} busyOperationId={busyOperationId} onCancel={(id) => void runAction(id, "cancel")} onRetry={(id, confirmedAbsent) => void runAction(id, "retry", confirmedAbsent)} />
+            <FailedActions actions={snapshot.actions} busyAction={busyAction} onCancel={(id) => void runAction(id, "cancel")} onRetry={(id, confirmedAbsent) => void runAction(id, "retry", confirmedAbsent)} />
             <RecoveryAuditSummary actions={snapshot.actions} />
           </>
         ) : null}

@@ -125,7 +125,7 @@ describe("MSP Central shared OAuth token coordinator", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("fails closed instead of refreshing Zoho when shared storage is unavailable", async () => {
+  it("refreshes locally when shared storage is unavailable", async () => {
     const store: MspOAuthTokenStore = {
       blockRefresh: vi.fn().mockRejectedValue(new Error("database unavailable")),
       getRefreshBlockedUntil: vi
@@ -143,10 +143,27 @@ describe("MSP Central shared OAuth token coordinator", () => {
     });
     const coordinator = new MspOAuthAccessTokenCoordinator({ store });
 
-    await expect(coordinator.getToken("shared-key", refresh)).rejects.toThrow(
-      "shared token coordination is unavailable",
+    await expect(coordinator.getToken("shared-key", refresh)).resolves.toBe(
+      "local-access-token",
     );
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes locally when the shared refresh lease cannot be acquired", async () => {
+    const store = new MemoryTokenStore();
+    vi.spyOn(store, "tryAcquireRefreshLease").mockRejectedValue(
+      new Error("database unavailable"),
+    );
+    const refresh = vi.fn().mockResolvedValue({
+      accessToken: "lease-fallback-token",
+      expiresInSeconds: 3600,
+    });
+    const coordinator = new MspOAuthAccessTokenCoordinator({ store });
+
+    await expect(coordinator.getToken("shared-key", refresh)).resolves.toBe(
+      "lease-fallback-token",
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("shares Zoho Access Denied cooldown across isolated server instances", async () => {

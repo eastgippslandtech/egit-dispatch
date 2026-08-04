@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { GraphApiError, createGraphClient } from "./client";
+import {
+  GRAPH_REQUEST_TIMEOUT_MS,
+  GraphApiError,
+  createGraphClient,
+} from "./client";
 
 describe("Graph client", () => {
+  it("allows slow Australian Graph reads to complete before timing out", () => {
+    expect(GRAPH_REQUEST_TIMEOUT_MS).toBe(20_000);
+  });
+
   it("uses client credentials and calendarView with the configured timezone", async () => {
     const fetchMock = vi
       .fn()

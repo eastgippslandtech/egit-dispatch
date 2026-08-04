@@ -7,7 +7,7 @@ import type {
 
 type FetchLike = typeof fetch;
 
-const GRAPH_REQUEST_TIMEOUT_MS = 8_000;
+export const GRAPH_REQUEST_TIMEOUT_MS = 20_000;
 
 type GraphClientOptions = {
   clientId?: string;

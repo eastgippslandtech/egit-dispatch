@@ -4,6 +4,7 @@ import { readDispatchConfig } from "@/server/dispatch/env";
 
 import {
   createMspCentralClient,
+  MSP_REQUEST_TIMEOUT_MS,
   resetMspCentralAccessTokenCacheForTests,
 } from "./client";
 import { MspCentralConfigurationError } from "./errors";
@@ -248,6 +249,10 @@ describe("MSP Central live client", () => {
         durationMinutes: 75,
       }),
     ]);
+  });
+
+  it("allows slow Australian Helpdesk reads to complete before timing out", () => {
+    expect(MSP_REQUEST_TIMEOUT_MS).toBe(20_000);
   });
 
   it("prefers a reauthorised refresh token stored in Command Centre", async () => {

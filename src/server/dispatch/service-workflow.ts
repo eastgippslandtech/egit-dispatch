@@ -124,18 +124,32 @@ export const serviceTicketTemplates: ServiceTicketTemplate[] = [
   }),
   template({
     bookingType: "Onsite",
-    description: "Prepare, deploy, secure, and hand over a workstation or device.",
+    description: "Capture requirements, prepare, deploy, secure, and hand over a new or replacement device.",
     duration: 90,
     id: "device-deployment",
-    name: "Device deployment",
+    name: "New device setup",
     trackItems: [
+      item("eta", "ETA or required-by date and time", "date_time"),
+      item("user", "Assigned user, team, and role", "text"),
+      item("setup-type", "Setup type", "choice", [
+        "New user device",
+        "Existing user replacement",
+        "Additional device",
+        "Shared device",
+      ]),
       item("asset", "Select or record the deployed asset", "asset"),
+      item("software", "Required software and configuration", "text"),
+      item("licensing", "Required licences and access", "text"),
+      item("migration", "Data migration source and requirements", "text"),
+      item("accessories", "Required peripherals and accessories", "text"),
       item("build", "Apply the approved build and updates", "checkbox"),
       item("security", "Apply security and management policies", "checkbox"),
       item("applications", "Install required customer applications", "checkbox"),
       item("validation", "Test sign-in, connectivity, and peripherals", "checkbox"),
+      item("asset-register", "Update the asset register and device ownership", "checkbox"),
       item("handover", "Complete user handover", "checkbox"),
     ],
+    version: 2,
   }),
   template({
     bookingType: "Onsite",
@@ -192,7 +206,7 @@ const deterministicRules: Array<{
 }> = [
   { confidence: 0.96, keywords: ["new user", "user onboarding", "staff onboarding"], templateId: "user-onboarding" },
   { confidence: 0.96, keywords: ["user offboarding", "staff offboarding", "terminate user", "employee leaving"], templateId: "user-offboarding" },
-  { confidence: 0.94, keywords: ["device deployment", "new laptop", "new workstation", "computer deployment"], templateId: "device-deployment" },
+  { confidence: 0.94, keywords: ["device deployment", "new device setup", "new laptop", "new workstation", "computer deployment"], templateId: "device-deployment" },
   { confidence: 0.94, keywords: ["site installation", "onsite installation", "site install"], templateId: "site-installation" },
   { confidence: 0.94, keywords: ["security remediation", "account compromise", "malware remediation"], templateId: "security-remediation" },
   { confidence: 0.96, keywords: ["new msp client", "new customer setup", "customer onboarding"], templateId: "new-customer-setup" },
@@ -393,6 +407,7 @@ function template({
   id,
   name,
   trackItems,
+  version = 1,
 }: {
   bookingType?: BookingType;
   defaultPriority?: Priority;
@@ -401,6 +416,7 @@ function template({
   id: string;
   name: string;
   trackItems: TrackTemplateItem[];
+  version?: number;
 }): ServiceTicketTemplate {
   return {
     defaultBookingType: bookingType,
@@ -415,9 +431,9 @@ function template({
       id: `${id}-track`,
       items: trackItems,
       name: `${name} Track`,
-      version: 1,
+      version,
     },
-    version: 1,
+    version,
   };
 }
 

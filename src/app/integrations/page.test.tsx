@@ -207,6 +207,27 @@ describe("IntegrationsPage", () => {
     );
   });
 
+  it("stops the loading spinner when integration reads stall", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, options?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(await IntegrationsPage());
+    await act(async () => vi.advanceTimersByTimeAsync(20_001));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Integration status could not be loaded.",
+    );
+    expect(screen.queryByText("Loading integration status")).not.toBeInTheDocument();
+  });
+
   it("denies approved users without dispatch or admin access", async () => {
     getAccess.mockResolvedValueOnce({
       accessLevel: "staff",

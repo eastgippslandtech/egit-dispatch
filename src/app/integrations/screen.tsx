@@ -20,6 +20,8 @@ type IntegrationSnapshot = {
   counts: IntegrationCounts;
 };
 
+const INTEGRATION_STATUS_TIMEOUT_MS = 20_000;
+
 export function IntegrationsConsole() {
   const [snapshot, setSnapshot] = useState<IntegrationSnapshot>();
   const [error, setError] = useState<string>();
@@ -42,15 +44,22 @@ export function IntegrationsConsole() {
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      INTEGRATION_STATUS_TIMEOUT_MS,
+    );
     try {
       const [healthResponse, actionsResponse] = await Promise.all([
         fetch("/api/internal/integrations/health", {
           cache: "no-store",
           headers: { Accept: "application/json" },
+          signal: controller.signal,
         }),
         fetch("/api/internal/integrations/actions", {
           cache: "no-store",
           headers: { Accept: "application/json" },
+          signal: controller.signal,
         }),
       ]);
       if ([401, 403].includes(healthResponse.status) || [401, 403].includes(actionsResponse.status)) {
@@ -76,6 +85,8 @@ export function IntegrationsConsole() {
           ? "Your session no longer has access to integration recovery."
           : "Integration status could not be loaded. Existing provider actions are still retained for recovery.",
       );
+    } finally {
+      window.clearTimeout(timeout);
     }
   }, []);
 

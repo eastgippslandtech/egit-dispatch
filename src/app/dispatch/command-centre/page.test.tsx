@@ -515,6 +515,69 @@ test("shows clear pending feedback while sending a customer communication", () =
   expect(button).toHaveAttribute("aria-busy", "true");
 });
 
+test("does not overlap ticket context refreshes while a read is still pending", async () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <TicketWorkspaceModal
+      appointments={[]}
+      liveWriteback
+      request={request}
+      onClose={vi.fn()}
+      onOpenWorkLog={vi.fn()}
+      onSaved={vi.fn()}
+    />,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test("stops refreshing and keeps local ticket data visible when context loading times out", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    notes: "Cached request description remains available.",
+    sourceSystem: "msp-central" as const,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      }),
+    ),
+  );
+
+  render(
+    <TicketWorkspaceModal
+      appointments={[]}
+      liveWriteback
+      request={request}
+      onClose={vi.fn()}
+      onOpenWorkLog={vi.fn()}
+      onSaved={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText("Refreshing ticket...")).toBeInTheDocument();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  expect(screen.queryByText("Refreshing ticket...")).not.toBeInTheDocument();
+  expect(screen.getByText(/Ticket refresh timed out/i)).toBeInTheDocument();
+  expect(screen.getByText(request.notes)).toBeInTheDocument();
+});
+
 test("shows clear pending feedback while applying a Track", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();

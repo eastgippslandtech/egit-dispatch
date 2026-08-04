@@ -2941,20 +2941,40 @@ export async function publishMspCentralWorklog(
   };
 }
 
+const TICKET_CONTEXT_TIMEOUT_MS = 25_000;
+const TICKET_CONTEXT_REFRESH_MS = 60_000;
+
 async function loadMspCentralRequestContext(requestId: string) {
-  const response = await fetch(
-    `/api/internal/msp-central/requests/${encodeURIComponent(requestId)}/context`,
-    { cache: "no-store" },
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    TICKET_CONTEXT_TIMEOUT_MS,
   );
-  const body = (await response.json().catch(() => null)) as
-    | (MspCentralRequestContext & { error?: string })
-    | null;
 
-  if (!response.ok || !body) {
-    throw new Error(body?.error ?? "Latest ticket information could not be loaded.");
+  try {
+    const response = await fetch(
+      `/api/internal/msp-central/requests/${encodeURIComponent(requestId)}/context`,
+      { cache: "no-store", signal: controller.signal },
+    );
+    const body = (await response.json().catch(() => null)) as
+      | (MspCentralRequestContext & { error?: string })
+      | null;
+
+    if (!response.ok || !body) {
+      throw new Error(body?.error ?? "Latest ticket information could not be loaded.");
+    }
+
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        "Ticket refresh timed out. Showing available request data.",
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-
-  return body;
 }
 
 async function loadRequestWorkflow(requestId: string) {
@@ -3969,7 +3989,17 @@ export function TicketWorkspaceModal({
   useEffect(() => {
     if (!liveWriteback || !request?.id) return;
     let active = true;
+    let initialRefresh = true;
+    let refreshTimer: number | undefined;
+
     const refresh = async () => {
+      if (initialRefresh) {
+        initialRefresh = false;
+        setContext(undefined);
+        setError(undefined);
+        setRefreshWarning(undefined);
+        setLoading(true);
+      }
       try {
         const next = await loadMspCentralRequestContext(request.id);
         if (!active) return;
@@ -3984,14 +4014,16 @@ export function TicketWorkspaceModal({
             : "Latest ticket information could not be loaded.",
         );
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+          refreshTimer = window.setTimeout(refresh, TICKET_CONTEXT_REFRESH_MS);
+        }
       }
     };
     void refresh();
-    const interval = window.setInterval(refresh, 20_000);
     return () => {
       active = false;
-      window.clearInterval(interval);
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
     };
   }, [liveWriteback, request?.id]);
 

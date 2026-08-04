@@ -237,6 +237,39 @@ describe("mobile API service", () => {
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
   });
 
+  it("starts loading assigned jobs without waiting for the staff profile lookup", async () => {
+    let resolveStaff: ((staff: DatabaseStaffRow) => void) | undefined;
+    const listJobsForStaff = vi.fn().mockResolvedValue([dbJob]);
+    const responsePromise = listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        findStaffByZohoEmail: vi.fn(
+          () =>
+            new Promise<DatabaseStaffRow>((resolve) => {
+              resolveStaff = resolve;
+            }),
+        ),
+        listJobsForStaff,
+      }),
+      from: "2026-07-14",
+      outlookCalendar: null,
+      to: "2026-07-14",
+    });
+
+    await Promise.resolve();
+
+    expect(listJobsForStaff).toHaveBeenCalledWith({
+      from: "2026-07-14",
+      staffId: rileyMobileAuth.staffId,
+      to: "2026-07-14",
+    });
+
+    resolveStaff?.(dbStaff);
+    await expect(responsePromise).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ id: dbJobId })],
+    });
+  });
+
   it("adds Outlook-only calendar bookings to the technician schedule", async () => {
     const response = await listMobileJobs({
       auth: rileyMobileAuth,

@@ -93,6 +93,47 @@ describe("useSchedule", () => {
     expect(state?.jobs).toEqual([job]);
     expect(state?.error).toBe("offline");
   });
+
+  it("uses cached data when the offline repository becomes ready during a slow remote load", async () => {
+    const remoteRepository = createRepository({
+      listSchedule: vi.fn(() => new Promise<never>(() => undefined)),
+    });
+    const offlineRepository = createRepository({
+      listCachedSchedule: vi.fn().mockResolvedValue([job]),
+      listSchedule: vi.fn(() => new Promise<never>(() => undefined)),
+    });
+    let state: ScheduleState | undefined;
+
+    function Probe(): ReactNode {
+      state = useSchedule({ from: "2026-07-09", to: "2026-07-09" });
+      return null;
+    }
+
+    let renderer: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AppProviders initialSession={session} repository={remoteRepository}>
+          <Probe />
+        </AppProviders>,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer.update(
+        <AppProviders initialSession={session} repository={offlineRepository}>
+          <Probe />
+        </AppProviders>,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(offlineRepository.listCachedSchedule).toHaveBeenCalledTimes(1);
+    expect(offlineRepository.listSchedule).toHaveBeenCalledTimes(1);
+    expect(state?.jobs).toEqual([job]);
+    expect(state?.loading).toBe(false);
+  });
 });
 
 async function renderProbe(

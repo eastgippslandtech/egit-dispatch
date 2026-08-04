@@ -119,11 +119,14 @@ export async function listMobileJobs({
   to: string;
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
-    const staff = await requireDatabaseStaff(database, auth.email);
-    const [jobs, testJobs, outlookJobs] = await Promise.all([
-      database.listJobsForStaff({ from, staffId: staff.id, to }),
+    const staffPromise = requireDatabaseStaff(database, auth.email);
+    const [staff, jobs, testJobs, outlookJobs] = await Promise.all([
+      staffPromise,
+      database.listJobsForStaff({ from, staffId: auth.staffId, to }),
       listTestSyncedMobileJobs({ auth, from, to }),
-      listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
+      staffPromise.then((staff) =>
+        listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
+      ),
     ]);
     const mappedJobs = jobs.map(mapDatabaseJob);
 

@@ -24,9 +24,14 @@ export function useSchedule(range: DateRange): ScheduleState {
   const [settledRangeKey, setSettledRangeKey] = useState<string | null>(null);
   const rangeKey = `${range.from}:${range.to}`;
   const currentRangeKeyRef = useRef(rangeKey);
+  const currentRepositoryRef = useRef(repository);
   const settledRangeKeyRef = useRef<string | null>(null);
   const inFlightRef = useRef<
-    { key: string; promise: Promise<void> } | undefined
+    {
+      key: string;
+      promise: Promise<void>;
+      repository: typeof repository;
+    } | undefined
   >(undefined);
 
   const stableRange = useMemo(
@@ -41,9 +46,13 @@ export function useSchedule(range: DateRange): ScheduleState {
     currentRangeKeyRef.current = rangeKey;
   }, [rangeKey]);
 
+  useEffect(() => {
+    currentRepositoryRef.current = repository;
+  }, [repository]);
+
   const refresh = useCallback(async () => {
     const existing = inFlightRef.current;
-    if (existing?.key === rangeKey) {
+    if (existing?.key === rangeKey && existing.repository === repository) {
       return existing.promise;
     }
 
@@ -55,27 +64,40 @@ export function useSchedule(range: DateRange): ScheduleState {
     const promise = repository
       .listSchedule(stableRange)
       .then((nextJobs) => {
-        if (currentRangeKeyRef.current !== rangeKey) return;
+        if (
+          currentRangeKeyRef.current !== rangeKey ||
+          currentRepositoryRef.current !== repository
+        ) {
+          return;
+        }
         setJobs(nextJobs);
         setSettledRangeKey(rangeKey);
         settledRangeKeyRef.current = rangeKey;
         setLastSyncedAt(new Date().toISOString());
       })
       .catch((scheduleError: unknown) => {
-        if (currentRangeKeyRef.current !== rangeKey) return;
+        if (
+          currentRangeKeyRef.current !== rangeKey ||
+          currentRepositoryRef.current !== repository
+        ) {
+          return;
+        }
         setError(formatScheduleError(scheduleError));
       })
       .finally(() => {
         if (inFlightRef.current?.promise === promise) {
           inFlightRef.current = undefined;
         }
-        if (currentRangeKeyRef.current === rangeKey) {
+        if (
+          currentRangeKeyRef.current === rangeKey &&
+          currentRepositoryRef.current === repository
+        ) {
           setLoading(false);
           setRefreshing(false);
         }
       });
 
-    inFlightRef.current = { key: rangeKey, promise };
+    inFlightRef.current = { key: rangeKey, promise, repository };
     return promise;
   }, [rangeKey, repository, stableRange]);
 
@@ -87,6 +109,7 @@ export function useSchedule(range: DateRange): ScheduleState {
         if (
           !cancelled &&
           currentRangeKeyRef.current === rangeKey &&
+          currentRepositoryRef.current === repository &&
           settledRangeKeyRef.current !== rangeKey &&
           cachedJobs.length > 0
         ) {

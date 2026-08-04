@@ -77,7 +77,7 @@ export function AppProviders({
     repository: TechnicianRepository;
   } | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
-  const [injectedRepository] = useState(repository);
+  const injectedRepository = repository;
   useEffect(() => {
     let isMounted = true;
 

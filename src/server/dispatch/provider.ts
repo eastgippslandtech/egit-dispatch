@@ -16,14 +16,28 @@ import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures
 import type { MspCentralClient } from "@/server/msp-central/types";
 import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
 import { getCommandCentreTrainingRequests } from "./training-data";
+import { ZohoCrmClient } from "@/server/zoho-crm/client";
+import { readZohoCrmConfig } from "@/server/zoho-crm/config";
+import {
+  enrichRequestsWithZohoCrmAddresses,
+  type ZohoCrmAccountRecord,
+} from "@/server/zoho-crm/address-enrichment";
+
+type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
+
+let crmAccountCache:
+  | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
+  | undefined;
 
 export async function getDispatchDashboardData(
   config: DispatchConfig = readDispatchConfig(),
   {
     database = getConfiguredDispatchDashboardDatabase(config.databaseUrl),
+    crmClient,
     mspClient,
   }: {
     database?: DispatchDashboardDatabase | null;
+    crmClient?: ZohoCrmAccountsClient | null;
     mspClient?: MspCentralClient;
   } = {},
 ): Promise<DispatchDashboardData> {
@@ -47,13 +61,26 @@ export async function getDispatchDashboardData(
 
   if (config.dispatchDataSource === "msp-central") {
     const client = mspClient ?? createMspCentralClient(config);
+    const configuredCrmClient =
+      crmClient === undefined ? createConfiguredZohoCrmClient() : crmClient;
     const profiles = getInitialStaffProfiles();
-    const [requestsResult, techniciansResult] = await Promise.allSettled([
+    const [requestsResult, techniciansResult, crmAccountsResult] =
+      await Promise.allSettled([
       client.listRequests(),
       client.listTechnicians(),
+      configuredCrmClient
+        ? loadZohoCrmAccounts(configuredCrmClient, crmClient !== undefined)
+        : Promise.resolve([]),
     ]);
-    const requests =
+    const rawRequests =
       requestsResult.status === "fulfilled" ? requestsResult.value : [];
+    const requests =
+      crmAccountsResult.status === "fulfilled"
+        ? enrichRequestsWithZohoCrmAddresses(
+            rawRequests,
+            crmAccountsResult.value,
+          )
+        : rawRequests;
     const technicians =
       techniciansResult.status === "fulfilled"
         ? techniciansResult.value
@@ -100,6 +127,12 @@ export async function getDispatchDashboardData(
         calendarError: joinErrors(mspCentralError, outlookData.calendarError),
         dispatchDataSource: "msp-central",
       }, config);
+    }
+    if (crmAccountsResult.status === "rejected") {
+      console.error(
+        "Zoho CRM site address enrichment failed",
+        safeError(crmAccountsResult.reason),
+      );
     }
 
     return addTrainingSamples(dashboard, config);
@@ -168,4 +201,27 @@ function safeError(error: unknown) {
   return error instanceof Error
     ? { message: error.message }
     : { message: "Unknown MSP Central error." };
+}
+
+function createConfiguredZohoCrmClient() {
+  const crmConfig = readZohoCrmConfig();
+  return crmConfig ? new ZohoCrmClient(crmConfig) : null;
+}
+
+async function loadZohoCrmAccounts(
+  client: ZohoCrmAccountsClient,
+  bypassCache: boolean,
+) {
+  if (!bypassCache && crmAccountCache?.expiresAt && crmAccountCache.expiresAt > Date.now()) {
+    return crmAccountCache.accounts;
+  }
+
+  const accounts = await client.listAccounts();
+  if (!bypassCache) {
+    crmAccountCache = {
+      accounts,
+      expiresAt: Date.now() + 5 * 60_000,
+    };
+  }
+  return accounts;
 }

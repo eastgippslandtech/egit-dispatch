@@ -137,6 +137,34 @@ test("renders a normalized review-required warning only once in the drawer", () 
   ).toHaveLength(1);
 });
 
+test("identifies a site address supplied by Zoho CRM in the request drawer", () => {
+  const data = getDispatchDesignMockData();
+  const selectedRequest = data.requests[0];
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        requests: data.requests.map((request) =>
+          request.id === selectedRequest.id
+            ? {
+                ...request,
+                siteAddress: "42 Raymond Street, Sale VIC 3850",
+                siteAddressSource: "zoho-crm",
+              }
+            : request,
+        ),
+        selectedRequestId: selectedRequest.id,
+      }}
+    />,
+  );
+
+  const drawer = within(screen.getByTestId("command-centre-drawer"));
+  expect(
+    drawer.getAllByText("42 Raymond Street, Sale VIC 3850").length,
+  ).toBeGreaterThan(0);
+  expect(drawer.getByText("Zoho CRM")).toBeInTheDocument();
+});
+
 test("opens the request named by the integrations recovery link", async () => {
   const data = getDispatchDesignMockData();
   const target = data.requests[1];

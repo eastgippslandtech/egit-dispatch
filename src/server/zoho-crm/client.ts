@@ -1,4 +1,5 @@
 import type { ZohoCrmConfig } from "./config";
+import type { ZohoCrmAccountRecord } from "./address-enrichment";
 
 export type ZohoCrmRecord = {
   Account_Name?: string | { id?: string; name?: string };
@@ -20,6 +21,48 @@ export class ZohoCrmClient {
 
   searchAccountsByPhone(phone: string) {
     return this.search("Accounts", phone);
+  }
+
+  async listAccounts(): Promise<ZohoCrmAccountRecord[]> {
+    const token = await this.getToken();
+    const accounts: ZohoCrmAccountRecord[] = [];
+    const fields = [
+      "Account_Name",
+      "Shipping_Street",
+      "Shipping_City",
+      "Shipping_State",
+      "Shipping_Code",
+      "Shipping_Country",
+      "Billing_Street",
+      "Billing_City",
+      "Billing_State",
+      "Billing_Code",
+      "Billing_Country",
+    ].join(",");
+
+    for (let page = 1; page <= 10; page += 1) {
+      const url = new URL("/crm/v8/Accounts", this.config.apiDomain);
+      url.searchParams.set("fields", fields);
+      url.searchParams.set("page", String(page));
+      url.searchParams.set("per_page", "200");
+      const response = await this.fetchImpl(url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      });
+      const payload = (await response.json()) as {
+        data?: ZohoCrmAccountRecord[];
+        info?: { more_records?: boolean };
+        message?: string;
+      };
+      if (!response.ok) {
+        throw new Error(
+          `Zoho CRM Accounts read failed (${response.status}): ${payload.message ?? "Request failed"}`,
+        );
+      }
+      accounts.push(...(payload.data ?? []));
+      if (!payload.info?.more_records) break;
+    }
+
+    return accounts;
   }
 
   private async search(module: "Contacts" | "Accounts", phone: string) {

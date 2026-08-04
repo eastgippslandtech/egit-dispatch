@@ -7030,6 +7030,21 @@ function DetailDrawer({
           {request ? (
             <>
               <DetailRow label="Customer/site" value={`${request.customer} / ${request.site}`} />
+              {request.siteAddress ? (
+                <DetailRow label="Address" value={request.siteAddress} />
+              ) : null}
+              {request.siteAddressSource ? (
+                <DetailRow
+                  label="Address source"
+                  value={
+                    request.siteAddressSource === "zoho-crm"
+                      ? "Zoho CRM"
+                      : request.siteAddressSource === "msp-central"
+                        ? "MSP Central"
+                        : "Needs review"
+                  }
+                />
+              ) : null}
               <DetailRow label="Contact" value={`${request.requester} / ${request.contact}`} />
               <DetailRow label="Source" value={requestSourceLabel(request)} />
               <DetailRow label="Status" value={request.status} />

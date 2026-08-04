@@ -71,6 +71,8 @@ export type DispatchRequest = {
   site: string;
   siteName?: string;
   siteAddress?: string;
+  siteAddressSource?: "msp-central" | "zoho-crm" | "unknown";
+  crmAccountId?: string;
   siteTown?: string;
   siteArea?: string;
   onsite?: boolean;

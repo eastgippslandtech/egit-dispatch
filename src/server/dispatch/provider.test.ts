@@ -134,6 +134,95 @@ describe("dispatch dashboard provider", () => {
     );
   });
 
+  it("enriches live MSP Central requests with an exact Zoho CRM account address", async () => {
+    const mspClient = {
+      listRequests: async () => [
+        {
+          ageHours: 2,
+          billable: false,
+          contact: "help@acme.example",
+          customer: "Acme Health",
+          dueAt: "2026-08-04T07:00:00.000Z",
+          id: "request-1",
+          priority: "High",
+          readyToBook: true,
+          requester: "Alex",
+          requestNumber: "REQ-1",
+          site: "Unknown site",
+          slaState: "normal",
+          sourceSystem: "msp-central",
+          status: "Open",
+          subject: "Printer offline",
+          warnings: [],
+        },
+      ],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+    const crmClient = {
+      listAccounts: async () => [
+        {
+          Account_Name: "Acme Health",
+          Shipping_City: "Sale",
+          Shipping_Code: "3850",
+          Shipping_State: "VIC",
+          Shipping_Street: "42 Raymond Street",
+          id: "crm-account-1",
+        },
+      ],
+    };
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({ DISPATCH_DATA_SOURCE: "msp-central" }),
+      { crmClient, mspClient },
+    );
+
+    expect(data.requests[0]).toMatchObject({
+      crmAccountId: "crm-account-1",
+      siteAddress: "42 Raymond Street, Sale VIC 3850",
+      siteAddressSource: "zoho-crm",
+      siteTown: "Sale",
+    });
+  });
+
+  it("keeps Helpdesk requests available when Zoho CRM address enrichment fails", async () => {
+    const mspClient = {
+      listRequests: async () => [
+        {
+          ageHours: 2,
+          billable: false,
+          contact: "help@acme.example",
+          customer: "Acme Health",
+          dueAt: "2026-08-04T07:00:00.000Z",
+          id: "request-1",
+          priority: "High",
+          readyToBook: true,
+          requester: "Alex",
+          requestNumber: "REQ-1",
+          site: "Unknown site",
+          slaState: "normal",
+          sourceSystem: "msp-central",
+          status: "Open",
+          subject: "Printer offline",
+          warnings: [],
+        },
+      ],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+    const crmClient = {
+      listAccounts: async () => {
+        throw new Error("CRM unavailable");
+      },
+    };
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({ DISPATCH_DATA_SOURCE: "msp-central" }),
+      { crmClient, mspClient },
+    );
+
+    expect(data.requests).toHaveLength(1);
+    expect(data.requests[0].requestNumber).toBe("REQ-1");
+  });
+
   it("serves dispatch from the existing Command Centre database source", async () => {
     const database: DispatchDashboardDatabase = {
       async getDashboardData() {

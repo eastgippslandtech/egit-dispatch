@@ -140,6 +140,30 @@ describe("wallboard snapshot service", () => {
     );
   });
 
+  it("keeps the wallboard loadable when the dashboard read times out", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const snapshot = await getWallboardSnapshot({
+      dashboardTimeoutMs: 1,
+      getDashboard: vi.fn(() => new Promise(() => undefined)),
+      now: new Date("2026-07-26T02:15:00.000Z"),
+      peopleConfig: null,
+      repository: {
+        listActive: vi.fn().mockResolvedValue([]),
+      },
+      talkTimeRepository: null,
+    });
+
+    expect(snapshot.dashboard.requests).toEqual([]);
+    expect(snapshot.sourceWarnings).toContain(
+      "Command Centre dashboard data is temporarily unavailable.",
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      "Wallboard dashboard read failed",
+      { message: "Command Centre dashboard read timed out." },
+    );
+  });
+
   it("redacts private appointment content from the wallboard payload", async () => {
     const dashboard = {
       ...getEmptyCommandCentreData(),

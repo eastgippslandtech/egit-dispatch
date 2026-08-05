@@ -1,5 +1,6 @@
 import type { DispatchDashboardData } from "@/server/dispatch/types";
 import { todayDateKey } from "@/server/dispatch/date-scope";
+import { getEmptyCommandCentreData } from "@/server/dispatch/mock-data";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
 
 import { deriveTechnicianPresence } from "./derive";
@@ -48,7 +49,13 @@ export async function getWallboardSnapshot({
       getDashboard(),
       dashboardTimeoutMs,
       "Command Centre dashboard read timed out.",
-    ),
+    ).catch((error) => {
+      sourceWarnings.push(
+        "Command Centre dashboard data is temporarily unavailable.",
+      );
+      console.error("Wallboard dashboard read failed", safeError(error));
+      return getEmptyCommandCentreData();
+    }),
     repository
       ? withTimeout(
           repository.listActive(now),

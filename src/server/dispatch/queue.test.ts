@@ -8,12 +8,26 @@ import {
 } from "./queue";
 
 describe("dispatch queue", () => {
-  it("separates unassigned, personal, and assigned queues", () => {
+  it("separates unscheduled, personal, and assigned queues", () => {
     const unassigned = request({ id: "new", technicianId: undefined });
-    const mine = request({ id: "mine", technicianId: "tech-simeon" });
-    const other = request({ id: "other", technicianId: "tech-matt" });
+    const mine = request({
+      id: "mine",
+      scheduledStart: "2026-08-04T01:00:00.000Z",
+      technicianId: "tech-simeon",
+    });
+    const other = request({
+      id: "other",
+      scheduledStart: "2026-08-04T02:00:00.000Z",
+      technicianId: "tech-matt",
+    });
+    const assignedUnscheduled = request({
+      id: "assigned-unscheduled",
+      technicianId: "tech-matt",
+    });
 
     expect(requestMatchesDispatchQueue(unassigned, "new", "tech-simeon", new Set())).toBe(true);
+    expect(requestMatchesDispatchQueue(assignedUnscheduled, "new", "tech-simeon", new Set())).toBe(true);
+    expect(requestMatchesDispatchQueue(mine, "new", "tech-simeon", new Set())).toBe(false);
     expect(requestMatchesDispatchQueue(mine, "mine", "tech-simeon", new Set())).toBe(true);
     expect(requestMatchesDispatchQueue(other, "mine", "tech-simeon", new Set())).toBe(false);
     expect(requestMatchesDispatchQueue(mine, "assigned", "tech-simeon", new Set())).toBe(true);
@@ -50,15 +64,21 @@ describe("dispatch queue", () => {
   it("excludes resolved requests from operational queues and reports counts", () => {
     const requests = [
       request({ id: "new", technicianId: undefined }),
-      request({ id: "mine", technicianId: "tech-simeon", slaState: "due-soon" }),
+      request({
+        id: "mine",
+        scheduledStart: "2026-08-04T01:00:00.000Z",
+        technicianId: "tech-simeon",
+        slaState: "due-soon",
+      }),
+      request({ id: "assigned-unscheduled", technicianId: "tech-matt" }),
       request({ id: "resolved", status: "Resolved", technicianId: "tech-simeon" }),
     ];
 
     expect(requestMatchesDispatchQueue(requests[2]!, "mine", "tech-simeon", new Set())).toBe(false);
     expect(dispatchQueueCounts(requests, "tech-simeon", new Set())).toMatchObject({
-      assigned: 1,
+      assigned: 2,
       mine: 1,
-      new: 1,
+      new: 2,
       "sla-risk": 1,
     });
   });

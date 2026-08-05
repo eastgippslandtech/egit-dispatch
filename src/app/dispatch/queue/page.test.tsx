@@ -49,7 +49,7 @@ test("renders the separate operational queue with board navigation", async () =>
 
   expect(screen.getByRole("heading", { level: 1, name: "Dispatch Queue" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Dispatch Board" })).toHaveAttribute("href", "/dispatch");
-  expect(screen.getByRole("button", { name: /New \/ Unassigned/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /Unscheduled/ })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("button", { name: /My Queue/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Updated/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Failed Sync/ })).toBeInTheDocument();

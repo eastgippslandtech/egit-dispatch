@@ -13,7 +13,7 @@ export const DISPATCH_QUEUE_VIEWS: Array<{
   key: DispatchQueueView;
   label: string;
 }> = [
-  { key: "new", label: "New / Unassigned" },
+  { key: "new", label: "Unscheduled" },
   { key: "mine", label: "My Queue" },
   { key: "assigned", label: "Assigned" },
   { key: "updated", label: "Updated" },
@@ -32,7 +32,7 @@ export function requestMatchesDispatchQueue(
 
   switch (view) {
     case "new":
-      return !request.technicianId;
+      return !request.scheduledStart;
     case "mine":
       return Boolean(
         currentTechnicianId && request.technicianId === currentTechnicianId,

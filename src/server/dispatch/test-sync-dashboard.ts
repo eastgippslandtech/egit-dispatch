@@ -8,10 +8,15 @@ import {
 } from "./test-sync";
 import { buildDispatchHealthItems } from "./health";
 import type { DispatchDashboardData } from "./types";
-import { getConfiguredYeastarRepository } from "@/server/yeastar/repository";
 
 const DASHBOARD_READ_TIMEOUT_MS = 10_000;
 const OVERLAY_READ_TIMEOUT_MS = 4_000;
+const SERVER_DASHBOARD_CACHE_MAX_AGE_MS = 30_000;
+
+let serverDashboardCache:
+  | { capturedAt: number; dashboard: DispatchDashboardData }
+  | undefined;
+let serverDashboardRefresh: Promise<DispatchDashboardData> | undefined;
 
 type DashboardLoadOptions = {
   dashboardTimeoutMs?: number;
@@ -35,13 +40,10 @@ async function loadTestSyncedDispatchDashboardData(
   }: DashboardLoadOptions = {},
 ) {
   const resolvedConfig = config ?? readDispatchConfig();
-  const dashboardPromise = withTimeout(
-    getDispatchDashboardData(resolvedConfig, dependencies),
-    dashboardTimeoutMs,
-    "Command Centre live dashboard read timed out.",
-  ).catch((error) => {
-    console.error("Dispatch dashboard read failed", safeError(error));
-    return liveDashboardFallback(resolvedConfig);
+  const dashboardPromise = loadDashboardWithServerCache({
+    config: resolvedConfig,
+    dependencies,
+    timeoutMs: dashboardTimeoutMs,
   });
 
   if (!process.env.DATABASE_URL) {
@@ -53,41 +55,17 @@ async function loadTestSyncedDispatchDashboardData(
     overlayTimeoutMs,
     "Dispatch test sync overlay timed out.",
   ).catch((error) => {
-    console.error("Dispatch test sync overlay failed", safeError(error));
+    console.warn("Dispatch test sync overlay failed", safeError(error));
     return undefined;
   });
-  const activitiesPromise = listExternalCallActivities(overlayTimeoutMs);
-  const [dashboard, events, activities] = await Promise.all([
+  const [dashboard, events] = await Promise.all([
     dashboardPromise,
     eventsPromise,
-    activitiesPromise,
   ]);
 
-  const filtered = filterResolvedLiveRequests(
+  return filterResolvedLiveRequests(
     events ? applyDispatchTestSyncEvents(dashboard, events) : dashboard,
   );
-  return activities.length
-    ? { ...filtered, appointments: [...filtered.appointments, ...activities] }
-    : filtered;
-}
-
-async function listExternalCallActivities(timeoutMs: number) {
-  const repository = getConfiguredYeastarRepository();
-  if (!repository) return [];
-  try {
-    const now = new Date();
-    return await withTimeout(
-      repository.listExternalCallAppointments(
-        new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString(),
-        new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
-      ),
-      timeoutMs,
-      "Yeastar call activity overlay timed out.",
-    );
-  } catch (error) {
-    console.error("Yeastar call activity overlay failed", safeError(error));
-    return [];
-  }
 }
 
 export async function applyStoredDispatchTestSyncEvents(
@@ -158,6 +136,114 @@ function liveDashboardFallback(config: DispatchConfig): DispatchDashboardData {
     healthItems: buildDispatchHealthItems(fallback),
     timezone: config.timezone,
   };
+}
+
+async function loadDashboardWithServerCache({
+  config,
+  dependencies,
+  timeoutMs,
+}: {
+  config: DispatchConfig;
+  dependencies?: Parameters<typeof getDispatchDashboardData>[1];
+  timeoutMs: number;
+}) {
+  const now = Date.now();
+  if (
+    config.mode === "live" &&
+    serverDashboardCache &&
+    now - serverDashboardCache.capturedAt <= SERVER_DASHBOARD_CACHE_MAX_AGE_MS
+  ) {
+    return serverDashboardCache.dashboard;
+  }
+
+  serverDashboardRefresh ??= getDispatchDashboardData(config, dependencies)
+    .then((dashboard) => {
+      const resolvedDashboard = resolveServerDashboardWithCache(dashboard);
+      if (config.mode === "live" && shouldCacheServerDashboard(resolvedDashboard)) {
+        serverDashboardCache = {
+          capturedAt: Date.now(),
+          dashboard: resolvedDashboard,
+        };
+      }
+      return resolvedDashboard;
+    })
+    .finally(() => {
+      serverDashboardRefresh = undefined;
+    });
+
+  try {
+    return await withTimeout(
+      serverDashboardRefresh,
+      timeoutMs,
+      "Command Centre live dashboard read timed out.",
+    );
+  } catch (error) {
+    console.error("Dispatch dashboard read failed", safeError(error));
+    if (serverDashboardCache) {
+      return {
+        ...serverDashboardCache.dashboard,
+        calendarError: cacheFallbackMessage(serverDashboardCache.capturedAt),
+      };
+    }
+    return liveDashboardFallback(config);
+  }
+}
+
+function shouldCacheServerDashboard(dashboard: DispatchDashboardData) {
+  return (
+    Boolean(dashboard.dispatchDataSource) &&
+    !dashboard.calendarError &&
+    (dashboard.requests.length > 0 ||
+      dashboard.appointments.length > 0 ||
+      dashboard.technicians.length > 0)
+  );
+}
+
+function resolveServerDashboardWithCache(
+  dashboard: DispatchDashboardData,
+): DispatchDashboardData {
+  if (!serverDashboardCache || !dashboard.calendarError) {
+    return dashboard;
+  }
+
+  const error = dashboard.calendarError.toLowerCase();
+  const mspFailed = error.includes("msp central");
+  const outlookFailed = error.includes("outlook calendar read failed");
+  const requests = mspFailed
+    ? serverDashboardCache.dashboard.requests
+    : dashboard.requests;
+  const appointments = outlookFailed
+    ? serverDashboardCache.dashboard.appointments
+    : dashboard.appointments;
+  const technicians = dashboard.technicians.length
+    ? dashboard.technicians
+    : serverDashboardCache.dashboard.technicians;
+
+  return {
+    ...dashboard,
+    appointments,
+    healthItems: buildDispatchHealthItems({
+      appointments,
+      requests,
+      technicians,
+    }),
+    requests,
+    selectedRequestId: requests.some(
+      (request) => request.id === dashboard.selectedRequestId,
+    )
+      ? dashboard.selectedRequestId
+      : requests[0]?.id ?? "",
+    technicians,
+  };
+}
+
+function cacheFallbackMessage(capturedAt: number) {
+  const formatted = new Intl.DateTimeFormat("en-AU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Australia/Melbourne",
+  }).format(new Date(capturedAt));
+  return `Live Command Centre data could not be loaded quickly. Showing cached Command Centre data from ${formatted}.`;
 }
 
 function safeError(error: unknown) {

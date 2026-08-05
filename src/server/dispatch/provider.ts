@@ -27,6 +27,7 @@ type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
 const OUTLOOK_DASHBOARD_TIMEOUT_MS = 6_000;
+const CRM_ENRICHMENT_TIMEOUT_MS = 2_500;
 
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
@@ -95,7 +96,11 @@ export async function getDispatchDashboardData(
       client.listRequests(),
       client.listTechnicians(),
       configuredCrmClient
-        ? loadZohoCrmAccounts(configuredCrmClient, crmClient !== undefined)
+        ? withProviderTimeout(
+            loadZohoCrmAccounts(configuredCrmClient, crmClient !== undefined),
+            CRM_ENRICHMENT_TIMEOUT_MS,
+            "Zoho CRM address enrichment timed out.",
+          )
         : Promise.resolve([]),
       outlookPromise,
     ]);

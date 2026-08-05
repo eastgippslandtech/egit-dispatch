@@ -14,7 +14,6 @@ import {
   readZohoPeopleConfig,
   type ZohoPeopleConfig,
 } from "./zoho-people";
-import { getConfiguredYeastarRepository } from "@/server/yeastar/repository";
 
 type PeopleClient = {
   listApprovedLeave(input: {
@@ -32,7 +31,7 @@ export async function getWallboardSnapshot({
   peopleClient,
   peopleConfig = readZohoPeopleConfig(),
   repository = getConfiguredPresenceOverrideRepository(),
-  talkTimeRepository = getConfiguredYeastarRepository(),
+  talkTimeRepository = null,
 }: {
   auxiliaryTimeoutMs?: number;
   dashboardTimeoutMs?: number;

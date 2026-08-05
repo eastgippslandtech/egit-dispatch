@@ -70,6 +70,15 @@ export async function loadMspRequestsWithSnapshot({
     );
   }
 
+  if (snapshot?.requests.length) {
+    void refreshSnapshotInBackground({
+      fetchRequests,
+      fetchedAt: timestamp,
+      store,
+    });
+    return snapshot.requests;
+  }
+
   try {
     const requests = await fetchRequests();
     await store.save(requests, timestamp).catch(() => undefined);
@@ -85,6 +94,30 @@ export async function loadMspRequestsWithSnapshot({
 
     if (snapshot?.requests.length) return snapshot.requests;
     throw error;
+  }
+}
+
+async function refreshSnapshotInBackground({
+  fetchRequests,
+  fetchedAt,
+  store,
+}: {
+  fetchRequests: () => Promise<MspCentralRawRequest[]>;
+  fetchedAt: number;
+  store: MspRequestSnapshotStore;
+}) {
+  try {
+    const requests = await fetchRequests();
+    await store.save(requests, fetchedAt).catch(() => undefined);
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      await store
+        .blockUntil(fetchedAt + RATE_LIMIT_BACKOFF_MS)
+        .catch(() => undefined);
+      return;
+    }
+
+    await store.releaseRefreshLease().catch(() => undefined);
   }
 }
 

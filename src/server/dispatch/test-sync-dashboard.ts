@@ -1,6 +1,8 @@
 import { unstable_cache } from "next/cache";
 
 import type { DispatchConfig } from "./env";
+import { readDispatchConfig } from "./env";
+import { getEmptyCommandCentreData } from "./mock-data";
 import { getDispatchDashboardData } from "./provider";
 import {
   applyDispatchTestSyncEvents,
@@ -10,15 +12,29 @@ import { buildDispatchHealthItems } from "./health";
 import type { DispatchDashboardData } from "./types";
 import { getConfiguredYeastarRepository } from "@/server/yeastar/repository";
 
+const DASHBOARD_READ_TIMEOUT_MS = 10_000;
+const OVERLAY_READ_TIMEOUT_MS = 4_000;
+
+type DashboardLoadOptions = {
+  dashboardTimeoutMs?: number;
+  overlayTimeoutMs?: number;
+};
+
 export async function getTestSyncedDispatchDashboardData(
   config?: DispatchConfig,
   dependencies?: Parameters<typeof getDispatchDashboardData>[1],
+  options: DashboardLoadOptions = {},
 ) {
-  if (!config && !dependencies && process.env.NODE_ENV === "production") {
+  if (
+    !config &&
+    !dependencies &&
+    Object.keys(options).length === 0 &&
+    process.env.NODE_ENV === "production"
+  ) {
     return getCachedProductionDashboard();
   }
 
-  return loadTestSyncedDispatchDashboardData(config, dependencies);
+  return loadTestSyncedDispatchDashboardData(config, dependencies, options);
 }
 
 const getCachedProductionDashboard = unstable_cache(
@@ -30,18 +46,34 @@ const getCachedProductionDashboard = unstable_cache(
 async function loadTestSyncedDispatchDashboardData(
   config?: DispatchConfig,
   dependencies?: Parameters<typeof getDispatchDashboardData>[1],
+  {
+    dashboardTimeoutMs = DASHBOARD_READ_TIMEOUT_MS,
+    overlayTimeoutMs = OVERLAY_READ_TIMEOUT_MS,
+  }: DashboardLoadOptions = {},
 ) {
-  const dashboardPromise = getDispatchDashboardData(config, dependencies);
+  const resolvedConfig = config ?? readDispatchConfig();
+  const dashboardPromise = withTimeout(
+    getDispatchDashboardData(resolvedConfig, dependencies),
+    dashboardTimeoutMs,
+    "Command Centre live dashboard read timed out.",
+  ).catch((error) => {
+    console.error("Dispatch dashboard read failed", safeError(error));
+    return liveDashboardFallback(resolvedConfig);
+  });
 
   if (!process.env.DATABASE_URL) {
     return dashboardPromise;
   }
 
-  const eventsPromise = listDispatchTestSyncEvents().catch((error) => {
-    console.error("Dispatch test sync overlay failed", error);
+  const eventsPromise = withTimeout(
+    listDispatchTestSyncEvents(),
+    overlayTimeoutMs,
+    "Dispatch test sync overlay timed out.",
+  ).catch((error) => {
+    console.error("Dispatch test sync overlay failed", safeError(error));
     return undefined;
   });
-  const activitiesPromise = listExternalCallActivities();
+  const activitiesPromise = listExternalCallActivities(overlayTimeoutMs);
   const [dashboard, events, activities] = await Promise.all([
     dashboardPromise,
     eventsPromise,
@@ -56,19 +88,21 @@ async function loadTestSyncedDispatchDashboardData(
     : filtered;
 }
 
-async function listExternalCallActivities() {
+async function listExternalCallActivities(timeoutMs: number) {
   const repository = getConfiguredYeastarRepository();
   if (!repository) return [];
   try {
     const now = new Date();
-    return await repository.listExternalCallAppointments(
-      new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString(),
-      new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
+    return await withTimeout(
+      repository.listExternalCallAppointments(
+        new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString(),
+        new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
+      ),
+      timeoutMs,
+      "Yeastar call activity overlay timed out.",
     );
   } catch (error) {
-    console.error("Yeastar call activity overlay failed", {
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
+    console.error("Yeastar call activity overlay failed", safeError(error));
     return [];
   }
 }
@@ -120,4 +154,49 @@ function filterResolvedLiveRequests(
     requests,
     selectedRequestId,
   };
+}
+
+function liveDashboardFallback(config: DispatchConfig): DispatchDashboardData {
+  const fallback = getEmptyCommandCentreData();
+  return {
+    ...fallback,
+    calendarDataSource:
+      config.calendarDataSource === "outlook" ? "outlook" : "mock",
+    calendarError:
+      "Live Command Centre data could not be loaded quickly. Showing cached Command Centre data when available.",
+    calendarReadOnly: config.mode !== "live",
+    calendarStatusLabel:
+      config.calendarDataSource === "outlook"
+        ? config.mode === "live"
+          ? "Outlook Read/Write"
+          : "Outlook Read Only"
+        : "No Sample Data",
+    dispatchDataSource: config.dispatchDataSource,
+    healthItems: buildDispatchHealthItems(fallback),
+    timezone: config.timezone,
+  };
+}
+
+function safeError(error: unknown) {
+  return error instanceof Error
+    ? { message: error.message }
+    : { message: "Unknown dispatch dashboard error." };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

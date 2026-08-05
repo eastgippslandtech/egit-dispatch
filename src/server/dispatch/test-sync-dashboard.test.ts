@@ -157,4 +157,53 @@ describe("test-synced dispatch dashboard", () => {
     await expect(getTestSyncedDispatchDashboardData()).resolves.toBe(dashboard);
     expect(listDispatchTestSyncEventsMock).not.toHaveBeenCalled();
   });
+
+  it("returns a loadable fallback when the live dashboard read stalls", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    getDispatchDashboardDataMock.mockReturnValue(
+      new Promise(() => undefined),
+    );
+    listDispatchTestSyncEventsMock.mockResolvedValue([]);
+
+    const result = await getTestSyncedDispatchDashboardData(
+      {
+        appBaseUrl: "https://command.egit.com.au",
+        calendarDataSource: "outlook",
+        databaseUrl: "postgresql://example",
+        dispatchDataSource: "msp-central",
+        microsoft: {
+          clientId: "graph-client",
+          clientSecret: "graph-secret",
+          tenantId: "graph-tenant",
+          timezone: "Australia/Melbourne",
+        },
+        mode: "live",
+        mspCentral: {
+          baseUrl: "https://servicedeskplus.net.au",
+          clientId: "msp-client",
+          clientSecret: "msp-secret",
+          portal: "memsp1783593801295",
+          refreshToken: "msp-refresh",
+        },
+        timezone: "Australia/Melbourne",
+        trainingSamplesEnabled: false,
+      },
+      undefined,
+      { dashboardTimeoutMs: 1, overlayTimeoutMs: 1 },
+    );
+
+    expect(result.dispatchDataSource).toBe("msp-central");
+    expect(result.calendarDataSource).toBe("outlook");
+    expect(result.calendarError).toContain(
+      "Live Command Centre data could not be loaded quickly",
+    );
+    expect(result.requests).toEqual([]);
+    expect(result.technicians.map((technician) => technician.displayName)).toEqual(
+      ["Matt", "Jervy", "Riley", "Simeon"],
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      "Dispatch dashboard read failed",
+      { message: "Command Centre live dashboard read timed out." },
+    );
+  });
 });

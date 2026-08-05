@@ -7,7 +7,23 @@ import type {
 
 type FetchLike = typeof fetch;
 
-const GRAPH_REQUEST_TIMEOUT_MS = 12_000;
+const GRAPH_REQUEST_TIMEOUT_MS = 6_000;
+const GRAPH_CALENDAR_SELECT = [
+  "attendees",
+  "bodyPreview",
+  "categories",
+  "end",
+  "id",
+  "isAllDay",
+  "lastModifiedDateTime",
+  "location",
+  "organizer",
+  "sensitivity",
+  "showAs",
+  "start",
+  "subject",
+  "webLink",
+].join(",");
 
 type GraphClientOptions = {
   clientId?: string;
@@ -96,7 +112,12 @@ export function createGraphClient({
     userPrincipalName,
   }: ListCalendarViewInput) {
     const token = await acquireToken();
-    const params = new URLSearchParams({ startDateTime, endDateTime });
+    const params = new URLSearchParams({
+      "$select": GRAPH_CALENDAR_SELECT,
+      "$top": "50",
+      endDateTime,
+      startDateTime,
+    });
     let nextUrl: string | undefined =
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
         userPrincipalName,

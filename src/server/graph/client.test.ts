@@ -37,11 +37,20 @@ describe("Graph client", () => {
         signal: expect.any(AbortSignal),
       }),
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining(
-        "/users/simeon%40egit.com.au/calendar/calendarView?startDateTime=2026-07-08T00%3A00%3A00&endDateTime=2026-07-09T00%3A00%3A00",
-      ),
+    const calendarUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(calendarUrl.pathname).toBe(
+      "/v1.0/users/simeon%40egit.com.au/calendar/calendarView",
+    );
+    expect(calendarUrl.searchParams.get("startDateTime")).toBe(
+      "2026-07-08T00:00:00",
+    );
+    expect(calendarUrl.searchParams.get("endDateTime")).toBe(
+      "2026-07-09T00:00:00",
+    );
+    expect(calendarUrl.searchParams.get("$top")).toBe("50");
+    expect(calendarUrl.searchParams.get("$select")).toContain("bodyPreview");
+    expect(calendarUrl.searchParams.get("$select")).not.toContain("body,");
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer token-value",

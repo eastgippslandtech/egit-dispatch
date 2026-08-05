@@ -26,6 +26,8 @@ import {
 type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
+const OUTLOOK_DASHBOARD_TIMEOUT_MS = 6_000;
+
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
   | undefined;
@@ -70,15 +72,19 @@ export async function getDispatchDashboardData(
     const fallbackTechnicians = profiles.map(staffProfileToTechnician);
     const outlookPromise =
       config.calendarDataSource === "outlook"
-        ? outlookLoader({
-            config,
-            mockData: {
-              ...emptyCommandCentreData,
-              technicians: fallbackTechnicians,
-              timezone: config.timezone,
-            },
-            range: buildGraphPlanningRange(todayDateKey()),
-          })
+        ? withProviderTimeout(
+            outlookLoader({
+              config,
+              mockData: {
+                ...emptyCommandCentreData,
+                technicians: fallbackTechnicians,
+                timezone: config.timezone,
+              },
+              range: buildGraphPlanningRange(todayDateKey()),
+            }),
+            OUTLOOK_DASHBOARD_TIMEOUT_MS,
+            "Outlook calendar read timed out during dashboard load.",
+          )
         : Promise.resolve(undefined);
     const [
       requestsResult,
@@ -237,6 +243,28 @@ function safeError(error: unknown) {
   return error instanceof Error
     ? { message: error.message }
     : { message: "Unknown MSP Central error." };
+}
+
+function withProviderTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function createConfiguredZohoCrmClient() {

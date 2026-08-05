@@ -7,6 +7,7 @@ import type { MspCentralClient } from "@/server/msp-central/types";
 
 describe("dispatch dashboard provider", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -168,6 +169,53 @@ describe("dispatch dashboard provider", () => {
       calendarDataSource: "outlook",
       dispatchDataSource: "msp-central",
     });
+  });
+
+  it("keeps Helpdesk requests visible when Outlook dashboard loading stalls", async () => {
+    vi.useFakeTimers();
+    const mspClient = {
+      listRequests: async () => [
+        {
+          ageHours: 2,
+          billable: false,
+          contact: "help@acme.example",
+          customer: "Acme Health",
+          dueAt: "2026-08-04T07:00:00.000Z",
+          id: "request-1",
+          priority: "High",
+          readyToBook: true,
+          requester: "Alex",
+          requestNumber: "REQ-1",
+          site: "Unknown site",
+          slaState: "normal",
+          sourceSystem: "msp-central",
+          status: "Open",
+          subject: "Printer offline",
+          warnings: [],
+        },
+      ],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    const dataPromise = getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DISPATCH_DATA_SOURCE: "msp-central",
+      }),
+      {
+        crmClient: null,
+        mspClient,
+        outlookLoader: vi.fn(() => new Promise(() => undefined)),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(6_001);
+    const data = await dataPromise;
+
+    expect(data.requests).toHaveLength(1);
+    expect(data.calendarDataSource).toBe("outlook");
+    expect(data.calendarError).toBe(
+      "Outlook calendar read failed. The last Helpdesk data remains available.",
+    );
   });
 
   it("enriches live MSP Central requests with an exact Zoho CRM account address", async () => {

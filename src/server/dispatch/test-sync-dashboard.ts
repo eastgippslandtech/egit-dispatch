@@ -1,5 +1,3 @@
-import { unstable_cache } from "next/cache";
-
 import type { DispatchConfig } from "./env";
 import { readDispatchConfig } from "./env";
 import { getEmptyCommandCentreData } from "./mock-data";
@@ -25,23 +23,8 @@ export async function getTestSyncedDispatchDashboardData(
   dependencies?: Parameters<typeof getDispatchDashboardData>[1],
   options: DashboardLoadOptions = {},
 ) {
-  if (
-    !config &&
-    !dependencies &&
-    Object.keys(options).length === 0 &&
-    process.env.NODE_ENV === "production"
-  ) {
-    return getCachedProductionDashboard();
-  }
-
   return loadTestSyncedDispatchDashboardData(config, dependencies, options);
 }
-
-const getCachedProductionDashboard = unstable_cache(
-  () => loadTestSyncedDispatchDashboardData(),
-  ["command-centre-dashboard-v2"],
-  { revalidate: 15, tags: ["command-centre-dashboard"] },
-);
 
 async function loadTestSyncedDispatchDashboardData(
   config?: DispatchConfig,

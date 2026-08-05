@@ -11,7 +11,7 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const INTEGRATION_ROUTE_TIMEOUT_MS = 7_000;
+const INTEGRATION_ROUTE_TIMEOUT_MS = 3_500;
 
 export async function GET(request?: Request) {
   const access = await staffRouteAccess();

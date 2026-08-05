@@ -60,20 +60,35 @@ describe("integration health route", () => {
     expect(createRepository).not.toHaveBeenCalled();
   });
 
-  it("returns a degraded health snapshot when the health store is unavailable", async () => {
+  it("keeps recovery counts when the health store is unavailable", async () => {
     getHealth.mockRejectedValueOnce(new Error("write CONNECT_TIMEOUT"));
 
     const response = await GET();
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.counts).toEqual({ pending: 0, reviewRequired: 0 });
+    expect(payload.counts).toEqual({ pending: 4, reviewRequired: 2 });
     expect(payload.connectors).toEqual([
       expect.objectContaining({
         connector: "command_centre",
         status: "unavailable",
       }),
     ]);
-    expect(payload.warning).toContain("temporarily unavailable");
+    expect(payload.warning).toContain("CONNECT_TIMEOUT");
+  });
+
+  it("keeps connector health when recovery counts are unavailable", async () => {
+    getOperationCounts.mockRejectedValueOnce(new Error("read timeout"));
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.counts).toEqual({ pending: 0, reviewRequired: 0 });
+    expect(payload.connectors[0]).toMatchObject({
+      connector: "msp_central",
+      status: "degraded",
+    });
+    expect(payload.warning).toContain("read timeout");
   });
 });

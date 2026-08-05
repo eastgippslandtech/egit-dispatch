@@ -3,12 +3,15 @@ import {
   safeIntegrationSummary,
 } from "@/server/integrations/http";
 import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import type {
+  IntegrationConnectorHealth,
+} from "@/server/integrations/types";
 import { staffRouteAccess } from "@/server/yeastar/route-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const INTEGRATION_ROUTE_TIMEOUT_MS = 7_000;
+const INTEGRATION_ROUTE_TIMEOUT_MS = 3_500;
 
 export async function GET() {
   if (!(await staffRouteAccess())) {
@@ -16,34 +19,36 @@ export async function GET() {
   }
   try {
     const repository = createPostgresIntegrationRepository();
-    const [connectors, counts] = await withIntegrationTimeout(
-      Promise.all([
+    const [connectorsResult, countsResult] = await Promise.all([
+      withIntegrationFallback(
         repository.getHealth(),
+        unavailableHealth("Integration health timed out."),
+        "Integration health timed out.",
+      ),
+      withIntegrationFallback(
         repository.getOperationCounts(),
-      ]),
-    );
+        { pending: 0, reviewRequired: 0 },
+        "Integration recovery counts timed out.",
+      ),
+    ]);
+    const warning = [connectorsResult.warning, countsResult.warning]
+      .filter(Boolean)
+      .join(" ");
     return integrationJson({
-      connectors: connectors.map((connector) => ({
+      connectors: connectorsResult.value.map((connector) => ({
         ...connector,
         lastError: safeIntegrationSummary(connector.lastError),
       })),
-      counts,
+      counts: countsResult.value,
+      ...(warning ? { warning } : {}),
     });
   } catch (error) {
     return integrationJson({
-      connectors: [
-        {
-          connector: "command_centre",
-          consecutiveFailures: 1,
-          lastCheckedAt: new Date().toISOString(),
-          lastError: safeIntegrationSummary(
-            error instanceof Error
-              ? error.message
-              : "Integration health is temporarily unavailable.",
-          ),
-          status: "unavailable",
-        },
-      ],
+      connectors: unavailableHealth(
+        error instanceof Error
+          ? error.message
+          : "Integration health is temporarily unavailable.",
+      ),
       counts: { pending: 0, reviewRequired: 0 },
       warning:
         "Integration health is temporarily unavailable. Provider actions are still retained for recovery.",
@@ -51,14 +56,41 @@ export async function GET() {
   }
 }
 
-function withIntegrationTimeout<T>(promise: Promise<T>) {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("Integration health timed out.")),
-        INTEGRATION_ROUTE_TIMEOUT_MS,
+function unavailableHealth(error: string): IntegrationConnectorHealth[] {
+  return [
+    {
+      connector: "command_centre",
+      consecutiveFailures: 1,
+      lastCheckedAt: new Date().toISOString(),
+      lastError: safeIntegrationSummary(error),
+      status: "unavailable",
+    },
+  ];
+}
+
+async function withIntegrationFallback<T>(
+  promise: Promise<T>,
+  fallback: T,
+  timeoutMessage: string,
+): Promise<{ value: T; warning?: string }> {
+  try {
+    return {
+      value: await Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(timeoutMessage)),
+            INTEGRATION_ROUTE_TIMEOUT_MS,
+          ),
+        ),
+      ]),
+    };
+  } catch (error) {
+    return {
+      value: fallback,
+      warning: safeIntegrationSummary(
+        error instanceof Error ? error.message : timeoutMessage,
       ),
-    ),
-  ]);
+    };
+  }
 }

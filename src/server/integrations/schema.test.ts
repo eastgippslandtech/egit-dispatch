@@ -14,7 +14,9 @@ describe("durable integration schema", () => {
 
     expect(migrationName).toBeDefined();
 
-    const sql = fs.readFileSync(path.join(migrationsDir, migrationName!), "utf8");
+    const sql = normalizedMigration(
+      fs.readFileSync(path.join(migrationsDir, migrationName!), "utf8"),
+    );
 
     expect(sql).toContain("create table public.integration_operations");
     expect(sql).toContain("idempotency_key text not null unique");

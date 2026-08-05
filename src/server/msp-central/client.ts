@@ -36,7 +36,7 @@ import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 const MSP_REQUEST_TIMEOUT_MS = 20_000;
 const MSP_REQUEST_PAGE_SIZE = 100;
-const MSP_REQUEST_MAX_PAGES = 100;
+const MSP_REQUEST_MAX_PAGES = 5;
 
 type MspCentralActionResponse = {
   request?: {
@@ -723,15 +723,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
             sort_field: "created_time",
             sort_order: "desc",
             start_index: startIndex,
-            ...(params?.status
-              ? {
-                  search_criteria: {
-                    condition: "is",
-                    field: "status",
-                    value: { name: params.status },
-                  },
-                }
-              : {}),
+            search_criteria: requestSearchCriteria(params?.status),
           },
         }),
       );
@@ -740,15 +732,6 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       );
       const pageRequests = payload.requests ?? [];
       rawRequests.push(...pageRequests);
-      console.info("MSP Central request page read", {
-        hasMoreRows: payload.list_info?.has_more_rows,
-        page: page + 1,
-        requestCount: pageRequests.length,
-        returnedRowCount: payload.list_info?.row_count,
-        returnedStartIndex: payload.list_info?.start_index,
-        startIndex,
-        totalCount: payload.list_info?.total_count,
-      });
 
       if (
         !mspHasMoreRows(payload.list_info?.has_more_rows) ||
@@ -830,6 +813,22 @@ function requestChildListUrl(
     }),
   );
   return url.toString();
+}
+
+function requestSearchCriteria(status?: string) {
+  if (status?.trim()) {
+    return {
+      condition: "is",
+      field: "status.internal_name",
+      values: [status.trim()],
+    };
+  }
+
+  return {
+    condition: "is",
+    field: "status.in_progress",
+    values: [true],
+  };
 }
 
 function cleanEmail(value?: string | null) {

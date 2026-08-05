@@ -81,13 +81,17 @@ describe("MSP Central live client", () => {
     expect(requestInput).toMatchObject({
       list_info: {
         row_count: 100,
+        search_criteria: {
+          condition: "is",
+          field: "status.in_progress",
+          values: [true],
+        },
         sort_field: "created_time",
         sort_order: "desc",
         start_index: 1,
       },
     });
     expect(requestInput.list_info).not.toHaveProperty("get_total_count");
-    expect(requestInput.list_info).not.toHaveProperty("search_criteria");
     expect(requests[0]).toMatchObject({
       customer: "Example Co",
       priority: "High",
@@ -137,6 +141,61 @@ describe("MSP Central live client", () => {
         String(input).includes("/oauth/v2/token"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("caps request pagination so the dispatch board cannot read the whole Helpdesk archive", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        };
+      }
+
+      const startIndex = Number(
+        new URL(url).searchParams
+          .get("input_data")
+          ?.match(/"start_index":(\d+)/)?.[1] ?? 1,
+      );
+      return {
+        ok: true,
+        json: async () => ({
+          list_info: {
+            has_more_rows: true,
+            row_count: 100,
+            start_index: startIndex,
+          },
+          requests: Array.from({ length: 100 }, (_, index) => ({
+            id: `${startIndex + index}`,
+            request_number: `${startIndex + index}`,
+            status: { name: "Open" },
+            subject: `Request ${startIndex + index}`,
+          })),
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://servicedeskplus.net.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const requests = await client.listRequests();
+
+    expect(requests).toHaveLength(500);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/api/v3/requests?"),
+      ),
+    ).toHaveLength(5);
   });
 
   it("does not duplicate the portal path when the MSP API base already includes /app/<portal>", async () => {

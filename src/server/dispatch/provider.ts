@@ -28,6 +28,8 @@ type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
 const OUTLOOK_DASHBOARD_TIMEOUT_MS = 6_000;
 const CRM_ENRICHMENT_TIMEOUT_MS = 2_500;
+const MSP_REQUESTS_TIMEOUT_MS = 7_000;
+const MSP_TECHNICIANS_TIMEOUT_MS = 2_500;
 
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
@@ -93,8 +95,16 @@ export async function getDispatchDashboardData(
       crmAccountsResult,
       outlookResult,
     ] = await Promise.allSettled([
-      client.listRequests(),
-      client.listTechnicians(),
+      withProviderTimeout(
+        client.listRequests(),
+        MSP_REQUESTS_TIMEOUT_MS,
+        "MSP Central request list timed out.",
+      ),
+      withProviderTimeout(
+        client.listTechnicians(),
+        MSP_TECHNICIANS_TIMEOUT_MS,
+        "MSP Central technician list timed out.",
+      ),
       configuredCrmClient
         ? withProviderTimeout(
             loadZohoCrmAccounts(configuredCrmClient, crmClient !== undefined),

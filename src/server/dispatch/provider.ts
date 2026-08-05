@@ -96,7 +96,7 @@ export async function getDispatchDashboardData(
       outlookResult,
     ] = await Promise.allSettled([
       withProviderTimeout(
-        client.listRequests(),
+        client.listRequests({ cacheOnly: true }),
         MSP_REQUESTS_TIMEOUT_MS,
         "MSP Central request list timed out.",
       ),

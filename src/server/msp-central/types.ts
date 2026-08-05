@@ -185,6 +185,8 @@ export type MspCentralTechnicianListResponse = {
 };
 
 export type MspCentralListRequestsParams = {
+  cacheOnly?: boolean;
+  forceRefresh?: boolean;
   from?: string;
   status?: string;
   to?: string;

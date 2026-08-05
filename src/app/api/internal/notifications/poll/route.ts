@@ -1,20 +1,18 @@
 import { NextResponse } from "next/server";
 
 import { readDispatchConfig } from "@/server/dispatch/env";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { processTechnicianNotifications } from "@/server/notifications/poll";
 import { getConfiguredNotificationRepository } from "@/server/notifications/repository";
 import { configureNotificationScheduler } from "@/server/notifications/scheduler";
+import { cronAuthorized } from "@/server/yeastar/route-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 function isAuthorized(request: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-  return Boolean(
-    cronSecret &&
-      request.headers.get("authorization") === `Bearer ${cronSecret}`,
-  );
+  return cronAuthorized(request);
 }
 
 export async function GET(request: Request) {
@@ -32,12 +30,35 @@ export async function GET(request: Request) {
   }
 
   try {
+    const client = createMspCentralClient(config);
+    const integrationRepository = createPostgresIntegrationRepository({
+      databaseUrl: config.databaseUrl,
+    });
+    const refreshedRequests = await client.listRequests({ forceRefresh: true });
+    await integrationRepository.recordConnectorRead({
+      connector: "command_centre",
+      succeeded: true,
+    });
     const result = await processTechnicianNotifications({
-      client: createMspCentralClient(config),
+      client,
       repository,
     });
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({
+      ok: true,
+      requestSnapshotRefreshed: refreshedRequests.length,
+      ...result,
+    });
   } catch (error) {
+    await createPostgresIntegrationRepository({
+      databaseUrl: config.databaseUrl,
+    })
+      .recordConnectorRead({
+        connector: "command_centre",
+        error: error instanceof Error ? error.message : "Unknown poll error",
+        status: "unavailable",
+        succeeded: false,
+      })
+      .catch(() => undefined);
     console.error("Technician notification poll failed", {
       message: error instanceof Error ? error.message : "Unknown poll error",
     });

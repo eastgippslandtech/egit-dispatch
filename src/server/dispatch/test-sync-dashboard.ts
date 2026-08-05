@@ -31,6 +31,11 @@ export async function getTestSyncedDispatchDashboardData(
   return loadTestSyncedDispatchDashboardData(config, dependencies, options);
 }
 
+export function resetTestSyncedDashboardCacheForTests() {
+  serverDashboardCache = undefined;
+  serverDashboardRefresh = undefined;
+}
+
 async function loadTestSyncedDispatchDashboardData(
   config?: DispatchConfig,
   dependencies?: Parameters<typeof getDispatchDashboardData>[1],
@@ -47,6 +52,13 @@ async function loadTestSyncedDispatchDashboardData(
   });
 
   if (!process.env.DATABASE_URL) {
+    return dashboardPromise;
+  }
+
+  if (
+    resolvedConfig.mode === "live" &&
+    resolvedConfig.dispatchDataSource === "msp-central"
+  ) {
     return dashboardPromise;
   }
 

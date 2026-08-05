@@ -171,6 +171,34 @@ describe("dispatch dashboard provider", () => {
     });
   });
 
+  it("uses the warmed MSP snapshot for dashboard reads", async () => {
+    const listRequests = vi.fn(async () => []);
+    const mspClient = {
+      listRequests,
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    await getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DISPATCH_DATA_SOURCE: "msp-central",
+      }),
+      {
+        crmClient: null,
+        mspClient,
+        outlookLoader: vi.fn(async ({ mockData }) => ({
+          ...mockData,
+          appointments: [],
+          calendarDataSource: "outlook" as const,
+          calendarReadOnly: false,
+          calendarStatusLabel: "Outlook Read/Write",
+        })),
+      },
+    );
+
+    expect(listRequests).toHaveBeenCalledWith({ cacheOnly: true });
+  });
+
   it("keeps Helpdesk requests visible when Outlook dashboard loading stalls", async () => {
     vi.useFakeTimers();
     const mspClient = {

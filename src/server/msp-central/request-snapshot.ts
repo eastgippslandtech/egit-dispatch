@@ -5,7 +5,7 @@ import { getSharedPostgresClient } from "@/server/database/client";
 import { MspCentralConfigurationError } from "./errors";
 import type { MspCentralRawRequest } from "./types";
 
-const FRESH_FOR_MS = 60_000;
+const FRESH_FOR_MS = 5 * 60_000;
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
 const REFRESH_LEASE_MS = 20_000;
 
@@ -42,15 +42,15 @@ export async function loadMspRequestsWithSnapshot({
   }
 
   const timestamp = now();
-  if (snapshot && timestamp - snapshot.fetchedAt <= FRESH_FOR_MS) {
-    return snapshot.requests;
-  }
-
   if (snapshot?.retryAfter && snapshot.retryAfter > timestamp) {
     if (snapshot.requests.length > 0) return snapshot.requests;
     throw new MspCentralConfigurationError(
       "MSP Central request refresh is temporarily rate limited.",
     );
+  }
+
+  if (snapshot && timestamp - snapshot.fetchedAt <= FRESH_FOR_MS) {
+    return snapshot.requests;
   }
 
   let acquired = false;
@@ -95,6 +95,43 @@ export async function loadMspRequestsWithSnapshot({
     if (snapshot?.requests.length) return snapshot.requests;
     throw error;
   }
+}
+
+export async function refreshMspRequestsSnapshot({
+  fetchRequests,
+  now = Date.now,
+  store,
+}: {
+  fetchRequests: () => Promise<MspCentralRawRequest[]>;
+  now?: () => number;
+  store: MspRequestSnapshotStore | null;
+}) {
+  const requests = await fetchRequests();
+  if (store) {
+    await store.save(requests, now());
+  }
+  return requests;
+}
+
+export async function loadCachedMspRequestsSnapshot({
+  store,
+}: {
+  store: MspRequestSnapshotStore | null;
+}) {
+  if (!store) {
+    throw new MspCentralConfigurationError(
+      "MSP Central request snapshot storage is not configured.",
+    );
+  }
+
+  const snapshot = await store.get();
+  if (!snapshot) {
+    throw new MspCentralConfigurationError(
+      "MSP Central request snapshot is not available yet.",
+    );
+  }
+
+  return snapshot.requests;
 }
 
 async function refreshSnapshotInBackground({
@@ -148,8 +185,32 @@ export function createPostgresMspRequestSnapshotStore(
   sql: postgres.Sql,
   cacheKey: string,
 ): MspRequestSnapshotStore {
+  let schemaReady = false;
+
+  async function ensureSchema() {
+    if (schemaReady) return;
+    await sql`
+      create table if not exists public.msp_request_snapshots (
+        cache_key text primary key,
+        requests jsonb not null default '[]'::jsonb,
+        fetched_at timestamptz,
+        retry_after timestamptz,
+        refresh_lease_until timestamptz,
+        updated_at timestamptz not null default now()
+      )
+    `;
+    await sql`
+      comment on table public.msp_request_snapshots is
+        'Server-only cache for the last successful MSP Central request list.'
+    `;
+    await sql`alter table public.msp_request_snapshots enable row level security`;
+    await sql`revoke all on table public.msp_request_snapshots from anon, authenticated`;
+    schemaReady = true;
+  }
+
   return {
     async blockUntil(timestamp) {
+      await ensureSchema();
       await sql`
         insert into public.msp_request_snapshots (
           cache_key, retry_after, refresh_lease_until, updated_at
@@ -194,6 +255,7 @@ export function createPostgresMspRequestSnapshotStore(
       `;
     },
     async save(requests, fetchedAt) {
+      await ensureSchema();
       await sql`
         insert into public.msp_request_snapshots (
           cache_key, requests, fetched_at, retry_after,
@@ -211,6 +273,7 @@ export function createPostgresMspRequestSnapshotStore(
       `;
     },
     async tryAcquireRefreshLease(now, leaseUntil) {
+      await ensureSchema();
       const rows = await sql<Array<{ cacheKey: string }>>`
         insert into public.msp_request_snapshots (
           cache_key, refresh_lease_until, updated_at

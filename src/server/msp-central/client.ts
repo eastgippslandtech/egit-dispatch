@@ -15,7 +15,9 @@ import {
 } from "./mappers";
 import {
   getConfiguredMspRequestSnapshotStore,
+  loadCachedMspRequestsSnapshot,
   loadMspRequestsWithSnapshot,
+  refreshMspRequestsSnapshot,
 } from "./request-snapshot";
 import {
   buildMspOAuthCacheKey,
@@ -478,10 +480,18 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     },
     async listRequests(params) {
       assertConfigured();
-      const rawRequests = await loadMspRequestsWithSnapshot({
-        fetchRequests: () => fetchRawRequests(params),
-        store: params?.status ? null : requestSnapshotStore,
-      });
+      const snapshotStore = params?.status ? null : requestSnapshotStore;
+      const rawRequests = params?.cacheOnly
+        ? await loadCachedMspRequestsSnapshot({ store: snapshotStore })
+        : params?.forceRefresh
+          ? await refreshMspRequestsSnapshot({
+              fetchRequests: () => fetchRawRequests(params),
+              store: snapshotStore,
+          })
+        : await loadMspRequestsWithSnapshot({
+            fetchRequests: () => fetchRawRequests(params),
+            store: snapshotStore,
+          });
 
       const mappedRequests = mapMspCentralRequests(rawRequests, {
         profiles: getInitialStaffProfiles(),

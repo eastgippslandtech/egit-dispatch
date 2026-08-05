@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDispatchDashboardData } from "./provider";
 import { listDispatchTestSyncEvents } from "./test-sync";
-import { getTestSyncedDispatchDashboardData } from "./test-sync-dashboard";
+import {
+  getTestSyncedDispatchDashboardData,
+  resetTestSyncedDashboardCacheForTests,
+} from "./test-sync-dashboard";
 import type { DispatchDashboardData } from "./types";
 
 vi.mock("./provider", () => ({
@@ -61,11 +64,13 @@ const dashboard: DispatchDashboardData = {
 describe("test-synced dispatch dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetTestSyncedDashboardCacheForTests();
     process.env.DATABASE_URL = "postgresql://example";
     getDispatchDashboardDataMock.mockResolvedValue(dashboard);
   });
 
   afterEach(() => {
+    resetTestSyncedDashboardCacheForTests();
     delete process.env.DATABASE_URL;
     vi.restoreAllMocks();
   });
@@ -149,6 +154,55 @@ describe("test-synced dispatch dashboard", () => {
 
     expect(result.requests).toEqual([]);
     expect(result.selectedRequestId).toBe("");
+  });
+
+  it("skips local test-sync overlays in full live MSP Central mode", async () => {
+    getDispatchDashboardDataMock.mockResolvedValue({
+      ...dashboard,
+      dispatchDataSource: "msp-central",
+    });
+    listDispatchTestSyncEventsMock.mockResolvedValue([
+      {
+        appointmentId: "appt-test",
+        createdAt: "2026-07-08T00:00:00.000Z",
+        date: "2026-07-08",
+        end: "10:00",
+        eventType: "scheduled",
+        id: "event-1",
+        requestId: "req-1",
+        start: "09:00",
+        technicianId: "matt",
+      },
+    ]);
+
+    await expect(
+      getTestSyncedDispatchDashboardData({
+        appBaseUrl: "https://command.egit.com.au",
+        calendarDataSource: "outlook",
+        databaseUrl: "postgresql://example",
+        dispatchDataSource: "msp-central",
+        microsoft: {
+          clientId: "graph-client",
+          clientSecret: "graph-secret",
+          tenantId: "graph-tenant",
+          timezone: "Australia/Melbourne",
+        },
+        mode: "live",
+        mspCentral: {
+          baseUrl: "https://servicedeskplus.net.au",
+          clientId: "msp-client",
+          clientSecret: "msp-secret",
+          portal: "memsp1783593801295",
+          refreshToken: "msp-refresh",
+        },
+        timezone: "Australia/Melbourne",
+        trainingSamplesEnabled: false,
+      }),
+    ).resolves.toMatchObject({
+      requests: dashboard.requests,
+      selectedRequestId: "req-1",
+    });
+    expect(listDispatchTestSyncEventsMock).not.toHaveBeenCalled();
   });
 
   it("leaves the dashboard unchanged when no test database is configured", async () => {

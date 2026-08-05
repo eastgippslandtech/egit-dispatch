@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { MspCentralRawRequest } from "./types";
 import {
   createPostgresMspRequestSnapshotStore,
+  loadCachedMspRequestsSnapshot,
   loadMspRequestsWithSnapshot,
+  refreshMspRequestsSnapshot,
   type MspRequestSnapshotStore,
 } from "./request-snapshot";
 import type postgres from "postgres";
@@ -77,11 +79,11 @@ describe("MSP Central request snapshots", () => {
         fetchRequests: async () => {
           throw rateLimitError;
         },
-        now: () => 100_000,
+        now: () => 400_000,
         store,
       }),
     ).resolves.toEqual([cachedRequest]);
-    expect(store.blockUntil).toHaveBeenCalledWith(400_000);
+    expect(store.blockUntil).toHaveBeenCalledWith(700_000);
   });
 
   it("does not call MSP Central during a shared backoff", async () => {
@@ -136,5 +138,40 @@ describe("MSP Central request snapshots", () => {
       }),
     ).resolves.toEqual([liveRequest]);
     expect(store.save).toHaveBeenCalledWith([liveRequest], 100_000);
+  });
+
+  it("force-refreshes and saves a new snapshot for fast dashboard reads", async () => {
+    const store = createStore({
+      fetchedAt: 1_000,
+      requests: [cachedRequest],
+      retryAfter: null,
+    });
+    const refreshedRequest: MspCentralRawRequest = {
+      id: "live-2",
+      request_number: "REQ-REFRESHED",
+      subject: "Refreshed request",
+    };
+
+    await expect(
+      refreshMspRequestsSnapshot({
+        fetchRequests: async () => [refreshedRequest],
+        now: () => 200_000,
+        store,
+      }),
+    ).resolves.toEqual([refreshedRequest]);
+    expect(store.save).toHaveBeenCalledWith([refreshedRequest], 200_000);
+  });
+
+  it("serves cached snapshots without starting a provider refresh", async () => {
+    const store = createStore({
+      fetchedAt: 1_000,
+      requests: [cachedRequest],
+      retryAfter: null,
+    });
+
+    await expect(loadCachedMspRequestsSnapshot({ store })).resolves.toEqual([
+      cachedRequest,
+    ]);
+    expect(store.tryAcquireRefreshLease).not.toHaveBeenCalled();
   });
 });

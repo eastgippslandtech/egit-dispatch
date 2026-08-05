@@ -11,6 +11,8 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const INTEGRATION_ROUTE_TIMEOUT_MS = 7_000;
+
 export async function GET(request?: Request) {
   const access = await staffRouteAccess();
   if (!access?.email) {
@@ -25,14 +27,16 @@ export async function GET(request?: Request) {
   }
   try {
     const repository = createPostgresIntegrationRepository();
-    const operations = active
-      ? canManage
-        ? await repository.listActiveOperations({ limit: 100 })
-        : await repository.listActiveOperationsForActor({
-            actorEmail: access.email,
-            limit: 100,
-          })
-      : await repository.listActionableOperations({ limit: 100 });
+    const operations = await withIntegrationTimeout(
+      active
+        ? canManage
+          ? repository.listActiveOperations({ limit: 100 })
+          : repository.listActiveOperationsForActor({
+              actorEmail: access.email,
+              limit: 100,
+            })
+        : repository.listActionableOperations({ limit: 100 }),
+    );
     return integrationJson({
       actions: operations.map((operation) =>
         canManage
@@ -60,4 +64,16 @@ export async function GET(request?: Request) {
       { status: 503 },
     );
   }
+}
+
+function withIntegrationTimeout<T>(promise: Promise<T>) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Integration actions timed out.")),
+        INTEGRATION_ROUTE_TIMEOUT_MS,
+      ),
+    ),
+  ]);
 }

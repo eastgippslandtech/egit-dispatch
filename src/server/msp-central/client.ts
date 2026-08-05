@@ -1081,6 +1081,10 @@ function buildMspCentralApiRoot(config: DispatchConfig) {
     return baseUrl;
   }
 
+  if (/\/app\/[^/]+$/i.test(baseUrl)) {
+    return `${baseUrl}/api/v3`;
+  }
+
   if (portal) {
     return `${baseUrl}/app/${encodeURIComponent(portal)}/api/v3`;
   }

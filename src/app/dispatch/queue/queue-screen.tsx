@@ -15,9 +15,16 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import {
+  type CachedDashboard,
+  readCachedDashboard,
+  resolveDashboardWithCache,
+  shouldCacheDashboard,
+  writeCachedDashboard,
+} from "@/app/dispatch/command-centre/dashboard-cache";
 import {
   CreateRequestModal,
   MergeRequestModal,
@@ -54,6 +61,7 @@ import { QueueScheduleModal } from "./queue-schedule-modal";
 type WorkLogTarget = { appointmentId?: string; requestId: string };
 
 const priorityOrder: Priority[] = ["Critical", "High", "Medium", "Low"];
+const DASHBOARD_CACHE_UPDATED_EVENT = "command-centre-dashboard-cache-updated";
 
 export function DispatchQueueScreen({
   authDisabled,
@@ -67,7 +75,11 @@ export function DispatchQueueScreen({
   showIntegrations: boolean;
 }) {
   const router = useRouter();
-  const dashboard = data;
+  const cachedDashboard = useCachedDispatchDashboard();
+  const dashboard = useMemo(
+    () => resolveDashboardWithCache(data, cachedDashboard),
+    [cachedDashboard, data],
+  );
   const [view, setView] = useState<DispatchQueueView>("new");
   const [search, setSearch] = useState("");
   const [technicianId, setTechnicianId] = useState("all");
@@ -80,6 +92,13 @@ export function DispatchQueueScreen({
   const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string>();
+
+  useEffect(() => {
+    if (shouldCacheDashboard(data)) {
+      writeCachedDashboard(window.localStorage, data);
+      window.dispatchEvent(new Event(DASHBOARD_CACHE_UPDATED_EVENT));
+    }
+  }, [data]);
 
   useEffect(() => {
     const refresh = () => router.refresh();
@@ -327,6 +346,11 @@ export function DispatchQueueScreen({
 
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-cc-border bg-cc-surface-1">
           <div className="shrink-0 border-b border-cc-border p-3">
+            {dashboard.calendarError ? (
+              <div className="mb-2 rounded-md border border-amber-300/20 bg-amber-300/10 px-2.5 py-2 text-xs font-semibold text-amber-100" role="alert">
+                {dashboard.calendarError}
+              </div>
+            ) : null}
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-bold uppercase text-slate-400">Dispatch</p>
@@ -689,6 +713,27 @@ function requestSearchText(request: DispatchRequest) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function useCachedDispatchDashboard() {
+  return useSyncExternalStore(
+    subscribeToDashboardCache,
+    readDashboardCacheSnapshot,
+    () => null,
+  );
+}
+
+function subscribeToDashboardCache(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(DASHBOARD_CACHE_UPDATED_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(DASHBOARD_CACHE_UPDATED_EVENT, onStoreChange);
+  };
+}
+
+function readDashboardCacheSnapshot(): CachedDashboard | null {
+  return readCachedDashboard(window.localStorage);
 }
 
 function compareRequests(first: DispatchRequest, second: DispatchRequest) {

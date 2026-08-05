@@ -135,6 +135,42 @@ describe("MSP Central live client", () => {
     ).toHaveLength(1);
   });
 
+  it("does not duplicate the portal path when the MSP API base already includes /app/<portal>", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ requests: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL:
+          "https://servicedeskplus.net.au/app/memsp1783593801295",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.listRequests();
+
+    const requestUrl = String(fetchMock.mock.calls[1]?.[0]);
+    expect(requestUrl).toContain(
+      "https://servicedeskplus.net.au/app/memsp1783593801295/api/v3/requests",
+    );
+    expect(requestUrl).not.toContain(
+      "/app/memsp1783593801295/app/memsp1783593801295/",
+    );
+  });
+
   it("loads fresh request detail and separates customer responses from internal notes", async () => {
     const fetchMock = vi
       .fn()

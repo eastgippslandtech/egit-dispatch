@@ -20,6 +20,8 @@ type IntegrationSnapshot = {
   counts: IntegrationCounts;
 };
 
+const INTEGRATION_STATUS_TIMEOUT_MS = 8_000;
+
 export function IntegrationsConsole() {
   const [snapshot, setSnapshot] = useState<IntegrationSnapshot>();
   const [error, setError] = useState<string>();
@@ -43,15 +45,10 @@ export function IntegrationsConsole() {
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
     try {
+      setError(undefined);
       const [healthResponse, actionsResponse] = await Promise.all([
-        fetch("/api/internal/integrations/health", {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }),
-        fetch("/api/internal/integrations/actions", {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }),
+        fetchWithTimeout("/api/internal/integrations/health"),
+        fetchWithTimeout("/api/internal/integrations/actions"),
       ]);
       if ([401, 403].includes(healthResponse.status) || [401, 403].includes(actionsResponse.status)) {
         throw new Error("AUTHORIZATION_REQUIRED");
@@ -169,4 +166,17 @@ export function IntegrationsConsole() {
       </div>
     </main>
   );
+}
+
+function fetchWithTimeout(url: string) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    INTEGRATION_STATUS_TIMEOUT_MS,
+  );
+  return fetch(url, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+    signal: controller.signal,
+  }).finally(() => window.clearTimeout(timeout));
 }

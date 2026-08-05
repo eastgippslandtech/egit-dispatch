@@ -8,16 +8,20 @@ import { staffRouteAccess } from "@/server/yeastar/route-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const INTEGRATION_ROUTE_TIMEOUT_MS = 7_000;
+
 export async function GET() {
   if (!(await staffRouteAccess())) {
     return integrationJson({ error: "Unauthorized." }, { status: 401 });
   }
   try {
     const repository = createPostgresIntegrationRepository();
-    const [connectors, counts] = await Promise.all([
-      repository.getHealth(),
-      repository.getOperationCounts(),
-    ]);
+    const [connectors, counts] = await withIntegrationTimeout(
+      Promise.all([
+        repository.getHealth(),
+        repository.getOperationCounts(),
+      ]),
+    );
     return integrationJson({
       connectors: connectors.map((connector) => ({
         ...connector,
@@ -31,4 +35,16 @@ export async function GET() {
       { status: 503 },
     );
   }
+}
+
+function withIntegrationTimeout<T>(promise: Promise<T>) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Integration health timed out.")),
+        INTEGRATION_ROUTE_TIMEOUT_MS,
+      ),
+    ),
+  ]);
 }

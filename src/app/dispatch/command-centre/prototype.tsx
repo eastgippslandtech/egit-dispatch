@@ -457,6 +457,7 @@ export function CommandCentrePrototype({
   const pendingWritebackRequestIds = useRef(new Set<string>());
   const dashboardRefreshPending = useRef(false);
   const dashboardRefreshSafetyTimer = useRef<number | undefined>(undefined);
+  const lastDashboardRefreshAt = useRef(0);
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [now, setNow] = useState(() => new Date());
@@ -552,6 +553,9 @@ export function CommandCentrePrototype({
   useEffect(() => {
     const refresh = () => {
       if (document.hidden || dashboardRefreshPending.current) return;
+      const now = Date.now();
+      if (now - lastDashboardRefreshAt.current < 15_000) return;
+      lastDashboardRefreshAt.current = now;
       dashboardRefreshPending.current = true;
       router.refresh();
       dashboardRefreshSafetyTimer.current = window.setTimeout(() => {

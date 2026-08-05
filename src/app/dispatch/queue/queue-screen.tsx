@@ -15,7 +15,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 import {
@@ -95,8 +95,16 @@ export function DispatchQueueScreen({
   const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string>();
+  const refreshPending = useRef(false);
+  const refreshSafetyTimer = useRef<number | undefined>(undefined);
+  const lastRefreshAt = useRef(0);
 
   useEffect(() => {
+    refreshPending.current = false;
+    if (refreshSafetyTimer.current) {
+      window.clearTimeout(refreshSafetyTimer.current);
+      refreshSafetyTimer.current = undefined;
+    }
     if (shouldCacheDashboard(data)) {
       writeCachedDashboard(window.localStorage, data);
       window.dispatchEvent(new Event(DASHBOARD_CACHE_UPDATED_EVENT));
@@ -104,7 +112,18 @@ export function DispatchQueueScreen({
   }, [data]);
 
   useEffect(() => {
-    const refresh = () => router.refresh();
+    const refresh = () => {
+      if (document.hidden || refreshPending.current) return;
+      const now = Date.now();
+      if (now - lastRefreshAt.current < 15_000) return;
+      lastRefreshAt.current = now;
+      refreshPending.current = true;
+      router.refresh();
+      refreshSafetyTimer.current = window.setTimeout(() => {
+        refreshPending.current = false;
+        refreshSafetyTimer.current = undefined;
+      }, 20_000);
+    };
     const interval = window.setInterval(refresh, 30_000);
     const onVisibility = () => {
       if (document.visibilityState === "visible") refresh();
@@ -115,6 +134,9 @@ export function DispatchQueueScreen({
       window.clearInterval(interval);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVisibility);
+      if (refreshSafetyTimer.current) {
+        window.clearTimeout(refreshSafetyTimer.current);
+      }
     };
   }, [router]);
 

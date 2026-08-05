@@ -4,6 +4,7 @@ import type { DispatchDashboardData } from "@/server/dispatch/types";
 export const DASHBOARD_CACHE_KEY = "command-centre:last-healthy-dashboard:v1";
 const MSP_UNAVAILABLE = "msp central is temporarily unavailable";
 const OUTLOOK_UNAVAILABLE = "outlook calendar read failed";
+const LIVE_DASHBOARD_TIMEOUT = "live command centre data could not be loaded quickly";
 
 export const DASHBOARD_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
@@ -30,12 +31,14 @@ export function resolveDashboardWithCache(
   if (!cached) return incoming;
 
   const error = incoming.calendarError?.toLowerCase() ?? "";
+  const liveDashboardTimedOut = error.includes(LIVE_DASHBOARD_TIMEOUT);
   const mspFailed = error.includes(MSP_UNAVAILABLE);
   const outlookFailed = error.includes(OUTLOOK_UNAVAILABLE);
-  if (!mspFailed && !outlookFailed) return incoming;
+  if (!liveDashboardTimedOut && !mspFailed && !outlookFailed) return incoming;
 
-  const requests = mspFailed ? cached.dashboard.requests : incoming.requests;
-  const appointments = outlookFailed
+  const requests =
+    liveDashboardTimedOut || mspFailed ? cached.dashboard.requests : incoming.requests;
+  const appointments = liveDashboardTimedOut || outlookFailed
     ? cached.dashboard.appointments
     : incoming.appointments;
   const technicians = incoming.technicians.length

@@ -50,7 +50,7 @@ export async function ProtectedCommandCentreScreen({
       data={selectedData}
       showIntegrationStatus
       showIntegrations={canManageIntegrations}
-      key={`${data.dispatchDataSource}:${data.calendarError ?? "healthy"}`}
+      key={data.dispatchDataSource}
     />
   );
 }

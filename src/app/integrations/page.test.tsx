@@ -193,6 +193,23 @@ describe("IntegrationsPage", () => {
     );
   });
 
+  it("derives recovery counts from loaded actions when count reads fall back", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({
+        connectors: [connector("command_centre", "unavailable")],
+        counts: { pending: 0, reviewRequired: 0 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        actions: [action("operation-review", "review_required")],
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(await IntegrationsPage());
+
+    expect(await screen.findByText("1 review required")).toBeInTheDocument();
+  });
+
   it("surfaces authorization failure without stale updates", async () => {
     const fetchMock = vi
       .fn()

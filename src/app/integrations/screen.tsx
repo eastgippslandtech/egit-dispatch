@@ -64,7 +64,11 @@ export function IntegrationsConsole() {
         actions: FailedActionSummary[];
       };
       if (!mounted.current || sequence !== refreshSequence.current) return;
-      setSnapshot({ ...health, actions: actions.actions });
+      setSnapshot({
+        ...health,
+        actions: actions.actions,
+        counts: preferLoadedActionCounts(health.counts, actions.actions),
+      });
       setError(undefined);
     } catch (loadError) {
       if (!mounted.current || sequence !== refreshSequence.current) return;
@@ -165,6 +169,27 @@ export function IntegrationsConsole() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+function preferLoadedActionCounts(
+  counts: IntegrationCounts,
+  actions: FailedActionSummary[],
+): IntegrationCounts {
+  if (counts.pending > 0 || counts.reviewRequired > 0 || actions.length === 0) {
+    return counts;
+  }
+
+  return actions.reduce<IntegrationCounts>(
+    (summary, action) => {
+      if (action.state === "review_required") {
+        summary.reviewRequired += 1;
+      } else if (["queued", "retrying", "syncing"].includes(action.state)) {
+        summary.pending += 1;
+      }
+      return summary;
+    },
+    { pending: 0, reviewRequired: 0 },
   );
 }
 

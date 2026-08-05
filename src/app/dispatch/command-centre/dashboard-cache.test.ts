@@ -134,6 +134,27 @@ describe("Command Centre local dashboard cache", () => {
     ).toBe(healthyEmptyDashboard);
   });
 
+  it("keeps the last healthy board when a live dashboard read times out", () => {
+    const timedOutDashboard: DispatchDashboardData = {
+      ...healthyDashboard,
+      appointments: [],
+      calendarError:
+        "Live Command Centre data could not be loaded quickly. Showing cached Command Centre data when available.",
+      requests: [],
+      selectedRequestId: "",
+    };
+
+    const resolved = resolveDashboardWithCache(timedOutDashboard, {
+      dashboard: healthyDashboard,
+      savedAt: "2026-08-04T00:35:00.000Z",
+      version: 1,
+    });
+
+    expect(resolved.requests).toEqual(healthyDashboard.requests);
+    expect(resolved.appointments).toEqual(healthyDashboard.appointments);
+    expect(resolved.selectedRequestId).toBe("request-cached");
+  });
+
   it("only stores fully healthy live dashboards", () => {
     expect(shouldCacheDashboard(healthyDashboard)).toBe(true);
     expect(

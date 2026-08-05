@@ -1,7 +1,7 @@
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import type { DispatchDashboardData } from "@/server/dispatch/types";
 
-const DASHBOARD_CACHE_KEY = "command-centre:last-healthy-dashboard:v1";
+export const DASHBOARD_CACHE_KEY = "command-centre:last-healthy-dashboard:v1";
 const MSP_UNAVAILABLE = "msp central is temporarily unavailable";
 const OUTLOOK_UNAVAILABLE = "outlook calendar read failed";
 

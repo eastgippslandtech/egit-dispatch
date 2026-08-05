@@ -59,10 +59,11 @@ export async function GET(request?: Request) {
       ),
     });
   } catch {
-    return integrationJson(
-      { error: "Failed actions are temporarily unavailable." },
-      { status: 503 },
-    );
+    return integrationJson({
+      actions: [],
+      warning:
+        "Failed actions are temporarily unavailable. Existing provider actions are still retained for recovery.",
+    });
   }
 }
 

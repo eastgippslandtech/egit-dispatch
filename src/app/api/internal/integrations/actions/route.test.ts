@@ -172,4 +172,15 @@ describe("integration failed actions route", () => {
     expect(listActionableOperations).not.toHaveBeenCalled();
     expect(listActiveOperationsForActor).not.toHaveBeenCalled();
   });
+
+  it("keeps the recovery console loadable when failed actions cannot be read", async () => {
+    listActionableOperations.mockRejectedValueOnce(new Error("write CONNECT_TIMEOUT"));
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.actions).toEqual([]);
+    expect(payload.warning).toContain("temporarily unavailable");
+  });
 });

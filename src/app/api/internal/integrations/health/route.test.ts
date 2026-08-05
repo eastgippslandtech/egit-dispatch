@@ -59,4 +59,21 @@ describe("integration health route", () => {
     expect(response.status).toBe(401);
     expect(createRepository).not.toHaveBeenCalled();
   });
+
+  it("returns a degraded health snapshot when the health store is unavailable", async () => {
+    getHealth.mockRejectedValueOnce(new Error("write CONNECT_TIMEOUT"));
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.counts).toEqual({ pending: 0, reviewRequired: 0 });
+    expect(payload.connectors).toEqual([
+      expect.objectContaining({
+        connector: "command_centre",
+        status: "unavailable",
+      }),
+    ]);
+    expect(payload.warning).toContain("temporarily unavailable");
+  });
 });

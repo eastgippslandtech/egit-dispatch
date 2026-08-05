@@ -29,11 +29,25 @@ export async function GET() {
       })),
       counts,
     });
-  } catch {
-    return integrationJson(
-      { error: "Integration health is temporarily unavailable." },
-      { status: 503 },
-    );
+  } catch (error) {
+    return integrationJson({
+      connectors: [
+        {
+          connector: "command_centre",
+          consecutiveFailures: 1,
+          lastCheckedAt: new Date().toISOString(),
+          lastError: safeIntegrationSummary(
+            error instanceof Error
+              ? error.message
+              : "Integration health is temporarily unavailable.",
+          ),
+          status: "unavailable",
+        },
+      ],
+      counts: { pending: 0, reviewRequired: 0 },
+      warning:
+        "Integration health is temporarily unavailable. Provider actions are still retained for recovery.",
+    });
   }
 }
 

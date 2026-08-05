@@ -75,15 +75,19 @@ describe("MSP Central live client", () => {
       }),
     );
     const requestUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
-    expect(JSON.parse(requestUrl.searchParams.get("input_data") ?? "{}")).toMatchObject({
+    const requestInput = JSON.parse(
+      requestUrl.searchParams.get("input_data") ?? "{}",
+    );
+    expect(requestInput).toMatchObject({
       list_info: {
-        search_criteria: {
-          condition: "is",
-          field: "status.in_progress",
-          values: [true],
-        },
+        row_count: 100,
+        sort_field: "created_time",
+        sort_order: "desc",
+        start_index: 1,
       },
     });
+    expect(requestInput.list_info).not.toHaveProperty("get_total_count");
+    expect(requestInput.list_info).not.toHaveProperty("search_criteria");
     expect(requests[0]).toMatchObject({
       customer: "Example Co",
       priority: "High",

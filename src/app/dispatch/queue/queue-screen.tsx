@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { CommandCentreLogo } from "@/app/components/command-centre-logo";
 import {
+  DASHBOARD_CACHE_KEY,
   type CachedDashboard,
   readCachedDashboard,
   resolveDashboardWithCache,
@@ -62,6 +63,8 @@ type WorkLogTarget = { appointmentId?: string; requestId: string };
 
 const priorityOrder: Priority[] = ["Critical", "High", "Medium", "Low"];
 const DASHBOARD_CACHE_UPDATED_EVENT = "command-centre-dashboard-cache-updated";
+let cachedDashboardRaw: string | null | undefined;
+let cachedDashboardSnapshot: CachedDashboard | null = null;
 
 export function DispatchQueueScreen({
   authDisabled,
@@ -733,7 +736,13 @@ function subscribeToDashboardCache(onStoreChange: () => void) {
 }
 
 function readDashboardCacheSnapshot(): CachedDashboard | null {
-  return readCachedDashboard(window.localStorage);
+  const raw = window.localStorage.getItem(DASHBOARD_CACHE_KEY);
+  if (raw === cachedDashboardRaw) {
+    return cachedDashboardSnapshot;
+  }
+  cachedDashboardRaw = raw;
+  cachedDashboardSnapshot = readCachedDashboard(window.localStorage);
+  return cachedDashboardSnapshot;
 }
 
 function compareRequests(first: DispatchRequest, second: DispatchRequest) {

@@ -758,19 +758,14 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     url: string,
     init: { body?: URLSearchParams; method: "GET" | "POST" | "PUT" },
   ): Promise<T> {
-    const token = await getAccessToken();
-    const response = await fetch(url, {
-      body: init.body,
-      headers: {
-        Accept: "application/vnd.manageengine.sdp.v3+json",
-        Authorization: `Zoho-oauthtoken ${token}`,
-        ...(init.body
-          ? { "Content-Type": "application/x-www-form-urlencoded" }
-          : {}),
-      },
-      method: init.method,
-      signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
-    });
+    let token = await getAccessToken();
+    let response = await sendMspRequest(url, init, token);
+
+    if (response.status === 401) {
+      await invalidateCachedAccessToken(config, token);
+      token = await getAccessToken();
+      response = await sendMspRequest(url, init, token);
+    }
 
     if (!response.ok) {
       const detail = await readMspCentralErrorDetail(response);
@@ -791,6 +786,25 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
 
     return payload;
   }
+}
+
+function sendMspRequest(
+  url: string,
+  init: { body?: URLSearchParams; method: "GET" | "POST" | "PUT" },
+  token: string,
+) {
+  return fetch(url, {
+    body: init.body,
+    headers: {
+      Accept: "application/vnd.manageengine.sdp.v3+json",
+      Authorization: `Zoho-oauthtoken ${token}`,
+      ...(init.body
+        ? { "Content-Type": "application/x-www-form-urlencoded" }
+        : {}),
+    },
+    method: init.method,
+    signal: AbortSignal.timeout(MSP_REQUEST_TIMEOUT_MS),
+  });
 }
 
 function requestChildListUrl(
@@ -1031,6 +1045,18 @@ async function getCachedAccessToken(config: DispatchConfig) {
   });
 
   return accessTokenCoordinator.getToken(key, () => refreshAccessToken(config));
+}
+
+async function invalidateCachedAccessToken(
+  config: DispatchConfig,
+  rejectedAccessToken: string,
+) {
+  const key = accessTokenCacheKey(config);
+  accessTokenCoordinator ??= new MspOAuthAccessTokenCoordinator({
+    store: getConfiguredMspOAuthTokenStore(),
+  });
+
+  await accessTokenCoordinator.invalidate(key, rejectedAccessToken);
 }
 
 function accessTokenCacheKey(config: DispatchConfig) {

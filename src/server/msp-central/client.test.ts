@@ -552,19 +552,32 @@ describe("MSP Central live client", () => {
     ]);
   });
 
-  it("does not discard an unexpired token when an endpoint returns unauthorized", async () => {
+  it("invalidates a rejected access token and retries once when an endpoint returns unauthorized", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          access_token: "valid-access-token",
+          access_token: "rejected-access-token",
           expires_in: 3600,
         }),
       })
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "fresh-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          technicians: [],
+        }),
       });
     vi.stubGlobal("fetch", fetchMock);
     const client = createMspCentralClient(
@@ -579,10 +592,18 @@ describe("MSP Central live client", () => {
       }),
     );
 
-    await expect(client.listRequests()).rejects.toThrow(
-      "MSP Central API request failed with status 401.",
+    await expect(client.listTechnicians()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ displayName: "Simeon" }),
+      ]),
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({
+      Authorization: "Zoho-oauthtoken rejected-access-token",
+    });
+    expect(fetchMock.mock.calls[3]?.[1]?.headers).toMatchObject({
+      Authorization: "Zoho-oauthtoken fresh-access-token",
+    });
   });
 
   it("does not discard a valid access token when MSP Central returns forbidden", async () => {

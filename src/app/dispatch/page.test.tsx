@@ -5,7 +5,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import DispatchPage from "./page";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -13,6 +14,7 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn((target: string) => {
     throw new Error(`NEXT_REDIRECT:${target}`);
   }),
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 
 const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
@@ -20,6 +22,7 @@ const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 beforeEach(() => {
   getCommandCentreAccessMock.mockResolvedValue({
     status: "approved",
+    accessLevel: "staff",
     email: "simeon@egit.com.au",
     name: "Simeon",
   });
@@ -34,7 +37,11 @@ test("renders the main Command Centre dispatch route", async () => {
   expect(screen.getByText("Dispatch Health")).toBeInTheDocument();
   expect(screen.getAllByText("Unscheduled Requests").length).toBeGreaterThan(0);
   expect(screen.getByText("Technician timeline")).toBeInTheDocument();
-  expect(screen.getAllByText("OneHarvest").length).toBeGreaterThan(0);
+  expect(screen.getByText("No Sample Data")).toBeInTheDocument();
+  expect(screen.getByText("No matching requests")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "No selection" })).toBeInTheDocument();
+  expect(screen.queryByText("OneHarvest")).not.toBeInTheDocument();
+  expect(screen.queryByText("Packhouse label printer offline")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
 });
 

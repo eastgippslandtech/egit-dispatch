@@ -9,6 +9,7 @@ export type StaffProfile = {
   role: StaffRole;
   baseOffice: StaffBaseOffice;
   zohoEmail: string;
+  zohoPeopleEmployeeId?: string | null;
   outlookEmail: string;
   outlookUserPrincipalName: string;
   mspCentralEmail: string;
@@ -45,11 +46,12 @@ const staffProfiles: StaffProfile[] = [
     role: "admin",
     baseOffice: "Bairnsdale",
     zohoEmail: "simeon@egit.com.au",
+    zohoPeopleEmployeeId: null,
     outlookEmail: "simeon@egit.com.au",
     outlookUserPrincipalName: "simeon@egit.com.au",
     mspCentralEmail: "simeon@egit.com.au",
-    mspCentralTechnicianId: null,
-    mspCentralTechnicianName: null,
+    mspCentralTechnicianId: "6768000000303165",
+    mspCentralTechnicianName: "Simeon",
     active: true,
     dispatchEnabled: true,
     calendarEnabled: true,
@@ -60,11 +62,12 @@ const staffProfiles: StaffProfile[] = [
     role: "technician",
     baseOffice: "Sale",
     zohoEmail: "mattd@egit.com.au",
+    zohoPeopleEmployeeId: null,
     outlookEmail: "mattd@egit.com.au",
     outlookUserPrincipalName: "mattd@egit.com.au",
     mspCentralEmail: "mattd@egit.com.au",
-    mspCentralTechnicianId: null,
-    mspCentralTechnicianName: null,
+    mspCentralTechnicianId: "6768000000313963",
+    mspCentralTechnicianName: "Matt Doyle",
     active: true,
     dispatchEnabled: true,
     calendarEnabled: true,
@@ -75,11 +78,12 @@ const staffProfiles: StaffProfile[] = [
     role: "technician",
     baseOffice: "Bairnsdale",
     zohoEmail: "jervy@egit.com.au",
+    zohoPeopleEmployeeId: null,
     outlookEmail: "jervy@egit.com.au",
     outlookUserPrincipalName: "jervy@egit.com.au",
     mspCentralEmail: "jervy@egit.com.au",
-    mspCentralTechnicianId: null,
-    mspCentralTechnicianName: null,
+    mspCentralTechnicianId: "6768000000319012",
+    mspCentralTechnicianName: "Jervy",
     active: true,
     dispatchEnabled: true,
     calendarEnabled: true,
@@ -90,11 +94,12 @@ const staffProfiles: StaffProfile[] = [
     role: "technician",
     baseOffice: "Bairnsdale",
     zohoEmail: "riley@egit.com.au",
+    zohoPeopleEmployeeId: null,
     outlookEmail: "riley@egit.com.au",
     outlookUserPrincipalName: "riley@egit.com.au",
     mspCentralEmail: "riley@egit.com.au",
-    mspCentralTechnicianId: null,
-    mspCentralTechnicianName: null,
+    mspCentralTechnicianId: "6768000000314751",
+    mspCentralTechnicianName: "Riley",
     active: true,
     dispatchEnabled: true,
     calendarEnabled: true,
@@ -111,6 +116,17 @@ export function findStaffForZohoLogin(
 ) {
   const email = normalizeEmail(zohoEmail);
   return profiles.find((profile) => normalizeEmail(profile.zohoEmail) === email);
+}
+
+export function isAdminStaffEmail(
+  email: string,
+  profiles: StaffProfile[] = getInitialStaffProfiles(),
+) {
+  return (
+    profiles.find(
+      (profile) => normalizeEmail(profile.zohoEmail) === normalizeEmail(email),
+    )?.role === "admin"
+  );
 }
 
 export function findStaffForMspCentralTechnician(
@@ -210,6 +226,7 @@ export function staffProfileToTechnician(profile: StaffProfile): Technician {
     sdpTechnicianName: profile.mspCentralTechnicianName ?? undefined,
     storeLocation: profile.baseOffice,
     zohoEmail: profile.zohoEmail,
+    zohoPeopleEmployeeId: profile.zohoPeopleEmployeeId,
   };
 }
 

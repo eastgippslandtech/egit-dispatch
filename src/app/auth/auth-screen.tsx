@@ -1,20 +1,20 @@
-import { ShieldAlert } from "lucide-react";
-import Image from "next/image";
+import { Monitor, ShieldAlert } from "lucide-react";
+import Link from "next/link";
+
+import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import { ZohoSubmitButton } from "./zoho-submit-button";
 
 export function CommandCentreSignIn() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#07111f] px-6 text-slate-100">
-      <section className="w-full max-w-xl rounded-lg border border-white/10 bg-[#0b1628] p-7 shadow-2xl">
-        <Image
-          alt="Command Centre"
-          className="mx-auto h-80 w-80 object-contain"
-          height={1254}
+    <main className="flex min-h-screen items-center justify-center bg-cc-canvas px-6 text-cc-text">
+      <section className="w-full max-w-xl rounded-lg border border-cc-border bg-cc-surface-1 p-7 shadow-2xl">
+        <CommandCentreLogo
+          className="mx-auto h-72 w-auto max-w-full object-contain"
           priority
-          src="/assets/command-centre-logo.png"
-          width={1254}
+          variant="stacked-dark"
         />
         <h1 className="mt-1 text-2xl font-semibold">Sign in</h1>
-        <p className="mt-3 text-sm text-slate-300">
+        <p className="mt-3 text-sm text-cc-text-secondary">
           Use your EGIT Zoho account to continue.
         </p>
         <form
@@ -26,13 +26,47 @@ export function CommandCentreSignIn() {
           }}
           className="mt-5"
         >
-          <button
-            className="w-full rounded-md bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-[#07111f]"
-            type="submit"
-          >
-            Sign in with Zoho
-          </button>
+          <ZohoSubmitButton />
         </form>
+        <Link
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-md border border-cc-border-strong bg-cc-surface-2 px-4 py-2.5 text-sm font-semibold text-cc-text transition hover:border-cc-orange/60 hover:bg-cc-surface-3 active:brightness-95"
+          href="/auth/wallboard-sign-in"
+        >
+          <Monitor className="h-4 w-4" aria-hidden="true" />
+          Wallboard login
+        </Link>
+      </section>
+    </main>
+  );
+}
+
+export function AuthenticationProblem() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-cc-canvas px-6 text-cc-text">
+      <section className="w-full max-w-md rounded-lg border border-cc-orange/40 bg-cc-surface-1 p-6 shadow-2xl">
+        <div className="flex items-center gap-3">
+          <CommandCentreLogo
+            className="h-20 w-20 shrink-0 object-contain"
+            decorative
+            variant="icon-colour"
+          />
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">
+              Command Centre
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold">Sign-in needs restarting</h1>
+          </div>
+        </div>
+        <p className="mt-5 text-sm text-cc-text-secondary">
+          The Zoho sign-in window expired or was opened more than once. Start a
+          fresh sign-in to continue.
+        </p>
+        <Link
+          className="mt-5 flex w-full items-center justify-center rounded-md bg-cc-orange px-4 py-2.5 text-sm font-semibold text-cc-surface-1 transition hover:brightness-110"
+          href="/auth/sign-in"
+        >
+          Start sign-in again
+        </Link>
       </section>
     </main>
   );
@@ -46,32 +80,31 @@ export function AccessNotApproved({
   name?: string;
 }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#07111f] px-6 text-slate-100">
-      <section className="w-full max-w-md rounded-lg border border-amber-300/20 bg-[#0b1628] p-6 shadow-2xl">
+    <main className="flex min-h-screen items-center justify-center bg-cc-canvas px-6 text-cc-text">
+      <section className="w-full max-w-md rounded-lg border border-cc-red/35 bg-cc-surface-1 p-6 shadow-2xl">
         <div className="flex items-center gap-3">
-          <Image
-            alt=""
-            className="h-24 w-24 shrink-0 object-contain"
-            height={1254}
-            src="/assets/command-centre-logo.png"
-            width={1254}
+          <CommandCentreLogo
+            className="h-20 w-20 shrink-0 object-contain"
+            decorative
+            testId="access-denied-brand"
+            variant="icon-colour"
           />
-          <span className="rounded-md bg-amber-300/15 p-2 text-amber-100">
+          <span className="rounded-md bg-cc-red/15 p-2 text-red-100">
             <ShieldAlert className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-100">
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
               Command Centre
             </p>
             <h1 className="mt-1 text-2xl font-semibold">Access not approved</h1>
           </div>
         </div>
-        <p className="mt-5 text-sm text-slate-300">
+        <p className="mt-5 text-sm text-cc-text-secondary">
           Your Zoho sign-in worked, but this account is not on the Command
           Centre allowlist.
         </p>
         {email ? (
-          <p className="mt-4 rounded-md border border-white/10 bg-white/5 px-3 py-2 font-mono text-xs text-slate-200">
+          <p className="mt-4 rounded-md border border-cc-border bg-cc-surface-2 px-3 py-2 font-mono text-xs text-cc-text-secondary">
             {name ? `${name} / ` : ""}
             {email}
           </p>

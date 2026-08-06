@@ -10,6 +10,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "expo-web-browser": path.resolve(
+        __dirname,
+        "./src/test/mocks/expo-web-browser.ts",
+      ),
     },
   },
 });

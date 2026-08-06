@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  isApprovedStaffAccess,
+} from "@/server/auth/session";
 import {
   findStaffForZohoLogin,
   getInitialStaffProfiles,
@@ -13,7 +16,7 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 });
   }
 
-  if (access.status === "not-approved") {
+  if (!isApprovedStaffAccess(access)) {
     return NextResponse.json({ error: "Access not approved." }, { status: 403 });
   }
 

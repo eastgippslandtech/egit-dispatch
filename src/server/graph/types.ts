@@ -13,6 +13,7 @@ export type MicrosoftGraphEvent = {
     emailAddress?: MicrosoftGraphEmailAddress;
   }>;
   bodyPreview?: string;
+  categories?: string[];
   end: MicrosoftGraphDateTime;
   id: string;
   isAllDay?: boolean;
@@ -28,6 +29,20 @@ export type MicrosoftGraphEvent = {
   start: MicrosoftGraphDateTime;
   subject?: string;
   webLink?: string;
+};
+
+export type MicrosoftGraphEventDraft = {
+  bodyPreview?: string;
+  end: string;
+  location?: string;
+  start: string;
+  subject: string;
+  transactionId?: string;
+  userPrincipalName: string;
+};
+
+export type MicrosoftGraphEventUpdate = MicrosoftGraphEventDraft & {
+  eventId: string;
 };
 
 export type GraphCalendarRange = {

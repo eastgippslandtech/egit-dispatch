@@ -47,16 +47,24 @@ describe("Graph event mapper", () => {
     expect(extractLinkedRequestNumber("REQ-100211 Server work")).toBe("100211");
     expect(extractLinkedRequestNumber("SDP 100246 upgrade")).toBe("100246");
     expect(extractLinkedRequestNumber("No request", "Ticket #100368")).toBe("100368");
+    expect(
+      extractLinkedRequestNumber("6768000001419914 Retailer Archive Webapp"),
+    ).toBe("6768000001419914");
   });
 
   it("maps linked Outlook events into DispatchAppointment shape", () => {
-    const appointment = mapGraphEventToAppointment(event(), technician);
+    const appointment = mapGraphEventToAppointment(
+      event(),
+      technician,
+      "https://mspcentral.example/requests/{request}",
+    );
 
     expect(appointment).toMatchObject({
       calendarOwnerEmail: "simeon@egit.com.au",
       customer: "OneHarvest server room",
       date: "2026-07-08",
       end: "10:30",
+      helpdeskUrl: "https://mspcentral.example/requests/100211",
       id: "outlook-tech-simeon-event-1",
       outlookEventId: "event-1",
       outlookLinkedRequestNumber: "100211",
@@ -66,7 +74,119 @@ describe("Graph event mapper", () => {
       start: "09:30",
       status: "busy",
       technicianId: "tech-simeon",
-      title: "REQ-100211 File server disk expansion",
+      title: "File server disk expansion",
+    });
+  });
+
+  it("maps structured Outlook-only onsite service bookings without an MSP request", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: [
+          "Ticket #237815",
+          "Company: ASI Solutions",
+          "Site: Gippsland office",
+          "Contact: Taylor Smith",
+          "Contact Phone: 03 5100 1000",
+          "Address: 42 Main Street, Bairnsdale VIC 3875",
+        ].join("\n"),
+        location: { displayName: "On-Site" },
+        subject: "ASI Solutions - ASP Work/Ticket Waiting Acceptance",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      bookingType: "Onsite",
+      customer: "ASI Solutions",
+      outlookLinkedRequestNumber: "237815",
+      requestId: "237815",
+      siteAddress: "42 Main Street, Bairnsdale VIC 3875",
+    });
+  });
+
+  it("restores the selected booking type from the structured event body", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: [
+          "Command-Centre-Booking: dispatch-group-123",
+          "Request: REQ-237815",
+          "Company: ASI Solutions",
+          "Site: Gippsland office",
+          "Booking Type: Remote",
+        ].join("\n"),
+        location: { displayName: "42 Main Street, Bairnsdale" },
+        subject: "REQ-237815 Remote support",
+      }),
+      technician,
+    );
+
+    expect(appointment.bookingType).toBe("Remote");
+    expect(appointment.scheduleGroupId).toBe("dispatch-group-123");
+  });
+
+  it.each([
+    ["Remote", "Remote"],
+    ["In-house", "In house"],
+    ["in house", "In house"],
+  ] as const)(
+    "maps the Outlook location %s to the %s booking type",
+    (location, bookingType) => {
+      const appointment = mapGraphEventToAppointment(
+        event({
+          bodyPreview: "Ticket #237815\nCompany: ASI Solutions",
+          location: { displayName: location },
+          subject: "ASI Solutions service booking",
+        }),
+        technician,
+      );
+
+      expect(appointment).toMatchObject({
+        bookingType,
+        customer: "ASI Solutions",
+      });
+    },
+  );
+
+  it("keeps an ordinary Outlook location as useful meeting context", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Weekly operations review",
+        location: { displayName: "Teams meeting" },
+        subject: "Operations meeting",
+      }),
+      technician,
+    );
+
+    expect(appointment.customer).toBe("Teams meeting");
+    expect(appointment.bookingType).toBeUndefined();
+  });
+
+  it("does not infer a booking type from ordinary meeting notes", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Discuss remote support options and upcoming on-site work",
+        location: { displayName: "Teams meeting" },
+        subject: "Service planning meeting",
+      }),
+      technician,
+    );
+
+    expect(appointment.bookingType).toBeUndefined();
+  });
+
+  it("uses the event title as context when a booking label has no Company field", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Ticket #237815",
+        location: { displayName: "Remote" },
+        subject: "ASI Solutions - Remote support session",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      bookingType: "Remote",
+      customer: "ASI Solutions - Remote support session",
     });
   });
 
@@ -85,6 +205,29 @@ describe("Graph event mapper", () => {
     expect(appointment.customer).toBe("Private");
     expect(appointment.outlookIssue).toBe("private");
     expect(appointment.bodyPreview).toBeUndefined();
+    expect(appointment.bookingType).toBeUndefined();
+    expect(appointment.siteAddress).toBeUndefined();
+  });
+
+  it("treats personal Outlook events as redacted personal time", () => {
+    const appointment = mapGraphEventToAppointment(
+      event({
+        bodyPreview: "Private medical appointment details",
+        location: { displayName: "Private location" },
+        sensitivity: "personal",
+        subject: "Medical appointment",
+      }),
+      technician,
+    );
+
+    expect(appointment).toMatchObject({
+      customer: "Private",
+      outlookIssue: "private",
+      outlookSensitivity: "personal",
+      title: "Personal",
+    });
+    expect(appointment.bodyPreview).toBeUndefined();
+    expect(appointment.outlookAttendees).toBeUndefined();
   });
 
   it("marks unlinked Outlook service-looking events for review", () => {
@@ -114,7 +257,7 @@ describe("Graph event mapper", () => {
 
     expect(appointment).toMatchObject({
       date: "2026-07-08",
-      end: "17:30",
+      end: "17:00",
       isAllDay: true,
       outlookIssue: "all-day",
       start: "09:00",

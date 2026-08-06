@@ -9,6 +9,7 @@ import {
   getTimelinePosition,
   moveAppointment,
   scheduleRequest,
+  shouldShowTimelineHourLabel,
   timelinePixelToTime,
   timelinePositionToTime,
 } from "./scheduling";
@@ -55,16 +56,16 @@ const appointment: Appointment = {
 
 describe("mock dispatch scheduling helpers", () => {
   it("maps horizontal timeline position to snapped schedule time", () => {
-    expect(timelinePositionToTime(0, 1020)).toBe("09:00");
-    expect(timelinePositionToTime(510, 1020)).toBe("13:15");
-    expect(timelinePositionToTime(1020, 1020)).toBe("17:30");
+    expect(timelinePositionToTime(0, 960)).toBe("09:00");
+    expect(timelinePositionToTime(480, 960)).toBe("13:00");
+    expect(timelinePositionToTime(960, 960)).toBe("17:00");
   });
 
   it("maps fixed track pixels back to snapped schedule time", () => {
     expect(timelinePixelToTime(0)).toBe("09:00");
     expect(timelinePixelToTime(120)).toBe("10:00");
     expect(timelinePixelToTime(780)).toBe("15:30");
-    expect(timelinePixelToTime(1020)).toBe("17:30");
+    expect(timelinePixelToTime(960)).toBe("17:00");
   });
 
   it("positions fixed-track items in pixels from the internal track start", () => {
@@ -97,22 +98,22 @@ describe("mock dispatch scheduling helpers", () => {
     });
   });
 
-  it("keeps the 5:30 PM end marker separate from the 5 PM hour marker", () => {
+  it("uses 5 PM as the single timeline end marker", () => {
     const markers = buildTimelineMarkers();
-    const fivePm = markers.find((marker) => marker.time === "17:00");
-    const endCap = markers.find((marker) => marker.time === "17:30");
+    const fivePmMarkers = markers.filter((marker) => marker.time === "17:00");
 
-    expect(fivePm).toMatchObject({
-      kind: "hour",
+    expect(fivePmMarkers).toEqual([expect.objectContaining({
+      kind: "end",
       leftPx: 960,
       minutesFromStart: 480,
-    });
-    expect(endCap).toMatchObject({
-      kind: "end",
-      leftPx: 1020,
-      minutesFromStart: 510,
-    });
-    expect(endCap?.leftPx).not.toBe(fivePm?.leftPx);
+    })]);
+    expect(markers.some((marker) => marker.time === "17:30")).toBe(false);
+  });
+
+  it("keeps the 5 PM end label visible at every supported track width", () => {
+    expect(shouldShowTimelineHourLabel("16:00", 1_100)).toBe(true);
+    expect(shouldShowTimelineHourLabel("17:00", 1_100)).toBe(true);
+    expect(shouldShowTimelineHourLabel("17:00", 1_400)).toBe(true);
   });
 
   it("clamps fixed-track items to the internal track bounds", () => {
@@ -129,11 +130,11 @@ describe("mock dispatch scheduling helpers", () => {
     expect(
       getTimelineItemPosition({ itemStart: "17:00", itemEnd: "18:00" }),
     ).toMatchObject({
-      clampedEnd: "17:30",
+      clampedEnd: "17:00",
       clampedStart: "17:00",
       endsAfterTimeline: true,
       leftPx: 960,
-      widthPx: 60,
+      widthPx: 0,
     });
   });
 
@@ -168,7 +169,7 @@ describe("mock dispatch scheduling helpers", () => {
     expect(
       getTimelinePosition({ itemStart: "09:00", itemEnd: "10:00" })
         .widthPercent,
-    ).toBeCloseTo(11.7647, 4);
+    ).toBeCloseTo(12.5, 4);
   });
 
   it("positions 10:00 exactly on the 10 AM grid line", () => {
@@ -185,17 +186,17 @@ describe("mock dispatch scheduling helpers", () => {
       hourPosition.leftPercent,
       5,
     );
-    expect(appointmentPosition.leftPercent).toBeCloseTo(11.7647, 4);
+    expect(appointmentPosition.leftPercent).toBeCloseTo(12.5, 4);
   });
 
-  it("sizes 10:00-11:30 as 90 minutes of the 510 minute timeline", () => {
+  it("sizes 10:00-11:30 as 90 minutes of the 480 minute timeline", () => {
     const position = getTimelinePosition({
       itemStart: "10:00",
       itemEnd: "11:30",
     });
 
-    expect(position.leftPercent).toBeCloseTo(11.7647, 4);
-    expect(position.widthPercent).toBeCloseTo(17.6471, 4);
+    expect(position.leftPercent).toBeCloseTo(12.5, 4);
+    expect(position.widthPercent).toBeCloseTo(18.75, 4);
   });
 
   it("positions 11:30 halfway between 11 AM and 12 PM", () => {
@@ -218,10 +219,10 @@ describe("mock dispatch scheduling helpers", () => {
     );
   });
 
-  it("positions 5:00-5:30 so the card ends at 100%", () => {
+  it("positions a booking ending at 5 PM at the timeline edge", () => {
     const position = getTimelinePosition({
-      itemStart: "17:00",
-      itemEnd: "17:30",
+      itemStart: "16:30",
+      itemEnd: "17:00",
     });
 
     expect(position.leftPercent + position.widthPercent).toBeCloseTo(100, 5);
@@ -260,7 +261,7 @@ describe("mock dispatch scheduling helpers", () => {
     });
 
     expect(afterHours).toMatchObject({
-      clampedEnd: "17:30",
+      clampedEnd: "17:00",
       clampedStart: "17:00",
       isAfterTimeline: true,
       isBeforeTimeline: false,
@@ -324,10 +325,11 @@ describe("mock dispatch scheduling helpers", () => {
     ]);
   });
 
-  it("adds fifteen minutes of note time to an onsite booking", () => {
+  it("turns an unscheduled request into a mock appointment", () => {
     const appointments = scheduleRequest({
       appointmentId: "mock-1",
       appointments: [],
+      bookingType: "Remote",
       durationMinutes: 60,
       request,
       start: "14:00",
@@ -341,45 +343,44 @@ describe("mock dispatch scheduling helpers", () => {
       requestId: "100",
       technicianId: "tech-a",
       start: "14:00",
-      end: "15:15",
+      end: "15:00",
       date: "2026-07-08",
       title: "Printer offline",
-      bookingType: "Onsite",
-      noteTimeMinutes: 15,
-      workDurationMinutes: 60,
     });
   });
 
-  it("does not add note time to remote or in-house bookings", () => {
-    const remote = scheduleRequest({
-      appointmentId: "remote-1",
+  it("reserves fifteen minutes for onsite notes without adding it again on move", () => {
+    const scheduled = scheduleRequest({
+      appointmentId: "onsite-1",
       appointments: [],
-      bookingType: "Remote",
+      bookingType: "Onsite",
       durationMinutes: 60,
       request,
-      start: "14:00",
-      technicianId: "tech-a",
-    });
-    const inHouse = scheduleRequest({
-      appointmentId: "in-house-1",
-      appointments: [],
-      bookingType: "In house",
-      durationMinutes: 60,
-      request,
-      start: "14:00",
+      start: "10:00",
       technicianId: "tech-a",
     });
 
-    expect(remote[0]).toMatchObject({
-      bookingType: "Remote",
-      end: "15:00",
-      noteTimeMinutes: 0,
+    expect(scheduled[0]).toMatchObject({
+      bookingType: "Onsite",
+      end: "11:15",
+      noteTimeMinutes: 15,
       workDurationMinutes: 60,
     });
-    expect(inHouse[0]).toMatchObject({
-      bookingType: "In house",
-      end: "15:00",
-      noteTimeMinutes: 0,
+
+    const moved = moveAppointment({
+      appointmentId: "onsite-1",
+      appointments: scheduled,
+      bookingType: "Onsite",
+      durationMinutes: 75,
+      noteTimeMinutes: 15,
+      start: "12:00",
+      technicianId: "tech-b",
+      workDurationMinutes: 60,
+    });
+
+    expect(moved[0]).toMatchObject({
+      end: "13:15",
+      noteTimeMinutes: 15,
       workDurationMinutes: 60,
     });
   });
@@ -399,34 +400,6 @@ describe("mock dispatch scheduling helpers", () => {
       start: "12:30",
       end: "14:00",
       date: "2026-07-09",
-    });
-  });
-
-  it("moves an onsite appointment without adding note time twice", () => {
-    const onsiteAppointment: Appointment = {
-      ...appointment,
-      bookingType: "Onsite",
-      end: "11:15",
-      noteTimeMinutes: 15,
-      workDurationMinutes: 60,
-    };
-    const appointments = moveAppointment({
-      appointmentId: "appt-1",
-      appointments: [onsiteAppointment],
-      bookingType: "Onsite",
-      durationMinutes: 75,
-      noteTimeMinutes: 15,
-      start: "12:30",
-      technicianId: "tech-b",
-      workDurationMinutes: 60,
-    });
-
-    expect(appointments[0]).toMatchObject({
-      bookingType: "Onsite",
-      end: "13:45",
-      noteTimeMinutes: 15,
-      start: "12:30",
-      workDurationMinutes: 60,
     });
   });
 

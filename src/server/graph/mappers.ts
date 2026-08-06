@@ -1,8 +1,14 @@
-import type { Appointment, Technician } from "@/server/dispatch/types";
+import type {
+  Appointment,
+  BookingType,
+  Technician,
+} from "@/server/dispatch/types";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type { MicrosoftGraphEvent } from "./types";
+import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
 
 const REQUEST_NUMBER_PATTERN =
-  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6})\b/i;
+  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6,})\b/i;
 
 export function extractLinkedRequestNumber(
   subject?: string,
@@ -17,32 +23,66 @@ export function extractLinkedRequestNumber(
 export function mapGraphEventToAppointment(
   event: MicrosoftGraphEvent,
   technician: Technician,
+  requestWebBaseUrl?: string,
 ): Appointment {
-  const isPrivate = event.sensitivity === "private" || !event.subject;
+  const sensitivity = event.sensitivity?.toLowerCase();
+  const isPersonal =
+    ["confidential", "personal", "private"].includes(sensitivity ?? "") ||
+    event.categories?.some(
+      (category) => category.trim().toLowerCase() === "personal",
+    ) === true;
+  const isPrivate = isPersonal || !event.subject;
   const requestNumber = isPrivate
     ? undefined
     : extractLinkedRequestNumber(event.subject, event.bodyPreview);
-  const isAllDay = Boolean(event.isAllDay);
-  const serviceLooking = looksLikeServiceBooking(
-    `${event.subject ?? ""} ${event.bodyPreview ?? ""}`,
+  const location = event.location?.displayName?.trim();
+  const locationBookingType = isPrivate
+    ? undefined
+    : bookingTypeFromLocation(location);
+  const serviceDetails = parseServiceDetails(
+    isPrivate ? undefined : event.bodyPreview,
   );
+  const bookingType = isPrivate
+    ? undefined
+    : serviceDetails.bookingType ?? locationBookingType;
+  const isAllDay = Boolean(event.isAllDay);
+  const serviceLooking =
+    Boolean(bookingType) ||
+    looksLikeServiceBooking(
+      `${event.subject ?? ""} ${event.bodyPreview ?? ""}`,
+    );
   const date = graphDateKey(event.start.dateTime);
   const start = isAllDay ? "09:00" : graphTime(event.start.dateTime);
-  const end = isAllDay ? "17:30" : graphTime(event.end.dateTime);
-  const subject = isPrivate ? "Private appointment" : event.subject?.trim();
-  const location = event.location?.displayName?.trim();
+  const end = isAllDay ? "17:00" : graphTime(event.end.dateTime);
+  const subject = isPrivate
+    ? sensitivity === "personal" ||
+      event.categories?.some(
+        (category) => category.trim().toLowerCase() === "personal",
+      )
+      ? "Personal"
+      : "Private appointment"
+    : cleanRequestTitle(event.subject, requestNumber);
 
   return {
+    bookingType,
     bodyPreview: isPrivate ? undefined : event.bodyPreview,
     calendarOwnerEmail: technician.outlookEmail,
-    customer: isPrivate ? "Private" : location || "Outlook calendar",
+    customer: isPrivate
+      ? "Private"
+      : serviceDetails.company ||
+        (locationBookingType ? event.subject?.trim() : location) ||
+        "Outlook calendar",
     date,
     end,
+    helpdeskUrl: buildMspCentralRequestUrl(requestNumber, requestWebBaseUrl),
     id: `outlook-${technician.id}-${event.id}`,
     isAllDay,
-    outlookAttendees: event.attendees
-      ?.map((attendee) => attendee.emailAddress?.address)
-      .filter(Boolean) as string[] | undefined,
+    outlookAttendees: isPrivate
+      ? undefined
+      : (event.attendees
+          ?.map((attendee) => attendee.emailAddress?.address)
+          .filter(Boolean) as string[] | undefined),
+    outlookCategories: event.categories,
     outlookEventId: event.id,
     outlookIssue: outlookIssue({
       isAllDay,
@@ -52,16 +92,66 @@ export function mapGraphEventToAppointment(
     }),
     outlookLinkedRequestNumber: requestNumber,
     outlookOrganizer: event.organizer?.emailAddress?.address,
+    outlookSensitivity: event.sensitivity,
     outlookShowAs: event.showAs,
     outlookWebLink: event.webLink,
     readOnly: true,
     requestId: requestNumber,
+    scheduleGroupId: serviceDetails.scheduleGroupId,
+    siteAddress: serviceDetails.address,
+    siteArea: serviceDetails.site,
     source: "outlook",
     start,
     status: event.showAs === "tentative" ? "tentative" : "busy",
     technicianId: technician.id,
     title: subject || "Outlook appointment",
   };
+}
+
+function bookingTypeFromLocation(location?: string): BookingType | undefined {
+  const normalized = location
+    ?.trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ");
+
+  if (normalized === "on site" || normalized === "onsite") {
+    return "Onsite";
+  }
+
+  if (normalized === "remote") {
+    return "Remote";
+  }
+
+  if (normalized === "in house" || normalized === "inhouse") {
+    return "In house";
+  }
+
+  return undefined;
+}
+
+function parseServiceDetails(bodyPreview?: string) {
+  return {
+    address: structuredField(bodyPreview, "Address"),
+    bookingType: bookingTypeFromLocation(
+      structuredField(bodyPreview, "Booking Type"),
+    ),
+    company: structuredField(bodyPreview, "Company"),
+    scheduleGroupId: structuredField(bodyPreview, "Command-Centre-Booking"),
+    site: structuredField(bodyPreview, "Site"),
+  };
+}
+
+function structuredField(bodyPreview: string | undefined, label: string) {
+  if (!bodyPreview) {
+    return undefined;
+  }
+
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return bodyPreview
+    .match(new RegExp(`(?:^|\\r?\\n)\\s*${escapedLabel}\\s*:\\s*([^\\r\\n]+)`, "i"))
+    ?.[1]
+    ?.trim();
 }
 
 function outlookIssue({

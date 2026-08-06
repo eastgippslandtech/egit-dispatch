@@ -45,6 +45,53 @@ export function buildTimelineLayout(appointments: Appointment[]) {
   };
 }
 
+export function buildStackedTimelineLayout(appointments: Appointment[]) {
+  const sorted = [...appointments].sort((first, second) => {
+    const firstWindow = getBlockedWindow(first);
+    const secondWindow = getBlockedWindow(second);
+
+    return (
+      firstWindow.blockedStart.localeCompare(secondWindow.blockedStart) ||
+      first.start.localeCompare(second.start)
+    );
+  });
+  const laneEnds: string[] = [];
+  const items = sorted.map((appointment) => {
+    const window = getBlockedWindow(appointment);
+    let lane = laneEnds.findIndex((end) => end <= window.blockedStart);
+
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(window.blockedEnd);
+    } else {
+      laneEnds[lane] = window.blockedEnd;
+    }
+
+    const compact = appointmentDurationMinutes(appointment) <= 45;
+    const cardHeight = compact ? 42 : 52;
+
+    return {
+      appointment,
+      appointments: [appointment],
+      cardHeight,
+      compact,
+      groupEnd: window.blockedEnd,
+      groupStart: window.blockedStart,
+      isOverlapGroup: false,
+      lane,
+      laneTop: 14 + lane * 58,
+      overlapCount: 1,
+    } satisfies TimelineLayoutItem;
+  });
+  const laneCount = Math.max(1, laneEnds.length);
+
+  return {
+    items,
+    laneCount,
+    rowHeight: Math.max(92, 28 + laneCount * 52 + (laneCount - 1) * 6),
+  };
+}
+
 export function getTimelineAppointmentSegments(appointment: Appointment) {
   const window = getBlockedWindow(appointment);
 

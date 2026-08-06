@@ -1,6 +1,12 @@
 export class MspCentralConfigurationError extends Error {
-  constructor(message = "MSP Central API not configured.") {
-    super(message);
+  readonly status?: number;
+
+  constructor(
+    message = "MSP Central API not configured.",
+    options: { cause?: unknown; status?: number } = {},
+  ) {
+    super(message, { cause: options.cause });
     this.name = "MspCentralConfigurationError";
+    this.status = options.status;
   }
 }

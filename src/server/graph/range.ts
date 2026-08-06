@@ -18,3 +18,13 @@ export function buildGraphWorkWeekRange(dateKey: string): GraphCalendarRange {
     endDateTime: `${addDaysToDateKey(friday, 1)}T00:00:00`,
   };
 }
+
+export function buildGraphPlanningRange(dateKey: string): GraphCalendarRange {
+  const currentWeek = buildGraphWorkWeekRange(dateKey);
+  const nextWeek = buildGraphWorkWeekRange(addDaysToDateKey(dateKey, 7));
+
+  return {
+    startDateTime: currentWeek.startDateTime,
+    endDateTime: nextWeek.endDateTime,
+  };
+}

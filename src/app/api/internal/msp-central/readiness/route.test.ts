@@ -4,7 +4,8 @@ import { getCommandCentreAccess } from "@/server/auth/session";
 
 import { GET } from "./route";
 
-vi.mock("@/server/auth/session", () => ({
+vi.mock("@/server/auth/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/session")>()),
   getCommandCentreAccess: vi.fn(),
 }));
 
@@ -21,12 +22,24 @@ describe("MSP Central readiness route", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects a wallboard-only session", async () => {
+    getCommandCentreAccessMock.mockResolvedValueOnce({
+      name: "Command Centre Wallboard",
+      status: "wallboard-only",
+    });
+
+    const response = await GET();
+
+    expect(response.status).toBe(403);
+  });
+
   it("returns safe readiness status without secret values", async () => {
     const originalSecret = process.env.MSP_CENTRAL_CLIENT_SECRET;
     const originalRefresh = process.env.MSP_CENTRAL_REFRESH_TOKEN;
     process.env.MSP_CENTRAL_CLIENT_SECRET = "do-not-return";
     process.env.MSP_CENTRAL_REFRESH_TOKEN = "also-secret";
     getCommandCentreAccessMock.mockResolvedValueOnce({
+      accessLevel: "staff",
       email: "simeon@egit.com.au",
       name: "Simeon",
       status: "approved",

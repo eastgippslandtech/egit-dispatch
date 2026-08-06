@@ -47,9 +47,9 @@ export async function verifyWallboardPassword(
       return false;
     }
 
-    const salt = Buffer.from(encodedSalt, "base64url");
-    const expectedKey = Buffer.from(encodedKey, "base64url");
-    if (salt.length !== SALT_BYTES || expectedKey.length !== KEY_BYTES) {
+    const salt = decodeCanonicalBase64url(encodedSalt, SALT_BYTES);
+    const expectedKey = decodeCanonicalBase64url(encodedKey, KEY_BYTES);
+    if (!salt || !expectedKey) {
       return false;
     }
 
@@ -62,6 +62,18 @@ export async function verifyWallboardPassword(
   } catch {
     return false;
   }
+}
+
+function decodeCanonicalBase64url(value: string, expectedBytes: number) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    return undefined;
+  }
+
+  const decoded = Buffer.from(value, "base64url");
+  return decoded.length === expectedBytes &&
+    decoded.toString("base64url") === value
+    ? decoded
+    : undefined;
 }
 
 function deriveKey(

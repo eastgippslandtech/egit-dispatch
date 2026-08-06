@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+
 import type {
   ActiveMobileTimer,
   MobileCustomerSignOff,
@@ -263,22 +265,33 @@ export function CommandCentreMobileApp({ data }: { data: MobilePageData }) {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#07111f] text-slate-100">
+    <main className="min-h-screen overflow-x-hidden bg-cc-canvas text-cc-text">
       <div className="mx-auto flex min-h-screen w-full max-w-md flex-col">
-        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#07111f]/95 px-4 pb-3 pt-4 backdrop-blur">
+        <header className="sticky top-0 z-20 border-b border-cc-border bg-cc-canvas/95 px-4 pb-3 pt-4 backdrop-blur">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
-                {data.signedInStaff.displayName}
-              </p>
-              <h1 className="text-2xl font-bold text-white">
-                Command Centre Mobile
-              </h1>
-              <p className="mt-1 text-xs text-slate-400">
-                {formatDisplayDate(selectedDate)}
-              </p>
+            <div className="flex min-w-0 items-start gap-3">
+              <CommandCentreLogo
+                className="h-12 w-12 shrink-0 object-contain"
+                decorative
+                testId="mobile-command-centre-brand"
+                variant="icon-colour"
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cc-orange">
+                  {data.signedInStaff.displayName}
+                </p>
+                <h1
+                  aria-label="Command Centre Mobile"
+                  className="text-xl font-bold text-white"
+                >
+                  Command Centre<span className="sr-only"> Mobile</span>
+                </h1>
+                <p className="mt-1 text-xs text-slate-400">
+                  {formatDisplayDate(selectedDate)}
+                </p>
+              </div>
             </div>
-            <div className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2 py-1 text-xs font-semibold text-cyan-100">
+            <div className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-2 py-1 text-xs font-semibold text-cc-orange">
               API-ready
             </div>
           </div>
@@ -292,7 +305,7 @@ export function CommandCentreMobileApp({ data }: { data: MobilePageData }) {
                 <p className="truncate text-sm text-white">{activeTimerJob.title}</p>
               </div>
               <button
-                className="inline-flex min-h-10 items-center gap-2 rounded-md bg-emerald-300 px-3 text-sm font-bold text-[#07111f]"
+                className="inline-flex min-h-10 items-center gap-2 rounded-md bg-emerald-300 px-3 text-sm font-bold text-cc-surface-1"
                 type="button"
                 onClick={stopSelectedTimer}
               >
@@ -455,7 +468,7 @@ function TabButton({
     <button
       aria-pressed={active}
       className={`min-h-10 rounded-md text-sm font-semibold ${
-        active ? "bg-cyan-300 text-[#07111f]" : "text-slate-300"
+        active ? "bg-cc-orange text-cc-surface-1" : "text-slate-300"
       }`}
       type="button"
       onClick={onClick}
@@ -479,7 +492,7 @@ function JobCard({
       aria-label={`${job.title} ${job.scheduledStart}`}
       className={`w-full rounded-md border p-3 text-left transition ${
         active
-          ? "border-cyan-300/50 bg-cyan-300/10"
+          ? "border-cc-orange/50 bg-cc-orange/10"
           : "border-white/10 bg-white/[0.04]"
       }`}
       type="button"
@@ -487,7 +500,7 @@ function JobCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-mono text-sm font-semibold text-cyan-100">
+          <p className="font-mono text-sm font-semibold text-cc-orange">
             {job.scheduledStart}-{job.scheduledEnd}
           </p>
           <p className="mt-1 text-base font-bold text-white">{job.title}</p>
@@ -696,7 +709,7 @@ function JobDetail({
     <section className="border-t border-white/10 bg-[#091527] px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="font-mono text-xs text-cyan-200">
+          <p className="font-mono text-xs text-cc-orange">
             {job.requestNumber ?? "Outlook event"}
           </p>
           <h2 className="mt-1 text-xl font-bold text-white">{job.title}</h2>
@@ -738,7 +751,7 @@ function JobDetail({
           {` ${outlookWritebackUnavailable}`}
         </p>
       ) : (
-        <p className="mt-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-sm leading-5 text-cyan-100">
+        <p className="mt-3 rounded-md border border-cc-orange/20 bg-cc-orange/10 px-3 py-2 text-sm leading-5 text-cc-orange">
           {mspCentralUnavailable}
         </p>
       )}
@@ -793,7 +806,7 @@ function JobDetail({
           </p>
         ) : null}
         <textarea
-          className="mt-2 min-h-44 w-full rounded-md border border-white/10 bg-[#07111f] p-3 text-base text-white outline-none focus:border-cyan-300/60"
+          className="mt-2 min-h-44 w-full rounded-md border border-white/10 bg-cc-canvas p-3 text-base text-white outline-none focus:border-cc-orange/60"
           disabled={!jobActions.canAddWorkNote}
           id="work-note"
           value={noteText}
@@ -801,7 +814,7 @@ function JobDetail({
         />
         <div className="mt-2 grid grid-cols-1 gap-2">
           <select
-            className="min-h-11 rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+            className="min-h-11 rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
             disabled={!jobActions.canAddWorkNote}
             value={noteType}
             onChange={(event) =>
@@ -815,7 +828,7 @@ function JobDetail({
             ))}
           </select>
           <input
-            className="min-h-11 rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+            className="min-h-11 rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
             disabled={!jobActions.canAddWorkNote}
             inputMode="numeric"
             placeholder="Optional time spent"
@@ -823,7 +836,7 @@ function JobDetail({
             onChange={(event) => onNoteMinutesChange(event.target.value)}
           />
           <select
-            className="min-h-11 rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+            className="min-h-11 rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
             disabled={!jobActions.canAddWorkNote}
             value={noteStatus}
             onChange={(event) =>
@@ -871,7 +884,7 @@ function JobDetail({
           </p>
         ) : null}
         <select
-          className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+          className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
           disabled={!jobActions.canChangeStatus}
           id="status"
           value={job.status}
@@ -936,7 +949,7 @@ function JobDetail({
               label="Open in Maps"
             />
             {etaState.status === "ready" ? (
-              <p className="rounded-md border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-sm font-semibold text-cyan-100">
+              <p className="rounded-md border border-cc-orange/25 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-cc-orange">
                 ETA: {etaState.etaMinutes} min / {etaState.distanceKm.toFixed(1)} km
               </p>
             ) : null}
@@ -956,7 +969,7 @@ function JobDetail({
         <div className="mt-2 grid grid-cols-1 gap-2">
           <select
             aria-label="Evidence type"
-            className="min-h-11 rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+            className="min-h-11 rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
             disabled={!jobActions.canAttachEvidence}
             value={evidenceKind}
             onChange={(event) =>
@@ -969,7 +982,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Evidence file name
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canAttachEvidence}
               value={evidenceFileName}
               onChange={(event) => setEvidenceFileName(event.target.value)}
@@ -978,7 +991,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Evidence note
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canAttachEvidence}
               value={evidenceNote}
               onChange={(event) => setEvidenceNote(event.target.value)}
@@ -998,13 +1011,13 @@ function JobDetail({
           <ul className="mt-3 space-y-2 text-sm text-slate-300">
             {job.evidence.map((evidence) => (
               <li
-                className="rounded-md border border-white/10 bg-[#07111f] px-3 py-2"
+                className="rounded-md border border-white/10 bg-cc-canvas px-3 py-2"
                 key={evidence.id}
               >
                 <span className="block font-semibold text-slate-100">
                   {evidence.fileName}
                 </span>
-                <span className="mt-0.5 block text-xs text-cyan-100">
+                <span className="mt-0.5 block text-xs text-cc-orange">
                   Mock pending upload
                 </span>
               </li>
@@ -1021,7 +1034,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Customer name
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canCaptureCustomerSignOff}
               value={customerName}
               onChange={(event) => setCustomerName(event.target.value)}
@@ -1030,7 +1043,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Signature text
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canCaptureCustomerSignOff}
               placeholder="Typed signature or initials"
               value={signatureText}
@@ -1070,7 +1083,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Part name
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canTrackParts}
               value={partName}
               onChange={(event) => setPartName(event.target.value)}
@@ -1079,7 +1092,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Part SKU
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canTrackParts}
               value={partSku}
               onChange={(event) => setPartSku(event.target.value)}
@@ -1088,7 +1101,7 @@ function JobDetail({
           <label className="text-xs font-semibold text-slate-300">
             Part quantity
             <input
-              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+              className="mt-1 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
               disabled={!jobActions.canTrackParts}
               inputMode="decimal"
               value={partQuantity}
@@ -1109,13 +1122,13 @@ function JobDetail({
           <ul className="mt-3 space-y-2 text-sm text-slate-300">
             {job.partsUsed.map((part) => (
               <li
-                className="rounded-md border border-white/10 bg-[#07111f] px-3 py-2"
+                className="rounded-md border border-white/10 bg-cc-canvas px-3 py-2"
                 key={part.id}
               >
                 <span className="font-semibold text-slate-100">
                   {part.partName} x{part.quantity}
                 </span>
-                <span className="ml-2 text-xs text-cyan-100">
+                <span className="ml-2 text-xs text-cc-orange">
                   Mock pending sync
                 </span>
               </li>
@@ -1129,7 +1142,7 @@ function JobDetail({
           Reassign technician
         </label>
         <select
-          className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+          className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
           disabled={!jobActions.canReassign}
           id="reassign"
           value={selectedAssignee}
@@ -1220,13 +1233,13 @@ function WorklogSummary({
           />
           <DetailRow label="Rounded time" value={`${stoppedTimer.roundedMinutes} minutes`} />
         </div>
-        <p className="mt-3 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-sm text-cyan-100">
+        <p className="mt-3 rounded-md border border-cc-orange/20 bg-cc-orange/10 px-3 py-2 text-sm text-cc-orange">
           Time rounds up to the next 15 minutes.
         </p>
         <label className="mt-3 block text-sm font-semibold text-slate-100">
           Worklog type
           <select
-            className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-[#07111f] px-3 text-sm text-white"
+            className="mt-2 min-h-11 w-full rounded-md border border-white/10 bg-cc-canvas px-3 text-sm text-white"
             value={worklogType}
             onChange={(event) =>
               onWorklogTypeChange(event.target.value as MobileWorklogType)
@@ -1242,7 +1255,7 @@ function WorklogSummary({
         <label className="mt-3 block text-sm font-semibold text-slate-100">
           Work note
           <textarea
-            className="mt-2 min-h-28 w-full rounded-md border border-white/10 bg-[#07111f] p-3 text-base text-white"
+            className="mt-2 min-h-28 w-full rounded-md border border-white/10 bg-cc-canvas p-3 text-base text-white"
             value={noteText}
             onChange={(event) => onNoteTextChange(event.target.value)}
           />
@@ -1328,7 +1341,7 @@ function ActionButton({
         disabled
           ? "cursor-not-allowed border border-white/10 bg-white/[0.03] text-slate-500"
           : primary
-          ? "bg-cyan-300 text-[#07111f]"
+          ? "bg-cc-orange text-cc-surface-1"
           : "border border-white/10 bg-white/[0.06] text-slate-100"
       }`}
       disabled={disabled}

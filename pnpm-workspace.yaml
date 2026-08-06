@@ -1,4 +1,10 @@
+packages:
+  - apps/technician-mobile
+
+nodeLinker: hoisted
+
 allowBuilds:
+  '@shopify/react-native-skia': true
   esbuild: true
   sharp: false
   unrs-resolver: false

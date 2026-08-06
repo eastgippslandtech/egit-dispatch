@@ -25,18 +25,23 @@ export async function buildOutlookCalendarDashboardData({
   );
 
   try {
-    const appointments = await readTechnicianCalendarAppointments({
-      config,
-      range,
-      technicians: enabledTechnicians,
-    });
+    const appointments = (
+      await readTechnicianCalendarAppointments({
+        config,
+        range,
+        technicians: enabledTechnicians,
+      })
+    ).map((appointment) =>
+      config.mode === "live" ? { ...appointment, readOnly: false } : appointment,
+    );
 
     return {
       ...mockData,
       appointments,
       calendarDataSource: "outlook",
-      calendarReadOnly: true,
-      calendarStatusLabel: "Outlook Read Only",
+      calendarReadOnly: config.mode !== "live",
+      calendarStatusLabel:
+        config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
       healthItems: buildDispatchHealthItems({
         appointments,
         requests: mockData.requests,
@@ -52,8 +57,9 @@ export async function buildOutlookCalendarDashboardData({
       calendarDataSource: "outlook",
       calendarError:
         "Outlook calendar read failed. Mock mode is still available.",
-      calendarReadOnly: true,
-      calendarStatusLabel: "Outlook Read Only",
+      calendarReadOnly: config.mode !== "live",
+      calendarStatusLabel:
+        config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
       healthItems: buildDispatchHealthItems({
         appointments: [],
         requests: mockData.requests,
@@ -78,7 +84,7 @@ export async function readTechnicianCalendarAppointments({
     tenantId: config.microsoft.tenantId,
     timezone: config.microsoft.timezone,
   });
-  const appointments = await Promise.all(
+  const results = await Promise.allSettled(
     technicians.map(async (technician) => {
       const events = await client.listCalendarView({
         ...range,
@@ -86,11 +92,39 @@ export async function readTechnicianCalendarAppointments({
           technician.outlookUserPrincipalName ?? technician.outlookEmail,
       });
 
-      return events.map((event) => mapGraphEventToAppointment(event, technician));
+      return events.map((event) =>
+        mapGraphEventToAppointment(
+          event,
+          technician,
+          config.mspCentral.requestWebBaseUrl,
+        ),
+      );
     }),
   );
 
-  return appointments.flat().map(markClosedDayIssue);
+  const appointments = results.flatMap((result, index) => {
+    if (result.status === "fulfilled") {
+      return result.value;
+    }
+
+    const technician = technicians[index];
+    console.error("Outlook technician calendar read failed", {
+      technician: technician?.displayName,
+      userPrincipalName:
+        technician?.outlookUserPrincipalName ?? technician?.outlookEmail,
+      ...safeGraphError(result.reason),
+    });
+    return [];
+  });
+
+  if (
+    appointments.length === 0 &&
+    results.some((result) => result.status === "rejected")
+  ) {
+    throw results.find((result) => result.status === "rejected")?.reason;
+  }
+
+  return appointments.map(markClosedDayIssue);
 }
 
 export function safeGraphError(error: unknown) {

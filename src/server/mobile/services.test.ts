@@ -23,6 +23,7 @@ describe("mobile technician services", () => {
   it("maps the signed-in Zoho user to a staff profile", () => {
     const staff = resolveStaffProfileForMobile({
       status: "approved",
+      accessLevel: "staff",
       email: "SIMEON@EGIT.COM.AU",
       name: "Simeon",
     });

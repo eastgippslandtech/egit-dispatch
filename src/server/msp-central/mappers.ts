@@ -1,10 +1,10 @@
 import type {
   DispatchRequest,
   Priority,
+  RequestSentiment,
   RequestStatus,
   SlaState,
 } from "@/server/dispatch/types";
-import { bookingTypeForRequest } from "@/server/dispatch/booking";
 import {
   findStaffForMspCentralTechnician,
   getInitialStaffProfiles,
@@ -12,7 +12,16 @@ import {
   type StaffProfile,
 } from "@/server/staff/profiles";
 
-import type { MspCentralRawRequest, MspCentralRawTechnician } from "./types";
+import { bookingTypeForRequest } from "@/server/dispatch/booking";
+import { cleanRequestTitle } from "@/server/dispatch/request-title";
+import type {
+  MspCentralRawNotification,
+  MspCentralRawRequest,
+  MspCentralRawRequestNote,
+  MspCentralRawTechnician,
+  MspCentralRawWorklog,
+  MspCentralRequestUpdate,
+} from "./types";
 import { buildMspCentralRequestUrl } from "./url";
 
 type MapRequestOptions = {
@@ -22,43 +31,97 @@ type MapRequestOptions = {
   sourceSystem?: DispatchRequest["sourceSystem"];
 };
 
+const ADVANCED_WORKS_AUTO_ASSIGNMENT_WARNING =
+  "Auto-assigned by Advanced Works/Viridian IT site proximity.";
+
+const OFFICE_COORDINATES = {
+  bairnsdale: { latitude: -37.8251, longitude: 147.6305 },
+  sale: { latitude: -38.106, longitude: 147.067 },
+} as const;
+
+const SITE_COORDINATES = [
+  ["bairnsdale", -37.8251, 147.6305],
+  ["lakes entrance", -37.881, 147.981],
+  ["lake tyers", -37.85, 148.075],
+  ["metung", -37.891, 147.853],
+  ["paynesville", -37.918, 147.719],
+  ["eagle point", -37.9, 147.683],
+  ["bruthen", -37.706, 147.833],
+  ["orbost", -37.707, 148.455],
+  ["omeo", -37.1, 147.594],
+  ["sale", -38.106, 147.067],
+  ["longford", -38.17, 147.085],
+  ["stratford", -37.967, 147.082],
+  ["maffra", -37.966, 146.975],
+  ["heyfield", -37.982, 146.785],
+  ["rosedale", -38.151, 146.783],
+  ["traralgon", -38.195, 146.541],
+] as const;
+
 export function mapMspCentralRequest(
   raw: MspCentralRawRequest,
   options: MapRequestOptions = {},
 ): DispatchRequest {
+  const now = options.now ?? new Date();
   const profiles = options.profiles ?? getInitialStaffProfiles();
+  const technicianIdentity = normalizeTechnician(raw.technician);
   const match = findStaffForMspCentralTechnician(
-    normalizeTechnician(raw.technician),
+    technicianIdentity,
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
-  const dueAt = readString(raw.due_by_time) ?? new Date(0).toISOString();
-  const scheduledStart = readString(raw.scheduled_start_time);
-  const scheduledEnd = readString(raw.scheduled_end_time);
+  const dueAt = readDateTime(raw.due_by_time) ?? new Date(0).toISOString();
+  const scheduledStart = readDateTime(raw.scheduled_start_time);
+  const scheduledEnd = readDateTime(raw.scheduled_end_time);
   const customer =
     readString(raw.account?.name) ??
-    readString(raw.customer) ??
+    readPriorityStatusName(raw.customer) ??
     "Unknown customer";
-  const onsite = raw.is_onsite ?? raw.onsite ?? undefined;
-  const site =
-    readString(raw.site?.name) ?? readString(raw.site_name) ?? "Unknown site";
+  const notes = htmlToPlainText(raw.description);
+  const inferredSiteTown = findKnownSiteTown([
+    readString(raw.subject),
+    notes,
+    ...readUdfTextValues(raw.udf_fields),
+  ]);
+  const siteAddress =
+    readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined;
+  const siteArea = readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined;
+  const siteName =
+    readString(raw.site?.name) ?? readString(raw.site_name) ?? inferredSiteTown;
+  const siteTown =
+    readString(raw.site?.city) ?? readString(raw.site_town) ?? inferredSiteTown;
+  const site = siteName ?? siteAddress ?? siteTown ?? "Unknown site";
+  const autoAssignment = match.profile
+    ? undefined
+    : autoAssignAdvancedWorksTechnician({
+        customer,
+        site,
+        siteAddress,
+        siteArea,
+        siteName,
+        siteTown,
+        text: [readString(raw.subject), notes],
+        technicianHasIdentity: hasTechnicianIdentity(raw.technician),
+        now,
+      });
   const warnings = [
     ...assetWarnings(raw),
     match.warning,
+    autoAssignment ? ADVANCED_WORKS_AUTO_ASSIGNMENT_WARNING : undefined,
     scheduledStart && !scheduledEnd ? "Scheduled end time missing" : undefined,
   ].filter((warning): warning is string => Boolean(warning));
 
-  return {
+  const request: DispatchRequest = {
     id: readString(raw.id) ?? requestNumber,
-    ageHours: estimateAgeHours(readString(raw.created_time), options.now),
+    ageHours: estimateAgeHours(readDateTime(raw.created_time), now),
     assetNames: raw.assets
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
     billable: Boolean(raw.is_billable ?? raw.billable),
-    bookingType: bookingTypeForRequest({ customer, onsite, site }),
     category: readPriorityStatusName(raw.category),
     contact:
       readString(raw.requester?.email) ??
+      readString(raw.requester?.email_id) ??
       readString(raw.requester_email) ??
       "Unknown contact",
     customer,
@@ -68,8 +131,8 @@ export function mapMspCentralRequest(
       options.requestWebBaseUrl,
     ),
     item: readPriorityStatusName(raw.item),
-    notes: readString(raw.description),
-    onsite,
+    notes,
+    onsite: optionalBoolean(raw.is_onsite ?? raw.onsite),
     priority: mapMspCentralPriority(readPriorityStatusName(raw.priority)),
     readyToBook: isReadyToBook(raw, scheduledStart),
     requester:
@@ -77,30 +140,50 @@ export function mapMspCentralRequest(
       readString(raw.requester_name) ??
       "Unknown requester",
     requestNumber,
+    sentiment: mapMspCentralSentiment(
+      readSentiment(raw.sentiment) ??
+        readSentiment(raw.sentiment_analysis) ??
+        readSentiment(raw.requester_sentiment),
+    ),
     scheduledEnd: scheduledEnd ?? undefined,
     scheduledStart: scheduledStart ?? undefined,
     site,
-    siteAddress:
-      readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined,
-    siteArea: readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined,
-    siteName:
-      readString(raw.site?.name) ?? readString(raw.site_name) ?? undefined,
-    siteTown: readString(raw.site?.city) ?? readString(raw.site_town) ?? undefined,
+    siteAddress,
+    siteArea,
+    siteName,
+    siteTown,
     slaState: mapMspCentralSlaState(
       readString(raw.sla?.status) ?? readString(raw.sla_status),
       dueAt,
-      options.now,
+      now,
     ),
     sourceSystem: options.sourceSystem ?? "msp-central-fixture",
     status: mapMspCentralStatus(readPriorityStatusName(raw.status), scheduledStart),
     subcategory: readPriorityStatusName(raw.subcategory),
-    subject: readString(raw.subject) ?? "Untitled MSP Central request",
+    subject:
+      cleanRequestTitle(readString(raw.subject), requestNumber) ||
+      "Untitled MSP Central request",
+    mspCentralTechnicianEmail: technicianIdentity.email ?? undefined,
+    mspCentralTechnicianId: technicianIdentity.id ?? undefined,
+    mspCentralTechnicianName: technicianIdentity.name ?? undefined,
     technicianId: match.profile
       ? staffProfileToTechnician(match.profile).id
-      : undefined,
-    updatedAt: readString(raw.updated_time),
+      : autoAssignment?.technicianId,
+    updatedAt: readDateTime(raw.updated_time),
+    updatedByEmail:
+      readString(raw.updated_by?.email) ??
+      readString(raw.last_updated_by?.email),
     warnings,
   };
+
+  return {
+    ...request,
+    bookingType: bookingTypeForRequest(request),
+  };
+}
+
+function optionalBoolean(value: boolean | null | undefined) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function mapMspCentralRequests(
@@ -115,11 +198,28 @@ export function mapMspCentralTechnicians(
   profiles: StaffProfile[] = getInitialStaffProfiles(),
 ) {
   return rawTechnicians
-    .map((technician) =>
-      findStaffForMspCentralTechnician(normalizeTechnician(technician), profiles),
-    )
-    .filter((match) => match.profile)
-    .map((match) => staffProfileToTechnician(match.profile as StaffProfile));
+    .map((technician) => {
+      const identity = normalizeTechnician(technician);
+      const match = findStaffForMspCentralTechnician(identity, profiles);
+
+      if (!match.profile) {
+        return undefined;
+      }
+
+      return {
+        ...staffProfileToTechnician(match.profile),
+        mspCentralEmail: identity.email ?? match.profile.mspCentralEmail,
+        mspCentralTechnicianId:
+          identity.id ?? match.profile.mspCentralTechnicianId,
+        mspCentralTechnicianName:
+          identity.name ?? match.profile.mspCentralTechnicianName,
+        sdpTechnicianName:
+          identity.name ?? match.profile.mspCentralTechnicianName ?? undefined,
+      };
+    })
+    .filter((technician): technician is NonNullable<typeof technician> =>
+      Boolean(technician),
+    );
 }
 
 export function mapMspCentralPriority(value?: string): Priority {
@@ -203,6 +303,272 @@ function isReadyToBook(raw: MspCentralRawRequest, scheduledStart?: string | null
   return readyField === true || readPriorityStatusName(raw.status)?.toLowerCase().includes("ready") === true;
 }
 
+function autoAssignAdvancedWorksTechnician({
+  customer,
+  site,
+  siteAddress,
+  siteArea,
+  siteName,
+  siteTown,
+  text,
+  technicianHasIdentity,
+  now,
+}: {
+  customer: string;
+  site: string;
+  siteAddress?: string;
+  siteArea?: string;
+  siteName?: string;
+  siteTown?: string;
+  text: Array<string | undefined>;
+  technicianHasIdentity: boolean;
+  now: Date;
+}) {
+  if (
+    technicianHasIdentity ||
+    !isAdvancedWorksCustomer(customer) ||
+    !isOutsideDispatchHours(now)
+  ) {
+    return undefined;
+  }
+
+  const coordinates = findSiteCoordinates([
+    siteTown,
+    siteArea,
+    siteAddress,
+    siteName,
+    site,
+    ...text,
+  ]);
+
+  if (!coordinates) {
+    return undefined;
+  }
+
+  const bairnsdaleDistance = distanceKm(coordinates, OFFICE_COORDINATES.bairnsdale);
+  const saleDistance = distanceKm(coordinates, OFFICE_COORDINATES.sale);
+
+  return {
+    technicianId:
+      bairnsdaleDistance <= saleDistance ? "tech-jervy" : "tech-matt",
+  };
+}
+
+export function mapMspCentralRequestNotes(
+  notes: MspCentralRawRequestNote[] = [],
+) {
+  const customerResponses: MspCentralRequestUpdate[] = [];
+  const internalNotes: MspCentralRequestUpdate[] = [];
+
+  notes.forEach((note, index) => {
+    const body = htmlToPlainText(note.description);
+    if (!body) return;
+
+    const update = {
+      author:
+        readString(note.created_by?.name) ??
+        readString(note.created_by?.email_id) ??
+        readString(note.created_by?.email) ??
+        "Unknown author",
+      body,
+      createdAt: readDateTime(note.created_time),
+      id: readString(note.id) ?? `request-note-${index}`,
+    };
+
+    const shownToRequester =
+      note.show_to_requester === true ||
+      (note.show_to_requester == null &&
+        note.created_by?.is_technician === false);
+
+    if (shownToRequester) {
+      customerResponses.push(update);
+    } else {
+      internalNotes.push(update);
+    }
+  });
+
+  return { customerResponses, internalNotes };
+}
+
+export function mapMspCentralRequestNotifications(
+  notifications: MspCentralRawNotification[] = [],
+) {
+  return notifications.flatMap((notification, index) => {
+    if (notification.type?.trim().toLowerCase() !== "reply") return [];
+    const body = htmlToPlainText(notification.description);
+    if (!body) return [];
+
+    return [
+      {
+        author:
+          readString(notification.sender?.name) ??
+          readString(notification.sender?.email_id) ??
+          "Helpdesk",
+        body,
+        createdAt: readDateTime(notification.sent_time),
+        id: readString(notification.id) ?? `request-notification-${index}`,
+      } satisfies MspCentralRequestUpdate,
+    ];
+  });
+}
+
+export function mapMspCentralRequestWorklogs(
+  worklogs: MspCentralRawWorklog[] = [],
+) {
+  return worklogs.map((worklog, index): MspCentralRequestUpdate => ({
+    author:
+      readString(worklog.owner?.name) ??
+      readString(worklog.owner?.email_id) ??
+      readString(worklog.created_by?.name) ??
+      readString(worklog.created_by?.email_id) ??
+      "Unknown technician",
+    body: htmlToPlainText(worklog.description) || "Work logged.",
+    createdAt:
+      readDateTime(worklog.recorded_time) ??
+      readDateTime(worklog.start_time) ??
+      undefined,
+    durationMinutes: readWorklogDurationMinutes(worklog),
+    id: readString(worklog.id) ?? `request-worklog-${index}`,
+    isBillable:
+      typeof worklog.is_billable === "boolean"
+        ? worklog.is_billable
+        : undefined,
+  }));
+}
+
+function readWorklogDurationMinutes(worklog: MspCentralRawWorklog) {
+  const hours = Number(worklog.time_spent?.hours ?? 0);
+  const minutes = Number(worklog.time_spent?.minutes ?? 0);
+  const total = hours * 60 + minutes;
+
+  if (Number.isFinite(total) && total > 0) {
+    return Math.round(total);
+  }
+
+  const start = readDateTime(worklog.start_time);
+  const end = readDateTime(worklog.end_time);
+  if (!start || !end) {
+    return undefined;
+  }
+
+  const elapsed = (new Date(end).getTime() - new Date(start).getTime()) / 60_000;
+  return Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed) : undefined;
+}
+
+export function mapMspCentralSentiment(
+  value?: string,
+): RequestSentiment | undefined {
+  const normalized = value?.trim().toLowerCase();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (
+    normalized.includes("negative") ||
+    normalized.includes("unhappy") ||
+    normalized.includes("dissatisfied")
+  ) {
+    return "negative";
+  }
+
+  if (
+    normalized.includes("positive") ||
+    normalized.includes("happy") ||
+    normalized.includes("satisfied")
+  ) {
+    return "positive";
+  }
+
+  if (normalized.includes("neutral")) {
+    return "neutral";
+  }
+
+  return undefined;
+}
+
+export function isOutsideDispatchHours(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    timeZone: "Australia/Melbourne",
+    weekday: "short",
+  }).formatToParts(now);
+  const weekday = parts.find((part) => part.type === "weekday")?.value;
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  const weekdays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+  const minutes = hour * 60 + minute;
+
+  return !weekday ||
+    !weekdays.has(weekday) ||
+    !Number.isFinite(minutes) ||
+    minutes < 9 * 60 ||
+    minutes >= 17 * 60;
+}
+
+function isAdvancedWorksCustomer(customer: string) {
+  const normalized = normalizeText(customer);
+  return normalized.includes("advanced works") ||
+    normalized.includes("advancedworks") ||
+    normalized.includes("viridian");
+}
+
+function findSiteCoordinates(values: Array<string | undefined>) {
+  const town = findKnownSiteTown(values)?.toLowerCase();
+  const match = SITE_COORDINATES.find(([candidate]) => candidate === town);
+
+  return match
+    ? { latitude: match[1], longitude: match[2] }
+    : undefined;
+}
+
+function findKnownSiteTown(values: Array<string | undefined>) {
+  const haystack = ` ${normalizeText(values.filter(Boolean).join(" "))} `;
+  const match = [...SITE_COORDINATES]
+    .sort(([left], [right]) => right.length - left.length)
+    .find(([town]) => haystack.includes(` ${town} `));
+
+  return match?.[0].replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readUdfTextValues(fields?: Record<string, unknown> | null) {
+  if (!fields) {
+    return [];
+  }
+
+  return Object.entries(fields)
+    .filter(([key]) => /address|location|site|suburb|town/i.test(key))
+    .map(([, value]) => readString(value));
+}
+
+function distanceKm(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+) {
+  const earthRadiusKm = 6371;
+  const latitudeDelta = degreesToRadians(to.latitude - from.latitude);
+  const longitudeDelta = degreesToRadians(to.longitude - from.longitude);
+  const fromLatitude = degreesToRadians(from.latitude);
+  const toLatitude = degreesToRadians(to.latitude);
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitude) *
+      Math.cos(toLatitude) *
+      Math.sin(longitudeDelta / 2) ** 2;
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function degreesToRadians(degrees: number) {
+  return degrees * (Math.PI / 180);
+}
+
+function normalizeText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 function assetWarnings(raw: MspCentralRawRequest) {
   if (raw.assets === null) {
     return ["Assets unavailable"];
@@ -227,12 +593,35 @@ function readPriorityStatusName(
   return typeof value === "string" ? value : readString(value?.name);
 }
 
+function readSentiment(
+  value?:
+    | string
+    | { name?: string | null; value?: string | null }
+    | null,
+) {
+  if (typeof value === "string") {
+    return readString(value);
+  }
+
+  return readString(value?.name) ?? readString(value?.value);
+}
+
 function normalizeTechnician(technician?: MspCentralRawTechnician | null) {
   return {
-    email: readString(technician?.email),
+    email:
+      readString(technician?.email_id) ?? readString(technician?.email),
     id: readString(technician?.id),
     name: readString(technician?.name),
   };
+}
+
+function hasTechnicianIdentity(technician?: MspCentralRawTechnician | null) {
+  return Boolean(
+    readString(technician?.email_id) ||
+      readString(technician?.email) ||
+      readString(technician?.id) ||
+      readString(technician?.name),
+  );
 }
 
 function readString(value: unknown) {
@@ -240,6 +629,69 @@ function readString(value: unknown) {
     return undefined;
   }
 
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+export function htmlToPlainText(value?: string | null) {
+  const text = value?.trim();
+  if (!text) return undefined;
+
+  return text
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<\s*li(?:\s[^>]*)?>/gi, "- ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() || undefined;
+}
+
+function readDateTime(value: unknown) {
+  const candidates =
+    typeof value === "object" && value !== null
+      ? [
+          (value as { value?: unknown }).value,
+          (value as { display_value?: unknown }).display_value,
+        ]
+      : [value];
+
+  for (const candidate of candidates) {
+    const parsed = parseDateTimeCandidate(candidate);
+    if (parsed) return parsed;
+  }
+
+  return undefined;
+}
+
+function parseDateTimeCandidate(value: unknown) {
+  if (value === null || value === undefined || typeof value === "object") {
+    return undefined;
+  }
+
+  const text = String(value).trim();
+  if (!text) return undefined;
+
+  const numeric = Number(text);
+  const timestamp =
+    Number.isFinite(numeric) && /^\d+(?:\.\d+)?$/.test(text)
+      ? numeric < 100_000_000_000
+        ? numeric * 1000
+        : numeric
+      : Date.parse(text);
+  if (!Number.isFinite(timestamp)) return undefined;
+
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }

@@ -4,21 +4,58 @@ import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
+  ClipboardList,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
   ExternalLink,
   Filter,
+  Frown,
+  GitMerge,
+  Inbox,
   LogOut,
   MailWarning,
+  Maximize2,
+  Meh,
+  MessageSquare,
+  Monitor,
+  PlugZap,
+  PhoneCall,
+  Plus,
   RefreshCw,
   Search,
+  Smile,
   X,
 } from "lucide-react";
-import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+
+import { CommandCentreLogo } from "@/app/components/command-centre-logo";
+import { PresenceControls } from "@/app/components/presence-controls";
+import type {
+  MspCentralRequestContext,
+  MspCentralRequestUpdate,
+} from "@/server/msp-central/types";
+import type {
+  WorklogDisposition,
+  WorklogForwardBooking,
+  WorklogTransfer,
+  WorklogType,
+} from "@/server/worklogs/disposition";
+import { roundWorklogMinutes } from "@/server/worklogs/time";
+import {
+  applyTicketTemplate,
+  classifyTicketTemplate,
+  evaluateClosureGuardrails,
+  serviceTicketTemplates,
+  updateTrackItem,
+  type RequestTrackItem,
+  type RequestWorkflow,
+  type TrackItemStatus,
+} from "@/server/dispatch/service-workflow";
 
 import type {
   Appointment,
@@ -26,16 +63,18 @@ import type {
   DispatchDashboardData,
   DispatchRequest,
   HealthItem,
-  Priority,
   Severity,
   Technician,
 } from "@/server/dispatch/types";
+import { getChargeableTicketTime } from "@/server/dispatch/chargeable-time";
 import {
+  applyBookingTypeToRequest,
   bookingTiming,
   bookingTypeForRequest,
 } from "@/server/dispatch/booking";
 import { buildDispatchHealthItems } from "@/server/dispatch/health";
 import {
+  buildStackedTimelineLayout,
   buildTimelineLayout,
   getTimelineAppointmentSegments,
   type TimelineLayoutItem,
@@ -62,6 +101,7 @@ import {
   minutesFromTime,
   moveAppointment,
   scheduleRequest,
+  shouldShowTimelineHourLabel,
   TIMELINE_TRACK_WIDTH_PX,
   timeFromMinutes,
   timelinePositionToTime,
@@ -72,6 +112,20 @@ import {
   getWeekTodayDateKey,
   type CurrentTimeIndicator,
 } from "@/server/dispatch/current-time";
+import { formatTalkTime } from "@/server/yeastar/talk-time";
+import {
+  GlobalIntegrationStatus,
+  operationStateForRequest,
+  type TrackedIntegrationOperation,
+  useTrackedIntegrationOperations,
+} from "./operation-status";
+import {
+  clearCachedDashboard,
+  readCachedDashboard,
+  resolveDashboardWithCache,
+  shouldCacheDashboard,
+  writeCachedDashboard,
+} from "./dashboard-cache";
 import {
   applyTravelToAppointment,
   buildAppointmentTravel,
@@ -87,25 +141,42 @@ type DragPayload =
   | { kind: "request"; requestId: string }
   | { kind: "appointment"; appointmentId: string };
 
-const bookingPriorityCardTones: Record<Priority, string> = {
-  Critical: "border-rose-300/70 bg-rose-500/45 text-rose-50",
-  High: "border-amber-300/70 bg-amber-400/40 text-amber-50",
-  Medium: "border-emerald-300/65 bg-emerald-500/35 text-emerald-50",
-  Low: "border-sky-300/65 bg-sky-500/35 text-sky-50",
+type IntegrationReceiptStatus =
+  | "queued"
+  | "syncing"
+  | "retrying"
+  | "synced"
+  | "review_required";
+
+type LiveScheduleResult = {
+  id?: string;
+  operationId?: string;
+  queued?: boolean;
+  status?: IntegrationReceiptStatus;
+  webLink?: string;
 };
 
-export function bookingPriorityCardTone(priority?: Priority) {
-  return priority
-    ? bookingPriorityCardTones[priority]
-    : "border-slate-300/35 bg-slate-500/25 text-slate-50";
-}
+type IntegrationOperationReceipt = {
+  operationId?: string;
+  status?: IntegrationReceiptStatus;
+};
 
-function appointmentBookingType(
-  appointment: Appointment,
-  request?: DispatchRequest,
-): BookingType | undefined {
-  return appointment.bookingType ??
-    (request ? bookingTypeForRequest(request) : undefined);
+export function integrationReceiptDisposition(
+  status?: IntegrationReceiptStatus,
+): {
+  closeForm: boolean;
+  phase: "pending" | "retrying" | "review_required" | "synced";
+} {
+  if (status === "review_required") {
+    return { closeForm: true, phase: "review_required" };
+  }
+  if (status === "retrying") {
+    return { closeForm: true, phase: "retrying" };
+  }
+  if (status === "synced") {
+    return { closeForm: true, phase: "synced" };
+  }
+  return { closeForm: true, phase: "pending" };
 }
 
 const PRIMARY_HEALTH_KEYS = [
@@ -141,9 +212,149 @@ const HEALTH_SHORT_LABELS: Record<string, string> = {
   unscheduled: "Unscheduled",
 };
 
+const BOOKING_PRIORITY_CARD_CLASSES: Record<DispatchRequest["priority"], string> = {
+  Critical: "border-rose-300/75 bg-rose-500/48 text-rose-50 shadow-rose-950/35",
+  High: "border-amber-300/75 bg-amber-400/42 text-amber-50 shadow-amber-950/30",
+  Medium:
+    "border-emerald-300/65 bg-emerald-500/30 text-emerald-50 shadow-emerald-950/25",
+  Low: "border-sky-300/65 bg-sky-500/28 text-sky-50 shadow-sky-950/25",
+};
+
+const SUCCESS_TOAST_DURATION_MS = 3_500;
+const ATTENTION_TOAST_DURATION_MS = 8_000;
+const ATTENTION_TOAST_PATTERN =
+  /\b(?:could not|did not|error|failed|requires?|unavailable)\b/i;
+
+export function toastAutoDismissMs(message: string) {
+  return ATTENTION_TOAST_PATTERN.test(message)
+    ? ATTENTION_TOAST_DURATION_MS
+    : SUCCESS_TOAST_DURATION_MS;
+}
+
+export function bookingCardPriorityClass(
+  priority?: DispatchRequest["priority"] | null,
+) {
+  return priority
+    ? BOOKING_PRIORITY_CARD_CLASSES[priority]
+    : "border-slate-400/30 bg-slate-500/18 text-slate-100 shadow-slate-950/20";
+}
+
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
+type QueueView = "assigned" | "unscheduled";
 type SearchState = "dimmed" | "match" | "normal";
+type SeenTicketUpdateIds = Set<string>;
+type WorkLogTarget = { appointmentId?: string; requestId: string };
+
+export function resolveWorkLogAppointment(
+  appointments: Appointment[],
+  appointmentId?: string,
+) {
+  if (!appointmentId) return undefined;
+  return appointments.find((appointment) => appointment.id === appointmentId);
+}
+
+export function normalizeIntegrationWarnings(
+  warnings: readonly string[],
+  state?: TrackedIntegrationOperation["state"],
+) {
+  const integrationLabel = state === "review_required"
+    ? "Review required"
+    : state === "queued" || state === "syncing" || state === "retrying"
+      ? "Syncing"
+      : undefined;
+  const normalized = integrationLabel
+    ? warnings.filter((warning) => !["syncing", "review required"].includes(warning.trim().toLowerCase()))
+    : warnings;
+  const unique = new Map<string, string>();
+  for (const warning of normalized) {
+    const value = warning.trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (!unique.has(key)) unique.set(key, value);
+  }
+  return integrationLabel ? [integrationLabel, ...unique.values()] : [...unique.values()];
+}
+
+function requestWithIntegrationState(
+  request: DispatchRequest,
+  state?: TrackedIntegrationOperation["state"],
+) {
+  return { ...request, warnings: normalizeIntegrationWarnings(request.warnings, state) };
+}
+
+export function reconcileDashboardWithPendingWritebacks(
+  current: DispatchDashboardData,
+  incoming: DispatchDashboardData,
+  pendingRequestIds: ReadonlySet<string>,
+): DispatchDashboardData {
+  if (pendingRequestIds.size === 0) {
+    return incoming;
+  }
+
+  const pendingRequests = new Map(
+    current.requests
+      .filter((request) => pendingRequestIds.has(request.id))
+      .map((request) => [request.id, request]),
+  );
+  const pendingAppointments = current.appointments.filter(
+    (appointment) =>
+      appointment.requestId && pendingRequestIds.has(appointment.requestId),
+  );
+  const requests = incoming.requests.map(
+    (request) => pendingRequests.get(request.id) ?? request,
+  );
+  for (const request of pendingRequests.values()) {
+    if (!requests.some((candidate) => candidate.id === request.id)) {
+      requests.push(request);
+    }
+  }
+
+  return {
+    ...incoming,
+    appointments: [
+      ...incoming.appointments.filter(
+        (appointment) =>
+          !appointment.requestId || !pendingRequestIds.has(appointment.requestId),
+      ),
+      ...pendingAppointments,
+    ],
+    requests,
+  };
+}
+
+function authoritativeScheduleMatches(
+  current: DispatchDashboardData,
+  incoming: DispatchDashboardData,
+  requestId: string,
+) {
+  const currentRequest = current.requests.find((request) => request.id === requestId);
+  const incomingRequest = incoming.requests.find((request) => request.id === requestId);
+  if (!currentRequest || !incomingRequest) return false;
+  if (
+    currentRequest.scheduledStart !== incomingRequest.scheduledStart ||
+    currentRequest.scheduledEnd !== incomingRequest.scheduledEnd ||
+    currentRequest.technicianId !== incomingRequest.technicianId
+  ) {
+    return false;
+  }
+
+  const currentAppointments = current.appointments.filter(
+    (appointment) => appointment.requestId === requestId,
+  );
+  const incomingAppointments = incoming.appointments.filter(
+    (appointment) => appointment.requestId === requestId,
+  );
+  return currentAppointments.every((appointment) =>
+    incomingAppointments.some(
+      (candidate) =>
+        candidate.date === appointment.date &&
+        candidate.start === appointment.start &&
+        candidate.end === appointment.end &&
+        candidate.technicianId === appointment.technicianId,
+    ),
+  );
+}
 
 const TECHNICIAN_COLUMN_WIDTH_PX = 170;
 const TIMELINE_HEADER_HEIGHT_PX = 40;
@@ -158,25 +369,28 @@ type DropPreview = {
   warning: boolean;
 };
 
-type PendingSchedule =
+export type PendingSchedule =
   | {
       bookingType: BookingType;
+      crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "request";
       date: string;
       requestId: string;
       start: string;
       end: string;
-      noteTimeMinutes: number;
       technicianId: string;
       travel?: TravelEstimate;
       warnings: ScheduleWarning[];
-      workDurationMinutes: number;
     }
   | {
       appointmentId: string;
+      scheduleGroupId: string;
       bookingType: BookingType;
+      crewTechnicianIds?: string[];
       durationMinutes: number;
+      idempotencyKey?: string;
       kind: "appointment";
       date: string;
       oldEnd: string;
@@ -185,21 +399,65 @@ type PendingSchedule =
       oldTechnicianId: string;
       start: string;
       end: string;
-      noteTimeMinutes: number;
       technicianId: string;
       travel?: TravelEstimate;
       warnings: ScheduleWarning[];
-      workDurationMinutes: number;
     };
+
+type DispatchTestSyncEventPayload = {
+  appointmentId?: string;
+  bookingType?: BookingType;
+  date?: string;
+  end?: string;
+  eventType: "scheduled" | "rescheduled" | "cancelled" | "notes_updated" | "work_logged";
+  notes?: string;
+  payload?: {
+    travel?: TravelEstimate;
+    workLog?: {
+      billable: boolean;
+      minutesSpent: number;
+      notes: string;
+      status?: DispatchRequest["status"];
+      visibility: "Customer-facing" | "Internal";
+      workType: BookingType;
+    };
+  };
+  priority?: DispatchRequest["priority"];
+  requestId?: string;
+  start?: string;
+  technicianId?: string;
+};
+
+function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
+  if (anchor.scheduleGroupId) {
+    return candidate.scheduleGroupId === anchor.scheduleGroupId;
+  }
+
+  return (
+    candidate.requestId === anchor.requestId &&
+    candidate.date === anchor.date &&
+    candidate.start === anchor.start &&
+    candidate.end === anchor.end
+  );
+}
 
 export function CommandCentrePrototype({
   authDisabled = false,
   data,
+  showIntegrationStatus = false,
+  showIntegrations = false,
 }: {
   authDisabled?: boolean;
   data: DispatchDashboardData;
+  showIntegrationStatus?: boolean;
+  showIntegrations?: boolean;
 }) {
+  const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
+  const pendingWritebackRequestIds = useRef(new Set<string>());
+  const dashboardRefreshPending = useRef(false);
+  const dashboardRefreshSafetyTimer = useRef<number | undefined>(undefined);
+  const lastDashboardRefreshAt = useRef(0);
   const [selectedDateKey, setSelectedDateKey] = useState(todayDateKey());
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [now, setNow] = useState(() => new Date());
@@ -211,14 +469,115 @@ export function CommandCentrePrototype({
   const [showMoreHealth, setShowMoreHealth] = useState(false);
   const [topSearch, setTopSearch] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
+  const [queueView, setQueueView] = useState<QueueView>("unscheduled");
   const [queueFilters, setQueueFilters] = useState<QueueFilters>({});
   const [openQueueFilter, setOpenQueueFilter] = useState<QueueFilterKey>();
+  const [seenTicketUpdateIds, setSeenTicketUpdateIds] =
+    useState<SeenTicketUpdateIds>(() => new Set());
   const [dragPayload, setDragPayload] = useState<DragPayload | undefined>();
   const [dropPreview, setDropPreview] = useState<DropPreview | undefined>();
   const [pendingSchedule, setPendingSchedule] = useState<
     PendingSchedule | undefined
   >();
+  const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
+  const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
+  const [ticketWorkspaceTarget, setTicketWorkspaceTarget] =
+    useState<WorkLogTarget>();
+  const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
+  const integrationTracker = useTrackedIntegrationOperations({
+    hydrate: showIntegrationStatus,
+  });
+
+  function trackIntegrationReceipt(
+    receipt: { operationId?: string; status?: IntegrationReceiptStatus },
+    target: { appointmentId?: string; requestId?: string } = {},
+  ) {
+    if (!receipt.operationId || !receipt.status || receipt.status === "synced") return;
+    integrationTracker.track({
+      appointmentId: target.appointmentId,
+      operationId: receipt.operationId,
+      requestId: target.requestId,
+      state: receipt.status,
+    });
+  }
+
+  function openWorkLog(requestId: string, appointmentId?: string) {
+    const requestBookings = dashboard.appointments.filter(
+      (appointment) => appointment.requestId === requestId,
+    );
+    if (!appointmentId && requestBookings.length > 0) {
+      setTicketWorkspaceTarget({ requestId });
+      return;
+    }
+    setWorkLogTarget({ appointmentId, requestId });
+  }
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => setToast(undefined),
+      toastAutoDismissMs(toast),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  useEffect(() => {
+    dashboardRefreshPending.current = false;
+    if (dashboardRefreshSafetyTimer.current) {
+      window.clearTimeout(dashboardRefreshSafetyTimer.current);
+      dashboardRefreshSafetyTimer.current = undefined;
+    }
+    const cached = readCachedDashboard(window.localStorage);
+    const resolvedData = resolveDashboardWithCache(data, cached);
+    if (shouldCacheDashboard(data)) {
+      writeCachedDashboard(window.localStorage, data);
+    }
+    setDashboard((current) => {
+      for (const requestId of pendingWritebackRequestIds.current) {
+        if (authoritativeScheduleMatches(current, resolvedData, requestId)) {
+          pendingWritebackRequestIds.current.delete(requestId);
+        }
+      }
+      return reconcileDashboardWithPendingWritebacks(
+        current,
+        resolvedData,
+        pendingWritebackRequestIds.current,
+      );
+    });
+  }, [data]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden || dashboardRefreshPending.current) return;
+      const now = Date.now();
+      if (now - lastDashboardRefreshAt.current < 15_000) return;
+      lastDashboardRefreshAt.current = now;
+      dashboardRefreshPending.current = true;
+      router.refresh();
+      dashboardRefreshSafetyTimer.current = window.setTimeout(() => {
+        dashboardRefreshPending.current = false;
+        dashboardRefreshSafetyTimer.current = undefined;
+      }, 20_000);
+    };
+    const retry = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    const refreshWhenVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(retry);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (dashboardRefreshSafetyTimer.current) {
+        window.clearTimeout(dashboardRefreshSafetyTimer.current);
+      }
+    };
+  }, [router]);
 
   const selectedDateLabel = formatSelectedDateLabel(selectedDateKey);
   const weekDays = useMemo(() => getWeekRange(selectedDateKey), [selectedDateKey]);
@@ -300,9 +659,14 @@ export function CommandCentrePrototype({
 
   const fallbackRequest = selectedRequest ?? dashboard.requests[0];
 
-  const readyRequests = dashboard.requests.filter(
-    (request) => request.readyToBook && !request.scheduledStart,
+  const unscheduledRequests = dashboard.requests.filter(
+    (request) => !request.scheduledStart && request.status !== "Resolved",
   );
+  const assignedRequests = dashboard.requests.filter(
+    (request) => Boolean(request.technicianId) && request.status !== "Resolved",
+  );
+  const visibleQueueRequests =
+    queueView === "assigned" ? assignedRequests : unscheduledRequests;
   const queueRequests = activeHealth
     ? dashboard.requests.filter((request) =>
         requestMatchesHealthFilter(
@@ -311,7 +675,7 @@ export function CommandCentrePrototype({
           scopedData.appointments,
         ),
       )
-    : readyRequests;
+    : visibleQueueRequests;
   const filteredQueueRequests = queueRequests.filter(
     (request) =>
       requestMatchesSearch(request, queueSearch, dashboard.technicians) &&
@@ -333,6 +697,16 @@ export function CommandCentrePrototype({
     queueSearch,
     topSearch,
   });
+  const displayRequests = useMemo(
+    () =>
+      dashboard.requests.map((request) =>
+        requestWithIntegrationState(
+          request,
+          operationStateForRequest(integrationTracker.operations, request.id),
+        ),
+      ),
+    [dashboard.requests, integrationTracker.operations],
+  );
 
   function clearAllFilters() {
     setTopSearch("");
@@ -340,6 +714,94 @@ export function CommandCentrePrototype({
     setQueueFilters({});
     setOpenQueueFilter(undefined);
     setActiveHealth(undefined);
+  }
+
+  function markTicketUpdateSeen(requestId?: string) {
+    if (!requestId) {
+      return;
+    }
+
+    setSeenTicketUpdateIds((current) => {
+      if (current.has(requestId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.add(requestId);
+      return next;
+    });
+  }
+
+  function selectRequest(requestId: string) {
+    setSelection({ kind: "request", requestId });
+    markTicketUpdateSeen(requestId);
+  }
+
+  function selectAppointment(appointment: Appointment) {
+    setSelection({
+      kind: "appointment",
+      appointmentId: appointment.id,
+      requestId: appointment.requestId,
+    });
+    markTicketUpdateSeen(appointment.requestId);
+  }
+
+  function openAppointmentWorkspace(appointment: Appointment) {
+    selectAppointment(appointment);
+    if (!appointment.requestId) return;
+    setTicketWorkspaceTarget({
+      appointmentId: appointment.id,
+      requestId: appointment.requestId,
+    });
+  }
+
+  async function mergeRequestIntoParent(
+    parentRequestId: string,
+    idempotencyKey: string,
+  ) {
+    const childRequest = dashboard.requests.find(
+      (request) => request.id === mergeRequestId,
+    );
+    const parentRequest = dashboard.requests.find(
+      (request) => request.id === parentRequestId,
+    );
+
+    if (!childRequest || !parentRequest) {
+      throw new Error("The duplicate or surviving request is no longer available.");
+    }
+
+    const result = await publishMspCentralRequestMerge({
+      childRequestId: childRequest.id,
+      idempotencyKey,
+      parentRequestId: parentRequest.id,
+    });
+    trackIntegrationReceipt(result, { requestId: childRequest.id });
+    const receipt = integrationReceiptDisposition(result.status);
+    setMergeRequestId(undefined);
+    setToast(
+      receipt.phase === "synced"
+        ? `${childRequest.requestNumber} merged in MSP Central.`
+        : receipt.phase === "review_required"
+          ? `${childRequest.requestNumber} merge saved locally. Provider sync needs review.`
+        : receipt.phase === "retrying"
+          ? `${childRequest.requestNumber} merge queued. MSP Central sync is retrying.`
+          : `${childRequest.requestNumber} merge queued. Syncing with MSP Central.`,
+    );
+    router.refresh();
+  }
+
+  function rescheduleAppointment(appointment: Appointment) {
+    if (appointment.readOnly) {
+      setToast("This Outlook-only booking cannot be rescheduled from Command Centre.");
+      return;
+    }
+    const pending = createPendingSchedule(
+      { kind: "appointment", appointmentId: appointment.id },
+      appointment.technicianId,
+      appointment.start,
+      appointment.date ?? selectedDateKey,
+    );
+    if (pending) setPendingSchedule(pending);
   }
 
   useEffect(() => {
@@ -396,6 +858,252 @@ export function CommandCentrePrototype({
     setDropPreview(undefined);
   }
 
+  async function saveWorkLog({
+    billable,
+    booking,
+    disposition,
+    idempotencyKey,
+    minutes,
+    notes,
+    solution,
+    transfer,
+    workType,
+  }: {
+    billable: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
+    minutes: string;
+    notes: string;
+    solution?: string;
+    transfer?: WorklogTransfer;
+    workType: WorklogType;
+  }) {
+    const requestId = workLogTarget?.requestId;
+    if (!requestId) return;
+    const selectedWorklogRequest = dashboard.requests.find(
+      (candidate) => candidate.id === requestId,
+    );
+    const worklogAppointment = resolveWorkLogAppointment(
+      dashboard.appointments,
+      workLogTarget?.appointmentId,
+    );
+    if (!selectedWorklogRequest) return;
+
+    const trimmedNotes = notes.trim();
+    if (!trimmedNotes) {
+      setToast("Work Log notes are required.");
+      return;
+    }
+    const durationMinutes = roundWorklogMinutes(Number(minutes));
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+      setToast("Work Log time must be greater than zero.");
+      return;
+    }
+
+    const updateAt = new Date().toISOString();
+    const visibility = workType === "internal" ? "internal" : "external";
+    const liveWorklog =
+      dashboard.dispatchDataSource === "msp-central" &&
+      selectedWorklogRequest.sourceSystem === "msp-central";
+    let worklogReceiptStatus: IntegrationReceiptStatus | undefined;
+    const scheduled = Boolean(
+      worklogAppointment || selectedWorklogRequest.scheduledStart,
+    );
+
+    if (scheduled && !disposition) {
+      setToast("Choose what happens to this scheduled job after saving.");
+      return;
+    }
+
+    if (liveWorklog) {
+      const endedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.end)
+        : updateAt;
+      const startedAt = worklogAppointment?.date
+        ? mockIsoTime(worklogAppointment.date, worklogAppointment.start)
+        : new Date(
+            new Date(endedAt).getTime() - durationMinutes * 60_000,
+          ).toISOString();
+
+      try {
+        const result = await publishMspCentralWorklog({
+          booking,
+          currentBooking: worklogAppointment
+            ? {
+                eventId: worklogAppointment.outlookEventId,
+                technicianId: worklogAppointment.technicianId,
+                userPrincipalName: worklogAppointment.calendarOwnerEmail,
+              }
+            : undefined,
+          description: trimmedNotes,
+          disposition,
+          durationMinutes,
+          endedAt,
+          idempotencyKey,
+          requestId,
+          scheduled,
+          solution,
+          startedAt,
+          transfer,
+          visibility,
+          workType,
+        });
+        trackIntegrationReceipt(result, {
+          appointmentId: worklogAppointment?.id,
+          requestId,
+        });
+        worklogReceiptStatus = result.status;
+      } catch (error) {
+        setToast(
+          error instanceof Error
+            ? `Work Log did not save: ${error.message}`
+            : "Work Log did not save.",
+        );
+        return;
+      }
+    }
+
+    setDashboard((current) => {
+      const requests = current.requests.map((request) => {
+        if (request.id !== requestId) {
+          return request;
+        }
+
+        const metadata = [
+          `${durationMinutes} min`,
+          workTypeLabel(workType),
+          billable ? "billable" : "non-billable",
+          liveWorklog ? "MSP Central" : "mock/test-sync",
+        ].join(" / ");
+
+        return {
+          ...request,
+          notes: request.notes
+            ? `${request.notes}\n\n${trimmedNotes} (${metadata})`
+            : `${trimmedNotes} (${metadata})`,
+          readyToBook:
+            disposition === "complete" || disposition === "book_forward"
+              ? false
+              : disposition === "return_to_queue" ||
+                  disposition === "transfer_escalate"
+                ? true
+                : request.readyToBook,
+          scheduledEnd:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.end)
+              : disposition
+                ? undefined
+                : request.scheduledEnd,
+          scheduledStart:
+            disposition === "book_forward" && booking
+              ? mockIsoTime(booking.date, booking.start)
+              : disposition
+                ? undefined
+                : request.scheduledStart,
+          status:
+            disposition === "complete"
+              ? ("Resolved" as const)
+              : disposition === "book_forward"
+                ? ("Scheduled" as const)
+                : disposition === "return_to_queue" ||
+                    disposition === "transfer_escalate"
+                  ? ("Open" as const)
+                  : request.status,
+          technicianId:
+            disposition === "book_forward" && booking
+              ? booking.technicianId
+              : disposition === "transfer_escalate" && transfer
+                ? transfer.targetTechnicianId
+                : request.technicianId,
+          updateInfo: {
+            at: updateAt,
+            detail: trimmedNotes,
+            source: "command-centre" as const,
+            summary:
+              disposition === "complete"
+                ? "Work Log completed"
+                : disposition === "book_forward"
+                  ? "Work Log saved and booked forward"
+                  : disposition === "return_to_queue"
+                    ? "Work Log saved and returned to queue"
+                    : disposition === "transfer_escalate"
+                      ? "Work Log saved and transferred"
+                      : "Work Log added",
+          },
+          warnings: disposition === "complete"
+            ? request.warnings.filter((warning) => warning !== "Ready to book")
+            : request.warnings,
+        };
+      });
+
+      let appointments = current.appointments;
+      if (disposition) {
+        appointments = appointments.filter(
+          (appointment) => appointment.requestId !== requestId,
+        );
+      }
+      if (disposition === "book_forward" && booking) {
+        const technician = current.technicians.find(
+          (candidate) => candidate.id === booking.technicianId,
+        );
+        const replacement = applyTravelToAppointment(
+          {
+            ...(worklogAppointment ?? {
+              customer: selectedWorklogRequest.customer,
+              id: `worklog-forward-${requestId}`,
+              requestId,
+              source: "linked" as const,
+              status: "confirmed" as const,
+              title: selectedWorklogRequest.subject,
+            }),
+            bookingType: booking.bookingType,
+            calendarOwnerEmail: booking.userPrincipalName,
+            customer: selectedWorklogRequest.customer,
+            date: booking.date,
+            end: booking.end,
+            readOnly: false,
+            siteAddress: selectedWorklogRequest.siteAddress,
+            siteArea: selectedWorklogRequest.siteArea,
+            siteTown: selectedWorklogRequest.siteTown,
+            start: booking.start,
+            technicianId: booking.technicianId,
+          },
+          buildAppointmentTravel({
+            request: applyBookingTypeToRequest(
+              selectedWorklogRequest,
+              booking.bookingType,
+            ),
+            technician,
+          }),
+        );
+        appointments = [...appointments, replacement];
+      }
+
+      return {
+        ...current,
+        appointments,
+        requests,
+      };
+    });
+
+    markTicketUpdateSeen(requestId);
+    setWorkLogTarget(undefined);
+    setToast(
+      liveWorklog
+        ? worklogReceiptStatus === "review_required"
+          ? "Work Log saved locally. Provider sync needs review."
+          : disposition === "complete"
+            ? "Work Log queued. Ticket completion is syncing."
+            : "Work Log and outcome queued for sync."
+        : disposition === "complete"
+          ? "Work Log saved and ticket resolved locally for test sync."
+          : disposition
+            ? "Work Log and outcome saved locally for test sync."
+            : "Work Log saved locally for test sync.",
+    );
+  }
+
   function buildWarnings({
     appointmentId,
     date,
@@ -426,9 +1134,18 @@ export function CommandCentrePrototype({
     });
   }
 
-  function buildTravel(request: DispatchRequest | undefined, technicianId: string) {
+  function buildTravel(
+    request: DispatchRequest | undefined,
+    technicianId: string,
+    bookingType?: BookingType,
+  ) {
     return buildAppointmentTravel({
-      request,
+      request: request
+        ? applyBookingTypeToRequest(
+            request,
+            bookingType ?? bookingTypeForRequest(request),
+          )
+        : undefined,
       technician: dashboard.technicians.find(
         (technician) => technician.id === technicianId,
       ),
@@ -437,6 +1154,7 @@ export function CommandCentrePrototype({
 
   function buildTravelCandidate({
     appointmentId,
+    bookingType,
     date,
     end,
     request,
@@ -445,6 +1163,7 @@ export function CommandCentrePrototype({
     travel,
   }: {
     appointmentId?: string;
+    bookingType?: BookingType;
     date: string;
     end: string;
     request?: DispatchRequest;
@@ -455,6 +1174,7 @@ export function CommandCentrePrototype({
     return applyTravelToAppointment(
       {
         id: appointmentId ?? "pending",
+        bookingType,
         customer: request?.customer ?? "Pending",
         date,
         end,
@@ -488,9 +1208,12 @@ export function CommandCentrePrototype({
       }
 
       const bookingType = bookingTypeForRequest(request);
-      const timing = bookingTiming(60, bookingType);
-      const slot = buildScheduleSlot(start, timing.totalDurationMinutes);
-      const travel = buildTravel(request, technicianId);
+      const durationMinutes = 60;
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, technicianId, bookingType);
       const travelAppointment = buildTravelCandidate({
         date,
         end: slot.end,
@@ -502,13 +1225,14 @@ export function CommandCentrePrototype({
 
       return {
         bookingType,
-        durationMinutes: timing.totalDurationMinutes,
+        crewTechnicianIds: [],
+        durationMinutes,
+        idempotencyKey: createClientCommandId("schedule"),
         kind: "request",
         date,
         requestId: request.id,
         start: slot.start,
         end: slot.end,
-        noteTimeMinutes: timing.noteTimeMinutes,
         technicianId,
         travel,
         warnings: buildWarnings({
@@ -518,7 +1242,6 @@ export function CommandCentrePrototype({
           technicianId,
           travelAppointment,
         }),
-        workDurationMinutes: timing.workDurationMinutes,
       } satisfies PendingSchedule;
     }
 
@@ -530,20 +1253,30 @@ export function CommandCentrePrototype({
       return undefined;
     }
 
-    const durationMinutes =
-      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
     const request = dashboard.requests.find(
       (candidate) => candidate.id === appointment.requestId,
     );
     const bookingType =
-      appointmentBookingType(appointment, request) ?? "In house";
-    const noteTimeMinutes = appointment.noteTimeMinutes ?? 0;
-    const workDurationMinutes =
-      appointment.workDurationMinutes ?? durationMinutes - noteTimeMinutes;
-    const slot = buildScheduleSlot(start, durationMinutes);
-    const travel = request ? buildTravel(request, technicianId) : undefined;
+      appointment.bookingType ??
+      (request ? bookingTypeForRequest(request) : "Remote");
+    const totalDurationMinutes =
+      minutesFromTime(appointment.end) - minutesFromTime(appointment.start);
+    const durationMinutes =
+      appointment.workDurationMinutes ??
+      Math.max(
+        15,
+        totalDurationMinutes - (bookingType === "Onsite" ? 15 : 0),
+      );
+    const slot = buildScheduleSlot(
+      start,
+      bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+    );
+    const travel = request
+      ? buildTravel(request, technicianId, bookingType)
+      : undefined;
     const travelAppointment = buildTravelCandidate({
       appointmentId: appointment.id,
+      bookingType,
       date,
       end: slot.end,
       request,
@@ -554,8 +1287,19 @@ export function CommandCentrePrototype({
 
     return {
       appointmentId: appointment.id,
+      scheduleGroupId: appointment.scheduleGroupId ?? appointment.id,
       bookingType,
+      crewTechnicianIds: request
+        ? dashboard.appointments
+            .filter(
+              (candidate) =>
+                sameScheduledBooking(candidate, appointment) &&
+                candidate.technicianId !== technicianId,
+            )
+            .map((candidate) => candidate.technicianId)
+        : [],
       durationMinutes,
+      idempotencyKey: createClientCommandId("schedule"),
       kind: "appointment",
       date,
       oldEnd: appointment.end,
@@ -564,7 +1308,6 @@ export function CommandCentrePrototype({
       oldTechnicianId: appointment.technicianId,
       start: slot.start,
       end: slot.end,
-      noteTimeMinutes,
       technicianId,
       travel,
       warnings: buildWarnings({
@@ -572,10 +1315,9 @@ export function CommandCentrePrototype({
         date,
         end: slot.end,
         start: slot.start,
-          technicianId,
-          travelAppointment,
-        }),
-      workDurationMinutes,
+        technicianId,
+        travelAppointment,
+      }),
     } satisfies PendingSchedule;
   }
 
@@ -625,16 +1367,15 @@ export function CommandCentrePrototype({
     endDrag();
   }
 
-  function updatePendingDuration(workDurationMinutes: number) {
+  function updatePendingDuration(durationMinutes: number) {
     setPendingSchedule((current) => {
       if (!current) {
         return current;
       }
 
-      const timing = bookingTiming(workDurationMinutes, current.bookingType);
       const slot = buildScheduleSlot(
         current.start,
-        timing.totalDurationMinutes,
+        bookingTiming(durationMinutes, current.bookingType).totalDurationMinutes,
       );
       const request =
         current.kind === "request"
@@ -649,6 +1390,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -668,62 +1410,8 @@ export function CommandCentrePrototype({
 
       return {
         ...current,
-        durationMinutes: timing.totalDurationMinutes,
+        durationMinutes,
         end: slot.end,
-        noteTimeMinutes: timing.noteTimeMinutes,
-        warnings,
-        workDurationMinutes: timing.workDurationMinutes,
-      };
-    });
-  }
-
-  function updatePendingBookingType(bookingType: BookingType) {
-    setPendingSchedule((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const timing = bookingTiming(current.workDurationMinutes, bookingType);
-      const slot = buildScheduleSlot(
-        current.start,
-        timing.totalDurationMinutes,
-      );
-      const request =
-        current.kind === "request"
-          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
-          : dashboard.requests.find(
-              (candidate) =>
-                candidate.id ===
-                dashboard.appointments.find(
-                  (appointment) => appointment.id === current.appointmentId,
-                )?.requestId,
-            );
-      const travelAppointment = buildTravelCandidate({
-        appointmentId:
-          current.kind === "appointment" ? current.appointmentId : undefined,
-        date: current.date,
-        end: slot.end,
-        request,
-        start: slot.start,
-        technicianId: current.technicianId,
-        travel: current.travel,
-      });
-      const warnings = buildWarnings({
-        appointmentId:
-          current.kind === "appointment" ? current.appointmentId : undefined,
-        date: current.date,
-        end: slot.end,
-        start: slot.start,
-        technicianId: current.technicianId,
-        travelAppointment,
-      });
-
-      return {
-        ...current,
-        bookingType,
-        durationMinutes: timing.totalDurationMinutes,
-        end: slot.end,
-        noteTimeMinutes: timing.noteTimeMinutes,
         warnings,
       };
     });
@@ -735,7 +1423,11 @@ export function CommandCentrePrototype({
         return current;
       }
 
-      const slot = buildScheduleSlot(start, current.durationMinutes);
+      const slot = buildScheduleSlot(
+        start,
+        bookingTiming(current.durationMinutes, current.bookingType)
+          .totalDurationMinutes,
+      );
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
@@ -749,6 +1441,7 @@ export function CommandCentrePrototype({
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: slot.end,
         request,
@@ -771,6 +1464,50 @@ export function CommandCentrePrototype({
         start: slot.start,
         end: slot.end,
         warnings,
+      };
+    });
+  }
+
+  function updatePendingDate(date: string) {
+    setPendingSchedule((current) => {
+      if (!current || !date) {
+        return current;
+      }
+
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
+        date,
+        end: current.end,
+        request,
+        start: current.start,
+        technicianId: current.technicianId,
+        travel: current.travel,
+      });
+
+      return {
+        ...current,
+        date,
+        warnings: buildWarnings({
+          appointmentId:
+            current.kind === "appointment" ? current.appointmentId : undefined,
+          date,
+          end: current.end,
+          start: current.start,
+          technicianId: current.technicianId,
+          travelAppointment,
+        }),
       };
     });
   }
@@ -791,10 +1528,11 @@ export function CommandCentrePrototype({
                   (appointment) => appointment.id === current.appointmentId,
                 )?.requestId,
             );
-      const travel = buildTravel(request, technicianId);
+      const travel = buildTravel(request, technicianId, current.bookingType);
       const travelAppointment = buildTravelCandidate({
         appointmentId:
           current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType: current.bookingType,
         date: current.date,
         end: current.end,
         request,
@@ -814,9 +1552,86 @@ export function CommandCentrePrototype({
 
       return {
         ...current,
+        crewTechnicianIds: Array.from(
+          new Set([
+            ...(current.crewTechnicianIds ?? []).filter(
+              (candidate) => candidate !== technicianId,
+            ),
+            ...(current.technicianId !== technicianId
+              ? [current.technicianId]
+              : []),
+          ]),
+        ),
         technicianId,
         travel,
         warnings,
+      };
+    });
+  }
+
+  function updatePendingCrew(technicianId: string, selected: boolean) {
+    setPendingSchedule((current) => {
+      if (!current || technicianId === current.technicianId) {
+        return current;
+      }
+
+      const crewTechnicianIds = selected
+        ? Array.from(new Set([...(current.crewTechnicianIds ?? []), technicianId]))
+        : (current.crewTechnicianIds ?? []).filter(
+            (candidate) => candidate !== technicianId,
+          );
+
+      return { ...current, crewTechnicianIds };
+    });
+  }
+
+  function updatePendingBookingType(bookingType: BookingType) {
+    setPendingSchedule((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const request =
+        current.kind === "request"
+          ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
+          : dashboard.requests.find(
+              (candidate) =>
+                candidate.id ===
+                dashboard.appointments.find(
+                  (appointment) => appointment.id === current.appointmentId,
+                )?.requestId,
+            );
+      const slot = buildScheduleSlot(
+        current.start,
+        bookingTiming(current.durationMinutes, bookingType).totalDurationMinutes,
+      );
+      const travel = buildTravel(request, current.technicianId, bookingType);
+      const travelAppointment = buildTravelCandidate({
+        appointmentId:
+          current.kind === "appointment" ? current.appointmentId : undefined,
+        bookingType,
+        date: current.date,
+        end: slot.end,
+        request,
+        start: current.start,
+        technicianId: current.technicianId,
+        travel,
+      });
+
+      return {
+        ...current,
+        bookingType,
+        end: slot.end,
+        travel,
+        warnings: buildWarnings({
+          appointmentId:
+            current.kind === "appointment" ? current.appointmentId : undefined,
+          date: current.date,
+          end: slot.end,
+          start: current.start,
+          technicianId: current.technicianId,
+          travelAppointment,
+        }),
       };
     });
   }
@@ -846,7 +1661,7 @@ export function CommandCentrePrototype({
     endDrag();
   }
 
-  function confirmPendingSchedule() {
+  async function confirmPendingSchedule() {
     if (!pendingSchedule) {
       return;
     }
@@ -860,27 +1675,193 @@ export function CommandCentrePrototype({
         return;
       }
 
-      const appointmentId = `mock-${request.id}-${Date.now()}`;
-      const appointments = scheduleRequest({
-        appointmentId,
-        appointments: dashboard.appointments,
-        bookingType: pendingSchedule.bookingType,
+      const liveSchedule = canUseLiveSchedule(dashboard, request);
+      let liveEvent: LiveScheduleResult | undefined;
+      const existingRequestAppointments = dashboard.appointments.filter(
+        (appointment) => appointment.requestId === request.id,
+      );
+      const previousAssignments = existingRequestAppointments
+        .filter((appointment) => appointment.outlookEventId)
+        .map((appointment) => ({
+          eventId: appointment.outlookEventId as string,
+          technicianId: appointment.technicianId,
+          userPrincipalName:
+            appointment.calendarOwnerEmail ??
+            technicianOutlookIdentity(
+              dashboard.technicians,
+              appointment.technicianId,
+            ),
+        }));
+      const idempotencyKey =
+        pendingSchedule.idempotencyKey ??
+        `schedule:${request.id}:${pendingSchedule.date}:${pendingSchedule.start}:${pendingSchedule.end}:${pendingSchedule.technicianId}`;
+      const appointmentId =
+        existingRequestAppointments.find((appointment) => appointment.scheduleGroupId)
+          ?.scheduleGroupId ??
+        (liveSchedule
+          ? pendingLiveAppointmentId(request.id, idempotencyKey)
+          : `mock-${request.id}-${Date.now()}`);
+      const bookingType = pendingSchedule.bookingType;
+      const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
+        (technicianId) => ({
+          eventId: existingRequestAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          )?.outlookEventId,
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+          technicianId,
+          technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: buildTravel(request, technicianId, bookingType),
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+        }),
+      );
+
+      try {
+        if (liveSchedule) {
+          liveEvent = await publishLiveSchedule({
+            appointmentId,
+            bookingType,
+            crew,
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            eventId: existingRequestAppointments.find(
+              (appointment) =>
+                appointment.technicianId === pendingSchedule.technicianId,
+            )?.outlookEventId,
+            idempotencyKey,
+            location: request.siteAddress ?? request.site,
+            priority: request.priority,
+            previousAssignments,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            scheduleAction:
+              existingRequestAppointments.length > 0
+                ? "rescheduled"
+                : "scheduled",
+            start: pendingSchedule.start,
+            subject: request.subject,
+            technicianId: pendingSchedule.technicianId,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianMspCentralId: technicianMspCentralId(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            travel: pendingSchedule.travel,
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await Promise.all(
+            [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
+              (technicianId, index) =>
+                publishDispatchTestSyncEvent({
+                  appointmentId:
+                    index === 0 ? appointmentId : `${appointmentId}-crew-${technicianId}`,
+                  bookingType,
+                  date: pendingSchedule.date,
+                  end: pendingSchedule.end,
+                  eventType: "scheduled",
+                  priority: request.priority,
+                  requestId: request.id,
+                  start: pendingSchedule.start,
+                  technicianId,
+                  payload: {
+                    travel: buildTravel(request, technicianId, bookingType),
+                  },
+                }),
+            ),
+          );
+        }
+      } catch (error) {
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
+        return;
+      }
+
+      if (liveSchedule && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId,
+          requestId: request.id,
+        });
+      }
+
+      if (liveSchedule) {
+        pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            `${request.requestNumber} was saved locally, but provider sync needs review.`,
+          );
+        }
+      }
+
+      const finalAppointmentId = liveEvent?.id
+        ? `outlook-${pendingSchedule.technicianId}-${liveEvent.id}`
+        : appointmentId;
+      let appointments = scheduleRequest({
+        appointmentId: finalAppointmentId,
+        appointments: dashboard.appointments.filter(
+          (appointment) => appointment.requestId !== request.id,
+        ),
+        bookingType,
         date: pendingSchedule.date,
-        durationMinutes: pendingSchedule.workDurationMinutes,
+        durationMinutes: pendingSchedule.durationMinutes,
         request,
         start: pendingSchedule.start,
         technicianId: pendingSchedule.technicianId,
         travel: pendingSchedule.travel,
       });
+      for (const member of crew) {
+        appointments = scheduleRequest({
+          appointmentId: `${appointmentId}-crew-${member.technicianId}`,
+          appointments,
+          bookingType,
+          date: pendingSchedule.date,
+          durationMinutes: pendingSchedule.durationMinutes,
+          request,
+          start: pendingSchedule.start,
+          technicianId: member.technicianId,
+          travel: buildTravel(request, member.technicianId, bookingType),
+        });
+      }
 
       setDashboard((current) => ({
         ...current,
-        appointments,
+        appointments: appointments.map((appointment) =>
+          appointment.id === finalAppointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+                status: liveSchedule ? "confirmed" : appointment.status,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((candidate) =>
           candidate.id === request.id
             ? {
                 ...candidate,
-                bookingType: pendingSchedule.bookingType,
+                bookingType,
+                onsite: bookingType === "Onsite",
                 status: "Scheduled",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
@@ -893,7 +1874,7 @@ export function CommandCentrePrototype({
                 ),
                 readyToBook: false,
                 warnings: [
-                  "Mock scheduled",
+                  liveSchedule ? "Scheduled" : "Mock scheduled",
                   ...(pendingSchedule.travel?.travelWarning
                     ? [pendingSchedule.travel.travelWarning]
                     : []),
@@ -904,27 +1885,231 @@ export function CommandCentrePrototype({
       }));
       setSelection({
         kind: "appointment",
-        appointmentId,
+        appointmentId: finalAppointmentId,
         requestId: request.id,
       });
-      setToast(`${request.requestNumber} scheduled in mock mode.`);
+      setToast(
+        liveSchedule
+          ? scheduleReceiptMessage(request.requestNumber, liveEvent?.status)
+          : `${request.requestNumber} scheduled in mock mode.`,
+      );
     } else {
-      const movedAppointments = moveAppointment({
-        appointmentId: pendingSchedule.appointmentId,
-        appointments: dashboard.appointments,
-        bookingType: pendingSchedule.bookingType,
-        date: pendingSchedule.date,
-        durationMinutes: pendingSchedule.durationMinutes,
-        noteTimeMinutes: pendingSchedule.noteTimeMinutes,
-        start: pendingSchedule.start,
-        technicianId: pendingSchedule.technicianId,
-        travel: pendingSchedule.travel,
-        workDurationMinutes: pendingSchedule.workDurationMinutes,
-      });
+      const currentAppointment = dashboard.appointments.find(
+        (appointment) => appointment.id === pendingSchedule.appointmentId,
+      );
+      const request = currentAppointment?.requestId
+        ? dashboard.requests.find(
+            (candidate) => candidate.id === currentAppointment.requestId,
+          )
+        : undefined;
+      const bookingType = pendingSchedule.bookingType;
+
+      const liveSchedule =
+        Boolean(request) && canUseLiveSchedule(dashboard, request);
+      let liveEvent: LiveScheduleResult | undefined;
+      const currentTeamAppointments = request
+        ? dashboard.appointments.filter(
+            (appointment) =>
+              currentAppointment
+                ? sameScheduledBooking(appointment, currentAppointment)
+                : false,
+          )
+        : currentAppointment
+          ? [currentAppointment]
+          : [];
+      const crew = (pendingSchedule.crewTechnicianIds ?? []).map(
+        (technicianId) => ({
+          eventId: currentTeamAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          )?.outlookEventId,
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+          technicianId,
+          technicianName: technicianLabel(dashboard.technicians, technicianId),
+          travel: request
+            ? buildTravel(request, technicianId, bookingType)
+            : undefined,
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            technicianId,
+          ),
+        }),
+      );
+      const previousAssignments = currentTeamAppointments
+        .filter(
+          (appointment) =>
+            appointment.outlookEventId && appointment.calendarOwnerEmail,
+        )
+        .map((appointment) => ({
+          eventId: appointment.outlookEventId as string,
+          technicianId: appointment.technicianId,
+          userPrincipalName: appointment.calendarOwnerEmail as string,
+        }));
+      const leadAppointment = currentTeamAppointments.find(
+        (appointment) =>
+          appointment.technicianId === pendingSchedule.technicianId,
+      );
+
+      try {
+        if (liveSchedule && request) {
+          liveEvent = await publishLiveSchedule({
+            appointmentId: pendingSchedule.scheduleGroupId,
+            bookingType,
+            crew,
+            customer: request.customer,
+            date: pendingSchedule.date,
+            end: pendingSchedule.end,
+            idempotencyKey:
+              pendingSchedule.idempotencyKey ?? createClientCommandId("schedule"),
+            eventId: leadAppointment?.outlookEventId,
+            location: request.siteAddress ?? request.site,
+            priority: request.priority,
+            previousAssignments,
+            requestId: request.id,
+            requestNumber: request.requestNumber,
+            start: pendingSchedule.start,
+            subject: request.subject,
+            scheduleAction: "rescheduled",
+            technicianId: pendingSchedule.technicianId,
+            technicianName: technicianLabel(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianEmail: technicianMspCentralIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            technicianMspCentralId: technicianMspCentralId(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+            travel: pendingSchedule.travel,
+            userPrincipalName: technicianOutlookIdentity(
+              dashboard.technicians,
+              pendingSchedule.technicianId,
+            ),
+          });
+        } else {
+          await Promise.all(
+            [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
+              (technicianId, index) =>
+                publishDispatchTestSyncEvent({
+                  appointmentId:
+                    index === 0
+                      ? pendingSchedule.appointmentId
+                      : `${pendingSchedule.appointmentId}-crew-${technicianId}`,
+                  bookingType,
+                  date: pendingSchedule.date,
+                  end: pendingSchedule.end,
+                  eventType: "rescheduled",
+                  priority: request?.priority,
+                  requestId: currentAppointment?.requestId,
+                  start: pendingSchedule.start,
+                  technicianId,
+                  payload: {
+                    travel: buildTravel(request, technicianId, bookingType),
+                  },
+                }),
+            ),
+          );
+        }
+      } catch (error) {
+        setToast(
+          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
+        );
+        return;
+      }
+
+      if (liveSchedule && request && liveEvent) {
+        trackIntegrationReceipt(liveEvent, {
+          appointmentId: pendingSchedule.appointmentId,
+          requestId: request.id,
+        });
+      }
+
+      if (liveSchedule && request) {
+        pendingWritebackRequestIds.current.add(request.id);
+        if (
+          integrationReceiptDisposition(liveEvent?.status).phase ===
+          "review_required"
+        ) {
+          setToast(
+            "The move was saved locally, but provider sync needs review.",
+          );
+        }
+      }
+
+      let movedAppointments = request
+        ? dashboard.appointments.filter(
+            (appointment) =>
+              !currentTeamAppointments.some(
+                (current) => current.id === appointment.id,
+              ),
+          )
+        : dashboard.appointments;
+      const selectedTechnicianIds = [
+        pendingSchedule.technicianId,
+        ...crew.map((member) => member.technicianId),
+      ];
+      if (request) {
+        for (const [index, technicianId] of selectedTechnicianIds.entries()) {
+          const existing = currentTeamAppointments.find(
+            (appointment) => appointment.technicianId === technicianId,
+          );
+          movedAppointments = scheduleRequest({
+            appointmentId:
+              existing?.id ??
+              `${pendingSchedule.appointmentId}-${index === 0 ? "lead" : "crew"}-${technicianId}`,
+            appointments: movedAppointments,
+            bookingType,
+            date: pendingSchedule.date,
+            durationMinutes: pendingSchedule.durationMinutes,
+            request,
+            start: pendingSchedule.start,
+            technicianId,
+            travel: buildTravel(request, technicianId, bookingType),
+          });
+        }
+      } else {
+        movedAppointments = moveAppointment({
+          appointmentId: pendingSchedule.appointmentId,
+          appointments: dashboard.appointments,
+          bookingType,
+          date: pendingSchedule.date,
+          durationMinutes:
+            minutesFromTime(pendingSchedule.end) -
+            minutesFromTime(pendingSchedule.start),
+          noteTimeMinutes: bookingTiming(
+            pendingSchedule.durationMinutes,
+            bookingType,
+          ).noteTimeMinutes,
+          start: pendingSchedule.start,
+          technicianId: pendingSchedule.technicianId,
+          travel: pendingSchedule.travel,
+          workDurationMinutes: pendingSchedule.durationMinutes,
+        });
+      }
+      const selectedLeadAppointmentId =
+        movedAppointments.find(
+          (appointment) =>
+            appointment.requestId === request?.id &&
+            appointment.technicianId === pendingSchedule.technicianId,
+        )?.id ?? pendingSchedule.appointmentId;
 
       setDashboard((current) => ({
         ...current,
-        appointments: movedAppointments,
+        appointments: movedAppointments.map((appointment) =>
+          appointment.id === selectedLeadAppointmentId
+            ? {
+                ...appointment,
+                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
+                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
+                readOnly: false,
+              }
+            : appointment,
+        ),
         requests: current.requests.map((request) =>
           request.id ===
           current.appointments.find(
@@ -932,7 +2117,8 @@ export function CommandCentrePrototype({
           )?.requestId
             ? {
                 ...request,
-                bookingType: pendingSchedule.bookingType,
+                bookingType,
+                onsite: bookingType === "Onsite",
                 technicianId: pendingSchedule.technicianId,
                 scheduledStart: mockIsoTime(
                   pendingSchedule.date,
@@ -948,17 +2134,159 @@ export function CommandCentrePrototype({
       }));
       setSelection({
         kind: "appointment",
-        appointmentId: pendingSchedule.appointmentId,
+        appointmentId: selectedLeadAppointmentId,
       });
-      setToast("Appointment moved in mock mode.");
+      setSelectedDateKey(pendingSchedule.date);
+      setToast(
+        liveSchedule
+          ? moveReceiptMessage(liveEvent?.status)
+          : "Appointment moved in mock mode.",
+      );
     }
 
     setPendingSchedule(undefined);
   }
 
+  async function syncSelectedCalendarEvent() {
+    if (
+      !selectedAppointment ||
+      !selectedRequest ||
+      !canUseLiveSchedule(dashboard, selectedRequest)
+    ) {
+      return;
+    }
+
+    try {
+      const teamAppointments = dashboard.appointments.filter(
+        (appointment) =>
+          sameScheduledBooking(appointment, selectedAppointment),
+      );
+      const leadTechnicianId = teamAppointments.some(
+        (appointment) =>
+          appointment.technicianId === selectedRequest.technicianId,
+      )
+        ? selectedRequest.technicianId!
+        : selectedAppointment.technicianId;
+      const leadAppointment =
+        teamAppointments.find(
+          (appointment) => appointment.technicianId === leadTechnicianId,
+        ) ?? selectedAppointment;
+      const crewAppointments = teamAppointments.filter(
+        (appointment) => appointment.technicianId !== leadTechnicianId,
+      );
+      const liveEvent = await publishLiveSchedule({
+        appointmentId: leadAppointment.id,
+        bookingType:
+          leadAppointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+        crew: crewAppointments.map((appointment) => ({
+          eventId: appointment.outlookEventId,
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+          technicianId: appointment.technicianId,
+          technicianName: technicianLabel(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+          travel: buildTravel(
+            selectedRequest,
+            appointment.technicianId,
+            appointment.bookingType ?? bookingTypeForRequest(selectedRequest),
+          ),
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            appointment.technicianId,
+          ),
+        })),
+        customer: selectedRequest.customer,
+        date: leadAppointment.date ?? selectedDateKey,
+        end: leadAppointment.end,
+        idempotencyKey: createClientCommandId("schedule"),
+        eventId: leadAppointment.outlookEventId,
+        location: selectedRequest.siteAddress ?? selectedRequest.site,
+        previousAssignments: teamAppointments.flatMap((appointment) =>
+          appointment.outlookEventId
+            ? [
+                {
+                  eventId: appointment.outlookEventId,
+                  technicianId: appointment.technicianId,
+                  userPrincipalName: technicianOutlookIdentity(
+                    dashboard.technicians,
+                    appointment.technicianId,
+                  ),
+                },
+              ]
+            : [],
+        ),
+        priority: selectedRequest.priority,
+        requestId: selectedRequest.id,
+        requestNumber: selectedRequest.requestNumber,
+        start: leadAppointment.start,
+        subject: selectedRequest.subject,
+        scheduleAction: "rescheduled",
+        technicianId: leadTechnicianId,
+        technicianName: technicianLabel(
+          dashboard.technicians,
+          leadTechnicianId,
+        ),
+        technicianEmail: technicianMspCentralIdentity(
+          dashboard.technicians,
+          leadTechnicianId,
+        ),
+        technicianMspCentralId: technicianMspCentralId(
+          dashboard.technicians,
+          leadTechnicianId,
+        ),
+        userPrincipalName: technicianOutlookIdentity(
+          dashboard.technicians,
+          leadTechnicianId,
+        ),
+      });
+      trackIntegrationReceipt(liveEvent, {
+        appointmentId: selectedAppointment.id,
+        requestId: selectedRequest.id,
+      });
+
+      const receipt = integrationReceiptDisposition(liveEvent.status);
+      if (receipt.phase === "review_required") {
+        setToast(
+          `${selectedRequest.requestNumber} calendar sync needs review.`,
+        );
+        return;
+      }
+
+      if (receipt.phase === "synced") {
+        setDashboard((current) => ({
+          ...current,
+          appointments: current.appointments.map((appointment) =>
+            appointment.requestId === selectedRequest.id
+              ? {
+                  ...appointment,
+                  outlookEventId:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.id ?? appointment.outlookEventId)
+                      : appointment.outlookEventId,
+                  outlookWebLink:
+                    appointment.technicianId === leadTechnicianId
+                      ? (liveEvent.webLink ?? appointment.outlookWebLink)
+                      : appointment.outlookWebLink,
+                  readOnly: false,
+                  status: "confirmed",
+                }
+              : appointment,
+          ),
+        }));
+      }
+      setToast(manualSyncReceiptMessage(selectedRequest.requestNumber, liveEvent.status));
+    } catch (error) {
+      setToast(liveScheduleErrorMessage(error));
+    }
+  }
+
   return (
     <main
-      className="cc-density-compact h-screen overflow-hidden bg-[#07111f] text-slate-100"
+      className="cc-density-compact h-screen overflow-hidden bg-cc-canvas text-slate-100"
       data-density="compact"
     >
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -967,6 +2295,10 @@ export function CommandCentrePrototype({
           calendarStatusLabel={dashboard.calendarStatusLabel}
           date={selectedDateLabel}
           dateKey={selectedDateKey}
+          integrationOperations={integrationTracker.operations}
+          showIntegrationStatus={showIntegrationStatus}
+          showIntegrations={showIntegrations}
+          technicians={dashboard.technicians}
           timezone={dashboard.timezone}
           viewMode={viewMode}
           searchValue={topSearch}
@@ -984,16 +2316,16 @@ export function CommandCentrePrototype({
         />
 
         <section className="shrink-0 px-3 pb-2 pt-2">
-          <div className="rounded-lg border border-white/10 bg-[#0b1628] p-2.5 shadow-xl">
+          <div className="rounded-lg border border-white/10 bg-cc-surface-1 p-2.5 shadow-xl">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
                   Health
                 </p>
                 <div className="mt-0.5 flex flex-wrap items-center gap-3">
                   <h2 className="text-base font-semibold">Dispatch Health</h2>
                   {activeHealthItem ? (
-                    <span className="rounded-full border border-cyan-200/25 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-100">
+                    <span className="rounded-full border border-cc-orange/25 bg-cc-orange/10 px-2 py-0.5 text-[11px] font-semibold text-cc-orange">
                       {healthLabel(activeHealthItem)}
                     </span>
                   ) : null}
@@ -1006,7 +2338,7 @@ export function CommandCentrePrototype({
                 </p>
                 {filtersActive ? (
                   <button
-                    className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cyan-200/30 hover:text-cyan-100"
+                    className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cc-orange/30 hover:text-cc-orange"
                     type="button"
                     onClick={clearAllFilters}
                   >
@@ -1017,7 +2349,7 @@ export function CommandCentrePrototype({
                   aria-expanded={showMoreHealth}
                   className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${
                     secondaryHealthActive
-                      ? "border-cyan-200/40 bg-cyan-300/12 text-cyan-100"
+                      ? "border-cc-orange/40 bg-cc-orange/12 text-cc-orange"
                       : "border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/25 hover:text-slate-100"
                   }`}
                   type="button"
@@ -1068,22 +2400,53 @@ export function CommandCentrePrototype({
 
         {/* TODO: Future /dispatch/wallboard can reuse this viewport shell, hide side panels, and give the timeline the full wall display width. */}
         <section className="grid min-h-0 flex-1 grid-cols-[minmax(280px,320px)_minmax(720px,1fr)_minmax(320px,360px)] gap-3 px-3 pb-3 max-[1500px]:grid-cols-[280px_minmax(640px,1fr)_320px]">
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1628] shadow-xl">
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="shrink-0 border-b border-white/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Queue
               </p>
-              <div className="mt-1 flex items-center justify-between">
-                <h2 className="text-base font-semibold">
-                  Unscheduled Requests
-                </h2>
-                <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
-                  {filtersActive
-                    ? `${filteredQueueRequests.length} of ${queueRequests.length}`
-                    : readyRequests.length}
-                </span>
+              <div className="mt-1.5 grid grid-cols-2 rounded-md border border-white/10 bg-black/15 p-0.5">
+                {(["unscheduled", "assigned"] as const).map((view) => (
+                  <button
+                    key={view}
+                    aria-label={view === "unscheduled" ? "Unscheduled queue" : "Assigned jobs"}
+                    aria-pressed={queueView === view}
+                    className={`rounded px-2 py-1 text-xs font-semibold transition ${
+                      queueView === view
+                        ? "bg-cc-orange text-cc-surface-1"
+                        : "text-slate-400 hover:text-slate-100"
+                    }`}
+                    type="button"
+                    onClick={() => setQueueView(view)}
+                  >
+                    {view === "unscheduled" ? "Unscheduled" : "Assigned"}
+                  </button>
+                ))}
               </div>
-              <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cyan-200/40">
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <h2 className="text-base font-semibold">
+                  {queueView === "assigned" ? "Assigned Jobs" : "Unscheduled Requests"}
+                </h2>
+                <div className="flex items-center gap-1.5">
+                  {dashboard.dispatchDataSource === "msp-central" ? (
+                    <button
+                      aria-label="Create request"
+                      className="rounded-md border border-cc-orange/35 bg-cc-orange/10 p-1 text-cc-orange hover:bg-cc-orange/20"
+                      title="Create request"
+                      type="button"
+                      onClick={() => setCreateRequestOpen(true)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                  <span className="rounded-full bg-amber-300/15 px-2 py-0.5 text-xs font-semibold text-amber-100">
+                    {filtersActive
+                      ? `${filteredQueueRequests.length} of ${queueRequests.length}`
+                      : visibleQueueRequests.length}
+                  </span>
+                </div>
+              </div>
+              <label className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-300 focus-within:border-cc-orange/40">
                 <Search className="h-4 w-4" />
                 <input
                   className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 placeholder:text-slate-400 focus:outline-none"
@@ -1167,12 +2530,12 @@ export function CommandCentrePrototype({
                 />
               </div>
               {activeHealthItem ? (
-                <div className="mt-2 flex items-center justify-between rounded-md border border-cyan-200/20 bg-cyan-300/10 px-2.5 py-1.5 text-xs text-cyan-50">
+                <div className="mt-2 flex items-center justify-between rounded-md border border-cc-orange/20 bg-cc-orange/10 px-2.5 py-1.5 text-xs text-cc-orange">
                   <span className="font-semibold">
                     Health filter: {healthLabel(activeHealthItem)}
                   </span>
                   <button
-                    className="rounded px-1.5 py-0.5 font-semibold text-cyan-100 hover:bg-white/10"
+                    className="rounded px-1.5 py-0.5 font-semibold text-cc-orange hover:bg-white/10"
                     type="button"
                     onClick={() => setActiveHealth(undefined)}
                   >
@@ -1190,28 +2553,41 @@ export function CommandCentrePrototype({
                   {queueEmptyText}
                 </div>
               ) : null}
-              {filteredQueueRequests.slice(0, 15).map((request) => (
+              {filteredQueueRequests.map((request) => (
                 <RequestQueueCard
                   key={request.id}
                   active={
                     selection.kind === "request" &&
                     selection.requestId === request.id
                   }
-                  request={request}
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    request,
+                    seenTicketUpdateIds,
+                  )}
+                  mergeEnabled={
+                    request.sourceSystem === "msp-central" ||
+                    request.sourceSystem === "msp-central-fixture"
+                  }
+                  request={requestWithIntegrationState(
+                    request,
+                    integrationTracker.stateForRequest(request.id),
+                  )}
                   technician={technicianLabel(dashboard.technicians, request.technicianId)}
                   onDragEnd={endDrag}
                   onDragStart={() =>
                     beginDrag({ kind: "request", requestId: request.id })
                   }
-                  onSelect={() =>
-                    setSelection({ kind: "request", requestId: request.id })
+                  onMerge={() => setMergeRequestId(request.id)}
+                  onOpenWorkspace={() =>
+                    setTicketWorkspaceTarget({ requestId: request.id })
                   }
+                  onSelect={() => selectRequest(request.id)}
                 />
               ))}
             </div>
           </aside>
 
-          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1628] shadow-xl">
+          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2.5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -1225,21 +2601,21 @@ export function CommandCentrePrototype({
                 <p className="mt-0.5 text-xs text-slate-400">
                   {viewMode === "week"
                     ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
-                    : "9:00 AM - 5:30 PM"}
+                    : "9:00 AM - 5:00 PM"}
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-300">
-                <Legend color="bg-rose-500" label="Critical" />
-                <Legend color="bg-amber-400" label="High" />
-                <Legend color="bg-emerald-500" label="Medium" />
-                <Legend color="bg-sky-500" label="Low" />
+                <Legend color="bg-sky-400" label="Scheduled" />
+                <Legend color="bg-amber-400" label="Warning" />
+                <Legend color="bg-rose-500" label="Conflict" />
               </div>
             </div>
             {viewMode === "week" ? (
               <WeekPlanner
                 appointments={weekAppointments}
                 dragPayload={dragPayload}
-                requests={dashboard.requests}
+                requests={displayRequests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1255,14 +2631,9 @@ export function CommandCentrePrototype({
                   clearSelectionForDateChange(dateKey, "day")
                 }
                 onDragEnd={endDrag}
+                onOpenAppointment={openAppointmentWorkspace}
                 onWeekDrop={handleWeekDrop}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             ) : (
               <TimelineBoard
@@ -1272,7 +2643,8 @@ export function CommandCentrePrototype({
                 dropPreview={dropPreview}
                 globalSearch={topSearch}
                 activeHealth={activeHealth}
-                requests={dashboard.requests}
+                requests={displayRequests}
+                seenTicketUpdateIds={seenTicketUpdateIds}
                 selectedAppointmentId={
                   selection.kind === "appointment"
                     ? selection.appointmentId
@@ -1283,15 +2655,10 @@ export function CommandCentrePrototype({
                   beginDrag({ kind: "appointment", appointmentId })
                 }
                 onDragEnd={endDrag}
+                onOpenAppointment={openAppointmentWorkspace}
                 onTimelineDrop={handleTimelineDrop}
                 onTimelineHover={handleTimelineHover}
-                onSelectAppointment={(appointment) =>
-                  setSelection({
-                    kind: "appointment",
-                    appointmentId: appointment.id,
-                    requestId: appointment.requestId,
-                  })
-                }
+                onSelectAppointment={selectAppointment}
               />
             )}
             {dashboard.calendarError ? (
@@ -1303,6 +2670,16 @@ export function CommandCentrePrototype({
 
           <DetailDrawer
             appointment={selectedAppointment}
+            calendarWriteEnabled={canUseLiveSchedule(dashboard, selectedRequest)}
+            integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
+            now={now}
+            showIntegrations={showIntegrations}
+            onOpenWorkLog={openWorkLog}
+            onOpenWorkspace={(requestId, appointmentId) =>
+              setTicketWorkspaceTarget({ appointmentId, requestId })
+            }
+            onReschedule={rescheduleAppointment}
+            onSyncCalendar={syncSelectedCalendarEvent}
             request={selectedRequest}
             selectionKind={selection.kind}
             technician={technicianLabel(
@@ -1313,15 +2690,127 @@ export function CommandCentrePrototype({
         </section>
         {pendingSchedule ? (
           <ScheduleConfirmModal
+            liveSchedule={Boolean(
+              pendingRequest && canUseLiveSchedule(dashboard, pendingRequest),
+            )}
             pending={pendingSchedule}
             request={pendingRequest}
             technicians={dashboard.technicians}
-            onBookingTypeChange={updatePendingBookingType}
             onCancel={() => setPendingSchedule(undefined)}
             onConfirm={confirmPendingSchedule}
+            onCrewChange={updatePendingCrew}
+            onBookingTypeChange={updatePendingBookingType}
+            onDateChange={updatePendingDate}
             onDurationChange={updatePendingDuration}
             onStartChange={updatePendingStart}
             onTechnicianChange={updatePendingTechnician}
+          />
+        ) : null}
+        {workLogTarget ? (
+          <WorkLogModal
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              workLogTarget.appointmentId,
+            )}
+            key={`${workLogTarget.requestId}:${workLogTarget.appointmentId ?? "request"}`}
+            liveWriteback={
+              dashboard.dispatchDataSource === "msp-central" &&
+              dashboard.requests.find(
+                (request) => request.id === workLogTarget.requestId,
+              )?.sourceSystem === "msp-central"
+            }
+            onCancel={() => setWorkLogTarget(undefined)}
+            onSave={saveWorkLog}
+            request={dashboard.requests.find(
+              (request) => request.id === workLogTarget.requestId,
+            )}
+            technicians={dashboard.technicians}
+            technician={technicianLabel(
+              dashboard.technicians,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === workLogTarget.appointmentId,
+              )?.technicianId ??
+                dashboard.requests.find(
+                  (request) => request.id === workLogTarget.requestId,
+                )?.technicianId,
+            )}
+          />
+        ) : null}
+        {ticketWorkspaceTarget ? (
+          <TicketWorkspaceModal
+            appointment={resolveWorkLogAppointment(
+              dashboard.appointments,
+              ticketWorkspaceTarget.appointmentId,
+            )}
+            appointments={dashboard.appointments.filter(
+              (appointment) =>
+                appointment.requestId === ticketWorkspaceTarget.requestId,
+            )}
+            liveWriteback={
+              dashboard.dispatchDataSource === "msp-central" &&
+              dashboard.requests.find(
+                (request) => request.id === ticketWorkspaceTarget.requestId,
+              )?.sourceSystem === "msp-central"
+            }
+            request={dashboard.requests.find(
+              (request) => request.id === ticketWorkspaceTarget.requestId,
+            )}
+            onClose={() => setTicketWorkspaceTarget(undefined)}
+            onOpenWorkLog={(requestId, appointmentId) => {
+              setTicketWorkspaceTarget(undefined);
+              openWorkLog(requestId, appointmentId);
+            }}
+            onSaved={(result) => {
+              setTicketWorkspaceTarget(undefined);
+              trackIntegrationReceipt(result, {
+                appointmentId: ticketWorkspaceTarget.appointmentId,
+                requestId: ticketWorkspaceTarget.requestId,
+              });
+              router.refresh();
+              const receipt = integrationReceiptDisposition(result.status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Communication saved in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Communication saved locally. Provider sync needs review."
+                  : receipt.phase === "retrying"
+                    ? "Communication queued. MSP Central sync is retrying."
+                    : "Communication queued. Syncing with MSP Central.",
+              );
+            }}
+          />
+        ) : null}
+        {createRequestOpen ? (
+          <CreateRequestModal
+            onCancel={() => setCreateRequestOpen(false)}
+            onCreated={(result) => {
+              setCreateRequestOpen(false);
+              setQueueView("unscheduled");
+              trackIntegrationReceipt(result, {
+                requestId: result.pendingRequestId,
+              });
+              const receipt = integrationReceiptDisposition(result.status);
+              setToast(
+                receipt.phase === "synced"
+                  ? "Request created in MSP Central."
+                  : receipt.phase === "review_required"
+                    ? "Request saved locally. Provider sync needs review."
+                  : receipt.phase === "retrying"
+                    ? "Request creation queued. MSP Central sync is retrying."
+                    : "Request creation queued. Syncing with MSP Central.",
+              );
+              router.refresh();
+            }}
+          />
+        ) : null}
+        {mergeRequestId ? (
+          <MergeRequestModal
+            childRequest={dashboard.requests.find(
+              (request) => request.id === mergeRequestId,
+            )}
+            requests={dashboard.requests}
+            onCancel={() => setMergeRequestId(undefined)}
+            onConfirm={mergeRequestIntoParent}
           />
         ) : null}
         {toast ? (
@@ -1341,10 +2830,662 @@ export function CommandCentrePrototype({
   );
 }
 
-function ScheduleConfirmModal({
-  onBookingTypeChange,
+export async function publishDispatchTestSyncEvent(
+  event: DispatchTestSyncEventPayload,
+) {
+  const response = await fetch("/api/internal/dispatch/test-sync/events", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(body?.error ?? "Dispatcher test sync failed.");
+  }
+}
+
+export async function publishLiveSchedule(event: {
+  appointmentId: string;
+  bookingType?: BookingType;
+  crew?: Array<{
+    eventId?: string;
+    technicianEmail?: string;
+    technicianId: string;
+    technicianName: string;
+    travel?: TravelEstimate;
+    userPrincipalName: string;
+  }>;
+  customer: string;
+  date: string;
+  end: string;
+  eventId?: string;
+  idempotencyKey: string;
+  location: string;
+  priority?: DispatchRequest["priority"];
+  previousAssignments?: Array<{
+    eventId: string;
+    technicianId: string;
+    userPrincipalName: string;
+  }>;
+  requestId: string;
+  requestNumber: string;
+  start: string;
+  subject: string;
+  scheduleAction?: "scheduled" | "rescheduled";
+  technicianId: string;
+  technicianName: string;
+  technicianEmail?: string;
+  technicianMspCentralId?: string;
+  travel?: TravelEstimate;
+  userPrincipalName: string;
+}): Promise<LiveScheduleResult> {
+  const response = await fetch("/api/internal/dispatch/live-schedule", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        event?: LiveScheduleResult;
+        operationId?: string;
+        status?: LiveScheduleResult["status"];
+      }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "Live schedule write failed.");
+  }
+
+  return {
+    ...body?.event,
+    operationId: body?.operationId,
+    queued: body?.status === "queued" || body?.status === "syncing",
+    status: body?.status,
+  };
+}
+
+export async function publishMspCentralRequestMerge(event: {
+  childRequestId: string;
+  idempotencyKey: string;
+  parentRequestId: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/merge-requests", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        status?: IntegrationReceiptStatus;
+      }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central request merge failed.");
+  }
+  return body ?? {};
+}
+
+export async function publishMspCentralWorklog(
+  event: import("@/server/worklogs/disposition").WorklogDispositionCommand,
+) {
+  const response = await fetch("/api/internal/msp-central/worklogs", {
+    body: JSON.stringify(event),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(body?.error ?? "MSP Central Work Log save failed.");
+  }
+  return {
+    error: body?.error,
+    operationId: body?.operationId,
+    status: body?.status ?? ("queued" as const),
+  };
+}
+
+const TICKET_CONTEXT_TIMEOUT_MS = 25_000;
+const TICKET_CONTEXT_REFRESH_MS = 60_000;
+
+async function loadMspCentralRequestContext(requestId: string) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    TICKET_CONTEXT_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(
+      `/api/internal/msp-central/requests/${encodeURIComponent(requestId)}/context`,
+      { cache: "no-store", signal: controller.signal },
+    );
+    const body = (await response.json().catch(() => null)) as
+      | (MspCentralRequestContext & { error?: string })
+      | null;
+
+    if (!response.ok || !body) {
+      throw new Error(body?.error ?? "Latest ticket information could not be loaded.");
+    }
+
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        "Ticket refresh timed out. Showing available request data.",
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function loadRequestWorkflow(requestId: string) {
+  const response = await fetch(
+    `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/workflow`,
+    { cache: "no-store" },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; workflow?: RequestWorkflow | null }
+    | null;
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Ticket workflow could not be loaded.");
+  }
+  return body.workflow ?? null;
+}
+
+async function publishRequestWorkflowAction(
+  requestId: string,
+  action: Record<string, unknown>,
+) {
+  const response = await fetch(
+    `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/workflow`,
+    {
+      body: JSON.stringify(action),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; workflow?: RequestWorkflow }
+    | null;
+  if (!response.ok || !body?.workflow) {
+    throw new Error(body?.error ?? "Ticket workflow could not be saved.");
+  }
+  return body.workflow;
+}
+
+async function publishMspCentralCommunication(input: {
+  idempotencyKey: string;
+  message: string;
+  occurredAt: string;
+  requestId: string;
+  visibility: "customer" | "internal";
+}) {
+  const response = await fetch(
+    `/api/internal/msp-central/requests/${encodeURIComponent(input.requestId)}/communications`,
+    {
+      body: JSON.stringify({
+        idempotencyKey: input.idempotencyKey,
+        message: input.message,
+        occurredAt: input.occurredAt,
+        visibility: input.visibility,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
+    | null;
+  if (!response.ok || !body) {
+    throw new Error(body?.error ?? "Communication could not be saved.");
+  }
+  return body;
+}
+
+async function publishMspCentralRequest(input: {
+  customer: string;
+  description: string;
+  idempotencyKey: string;
+  priority: DispatchRequest["priority"];
+  requesterEmail: string;
+  site: string;
+  subject: string;
+}) {
+  const response = await fetch("/api/internal/msp-central/requests", {
+    body: JSON.stringify(input),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        error?: string;
+        operationId?: string;
+        pendingRequestId?: string;
+        status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
+      }
+    | null;
+  if (!response.ok || !body?.operationId) {
+    throw new Error(body?.error ?? "Request could not be created.");
+  }
+  return body;
+}
+
+function createClientCommandId(prefix: string) {
+  const id = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}:${id}`;
+}
+
+export function pendingLiveAppointmentId(
+  requestId: string,
+  idempotencyKey: string,
+) {
+  return `pending-live-${requestId}-${idempotencyKey}`;
+}
+
+function testSyncErrorMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Dispatcher test sync failed.";
+
+  return `Mock schedule did not save: ${message}`;
+}
+
+function scheduleReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} scheduled in MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} scheduled locally. Provider sync is retrying.`;
+  }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} scheduled locally. Provider sync needs review.`;
+  }
+  return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
+}
+
+function moveReceiptMessage(status?: IntegrationReceiptStatus) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return "Appointment moved in MSP Central and Outlook.";
+  }
+  if (receipt.phase === "retrying") {
+    return "Appointment moved locally. Provider sync is retrying.";
+  }
+  if (receipt.phase === "review_required") {
+    return "Appointment moved locally. Provider sync needs review.";
+  }
+  return "Appointment moved. Syncing with MSP Central and Outlook.";
+}
+
+function manualSyncReceiptMessage(
+  requestNumber: string,
+  status?: IntegrationReceiptStatus,
+) {
+  const receipt = integrationReceiptDisposition(status);
+  if (receipt.phase === "synced") {
+    return `${requestNumber} synced to MSP Central and Outlook.`;
+  }
+  if (receipt.phase === "retrying") {
+    return `${requestNumber} sync is queued and retrying.`;
+  }
+  if (receipt.phase === "review_required") {
+    return `${requestNumber} sync needs review.`;
+  }
+  return `${requestNumber} sync queued for MSP Central and Outlook.`;
+}
+
+function liveScheduleErrorMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Live schedule write failed.";
+
+  return `Live schedule did not save: ${message}`;
+}
+
+function canUseLiveSchedule(
+  dashboard: DispatchDashboardData,
+  request?: DispatchRequest,
+) {
+  return (
+    request?.sourceSystem === "msp-central" &&
+    dashboard.dispatchDataSource === "msp-central" &&
+    dashboard.calendarDataSource === "outlook" &&
+    dashboard.calendarReadOnly === false
+  );
+}
+
+function technicianOutlookIdentity(technicians: Technician[], technicianId: string) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+  const identity =
+    technician?.outlookUserPrincipalName ?? technician?.outlookEmail;
+
+  if (!identity) {
+    throw new Error("Technician does not have an Outlook calendar identity.");
+  }
+
+  return identity;
+}
+
+function technicianMspCentralIdentity(
+  technicians: Technician[],
+  technicianId: string,
+) {
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+
+  return technician?.mspCentralEmail ?? technician?.zohoEmail;
+}
+
+function technicianMspCentralId(
+  technicians: Technician[],
+  technicianId: string,
+) {
+  return technicians.find((candidate) => candidate.id === technicianId)
+    ?.mspCentralTechnicianId ?? undefined;
+}
+
+export function MergeRequestModal({
+  childRequest,
   onCancel,
   onConfirm,
+  requests,
+}: {
+  childRequest?: DispatchRequest;
+  onCancel: () => void;
+  onConfirm: (parentRequestId: string, idempotencyKey: string) => Promise<void>;
+  requests: DispatchRequest[];
+}) {
+  const [step, setStep] = useState<"search" | "confirm">("search");
+  const [search, setSearch] = useState("");
+  const [parentRequestId, setParentRequestId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const [idempotencyKey] = useState(() => createClientCommandId("merge"));
+
+  if (!childRequest) {
+    return null;
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const searchResults = normalizedSearch
+    ? requests
+        .filter((request) => request.id !== childRequest.id)
+        .filter((request) =>
+          [
+            request.requestNumber,
+            request.subject,
+            request.customer,
+            request.site,
+            request.requester,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch),
+        )
+        .slice(0, 8)
+    : [];
+  const parentRequest = requests.find(
+    (request) => request.id === parentRequestId,
+  );
+
+  async function confirmMerge() {
+    if (!parentRequest) {
+      return;
+    }
+
+    setSaving(true);
+    setError(undefined);
+
+    try {
+      await onConfirm(parentRequest.id, idempotencyKey);
+    } catch (mergeError) {
+      setError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : "MSP Central request merge failed.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6">
+      <section
+        aria-label={step === "search" ? "Merge request" : "Confirm request merge"}
+        aria-modal="true"
+        className="w-full max-w-2xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+              MSP Central
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">
+              {step === "search" ? "Merge request" : "Confirm request merge"}
+            </h2>
+          </div>
+          <GitMerge className="h-5 w-5 text-cc-orange" />
+        </div>
+
+        {step === "search" ? (
+          <>
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Duplicate ticket
+              </p>
+              <MergeRequestSummary request={childRequest} tone="duplicate" />
+            </div>
+
+            <label className="mt-4 block text-sm font-semibold text-slate-200">
+              Find the surviving parent
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 focus-within:border-cc-orange/50">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                  placeholder="Search request number, subject or customer"
+                  type="search"
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setParentRequestId(undefined);
+                  }}
+                />
+              </div>
+            </label>
+
+            <div className="mt-3 max-h-64 space-y-2 overflow-auto">
+              {!normalizedSearch ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  Search the loaded Helpdesk requests.
+                </div>
+              ) : null}
+              {normalizedSearch && searchResults.length === 0 ? (
+                <div className="rounded-md border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
+                  No matching requests
+                </div>
+              ) : null}
+              {searchResults.map((request) => (
+                <button
+                  key={request.id}
+                  aria-label={`Select ${request.requestNumber} as surviving parent`}
+                  aria-pressed={parentRequestId === request.id}
+                  className={`w-full rounded-md border p-3 text-left transition ${
+                    parentRequestId === request.id
+                      ? "border-cc-orange/70 bg-cc-orange/12"
+                      : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                  }`}
+                  type="button"
+                  onClick={() => setParentRequestId(request.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-mono text-xs text-cc-orange">
+                        {request.requestNumber}
+                      </div>
+                      <div className="mt-1 font-semibold text-slate-100">
+                        {request.subject}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {request.customer} / {request.site}
+                      </div>
+                    </div>
+                    <PriorityChip priority={request.priority} />
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
+                type="button"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!parentRequest}
+                type="button"
+                onClick={() => setStep("confirm")}
+              >
+                Review merge
+              </button>
+            </div>
+          </>
+        ) : parentRequest ? (
+          <>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                  Duplicate removed
+                </p>
+                <MergeRequestSummary request={childRequest} tone="duplicate" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                  Surviving parent
+                </p>
+                <MergeRequestSummary request={parentRequest} tone="parent" />
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-start gap-3 rounded-md border border-rose-300/30 bg-rose-400/10 p-3 text-sm text-rose-50">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-semibold">
+                  This merge is effectively irreversible.
+                </div>
+                <p className="mt-1 text-rose-100/80">
+                  {childRequest.requestNumber} will disappear and its history will
+                  be merged into {parentRequest.requestNumber}.
+                </p>
+              </div>
+            </div>
+
+            {error ? (
+              <div className="mt-3 rounded-md border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">
+                {error}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-40"
+                disabled={saving}
+                type="button"
+                onClick={() => {
+                  setError(undefined);
+                  setStep("search");
+                }}
+              >
+                Back
+              </button>
+              <button
+                aria-busy={saving}
+                className="rounded-md bg-rose-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50"
+                disabled={saving}
+                type="button"
+                onClick={confirmMerge}
+              >
+                {saving ? "Merging requests..." : "Merge duplicate into parent"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function MergeRequestSummary({
+  request,
+  tone,
+}: {
+  request: DispatchRequest;
+  tone: "duplicate" | "parent";
+}) {
+  return (
+    <div
+      className={`mt-2 rounded-md border p-3 ${
+        tone === "duplicate"
+          ? "border-rose-300/20 bg-rose-400/[0.06]"
+          : "border-emerald-300/20 bg-emerald-400/[0.06]"
+      }`}
+    >
+      <div className="font-mono text-xs text-cc-orange">
+        {request.requestNumber}
+      </div>
+      <div className="mt-1 font-semibold text-slate-100">{request.subject}</div>
+      <div className="mt-1 text-xs text-slate-400">
+        {request.customer} / {request.site}
+      </div>
+    </div>
+  );
+}
+
+export function ScheduleConfirmModal({
+  error,
+  liveSchedule,
+  onCancel,
+  onBookingTypeChange,
+  onConfirm,
+  onCrewChange,
+  onDateChange,
   onDurationChange,
   onStartChange,
   onTechnicianChange,
@@ -1352,9 +3493,13 @@ function ScheduleConfirmModal({
   request,
   technicians,
 }: {
-  onBookingTypeChange: (bookingType: BookingType) => void;
+  error?: string;
+  liveSchedule: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onBookingTypeChange: (bookingType: BookingType) => void;
+  onConfirm: () => Promise<void> | void;
+  onCrewChange?: (technicianId: string, selected: boolean) => void;
+  onDateChange?: (date: string) => void;
   onDurationChange: (durationMinutes: number) => void;
   onStartChange: (start: string) => void;
   onTechnicianChange: (technicianId: string) => void;
@@ -1362,6 +3507,7 @@ function ScheduleConfirmModal({
   request?: DispatchRequest;
   technicians: Technician[];
 }) {
+  const [saving, setSaving] = useState(false);
   const technician = technicianLabel(technicians, pending.technicianId);
   const oldTechnician =
     pending.kind === "appointment"
@@ -1380,73 +3526,88 @@ function ScheduleConfirmModal({
     travelToSiteMinutes: pending.travel?.travelToSiteMinutes,
   });
 
+  async function confirmSchedule() {
+    if (saving) return;
+
+    setSaving(true);
+    try {
+      await onConfirm();
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 sm:p-6">
       <section
-        aria-labelledby="schedule-confirm-title"
+        aria-label={
+          pending.kind === "request" ? "Schedule request" : "Move appointment"
+        }
         aria-modal="true"
-        className="w-full max-w-lg rounded-lg border border-cyan-300/20 bg-[#0b1628] p-5 text-slate-100 shadow-2xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
         role="dialog"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
-              Confirm mock schedule
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+              {liveSchedule ? "Confirm live schedule" : "Confirm mock schedule"}
             </p>
-            <h2 id="schedule-confirm-title" className="mt-2 text-xl font-semibold">
+            <h2 className="mt-2 text-xl font-semibold">
               {pending.kind === "request" ? "Schedule request" : "Move appointment"}
             </h2>
           </div>
           <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-xs font-semibold text-amber-100">
-            Mock only
+            {liveSchedule ? "MSP Central + Outlook" : "Mock only"}
           </span>
         </div>
 
-        <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3">
-          <div className="font-mono text-xs text-cyan-200">
-            {request?.requestNumber ?? "Outlook-only"}
-          </div>
-          <div className="mt-1 text-base font-semibold">
-            {request?.subject ?? "Calendar appointment"}
-          </div>
-          {request ? (
-            <div className="mt-1 text-sm text-slate-300">
-              {request.customer} / {request.site}
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+            <div className="font-mono text-xs text-cc-orange">
+              {request?.requestNumber ?? "Outlook-only"}
             </div>
-          ) : null}
-        </div>
-
-        {pending.kind === "appointment" ? (
-          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <ScheduleSummary
-              label="Current"
-              technician={oldTechnician ?? "Unassigned"}
-              date={formatSelectedDateLabel(pending.oldDate)}
-              time={`${pending.oldStart}-${pending.oldEnd}`}
-            />
-            <ScheduleSummary
-              label="New"
-              technician={technician}
-              date={formatSelectedDateLabel(pending.date)}
-              time={`${pending.start}-${pending.end}`}
-            />
+            <div className="mt-1 text-base font-semibold">
+              {request?.subject ?? "Calendar appointment"}
+            </div>
+            {request ? (
+              <div className="mt-1 text-sm text-slate-300">
+                {request.customer} / {request.site}
+              </div>
+            ) : null}
           </div>
-        ) : (
-          <div className="mt-4">
+
+          {pending.kind === "appointment" ? (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <ScheduleSummary
+                label="Current"
+                technician={oldTechnician ?? "Unassigned"}
+                date={formatSelectedDateLabel(pending.oldDate)}
+                time={`${pending.oldStart}-${pending.oldEnd}`}
+              />
+              <ScheduleSummary
+                label="New"
+                technician={technician}
+                date={formatSelectedDateLabel(pending.date)}
+                time={`${pending.start}-${pending.end}`}
+              />
+            </div>
+          ) : (
             <ScheduleSummary
               label="New booking"
               technician={technician}
               date={formatSelectedDateLabel(pending.date)}
               time={`${pending.start}-${pending.end}`}
             />
-          </div>
-        )}
+          )}
+        </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
           <label className="block text-sm font-semibold text-slate-200">
-            Technician
+            Lead technician
             <select
+              aria-label="Lead technician"
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.technicianId}
               onChange={(event) => onTechnicianChange(event.target.value)}
             >
@@ -1458,9 +3619,21 @@ function ScheduleConfirmModal({
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-200">
+            Booking date
+            <input
+              aria-label="Booking date"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100 [color-scheme:dark]"
+              disabled={saving}
+              type="date"
+              value={pending.date}
+              onChange={(event) => onDateChange?.(event.target.value)}
+            />
+          </label>
+          <label className="block text-sm font-semibold text-slate-200">
             Start time
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
               value={pending.start}
               onChange={(event) => onStartChange(event.target.value)}
             >
@@ -1472,50 +3645,83 @@ function ScheduleConfirmModal({
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-200">
-            Booking type
+            Job duration
             <select
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
-              value={pending.bookingType}
-              onChange={(event) =>
-                onBookingTypeChange(event.target.value as BookingType)
-              }
-            >
-              {(["Remote", "Onsite", "In house"] as const).map((bookingType) => (
-                <option key={bookingType} value={bookingType}>
-                  {bookingType}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-sm font-semibold text-slate-200">
-            Work duration
-            <select
-              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
-              value={pending.workDurationMinutes}
+              disabled={saving}
+              value={pending.durationMinutes}
               onChange={(event) => onDurationChange(Number(event.target.value))}
             >
-              {[30, 60, 90, 120, 150, 180].map((duration) => (
+              {[15, 30, 45, 60, 90, 120, 150, 180].map((duration) => (
                 <option key={duration} value={duration}>
                   {formatDuration(duration)}
                 </option>
               ))}
             </select>
           </label>
+          <label className="block text-sm font-semibold text-slate-200">
+            Booking type
+            <select
+              aria-label="Booking type"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              disabled={saving}
+              value={pending.bookingType}
+              onChange={(event) =>
+                onBookingTypeChange(event.target.value as BookingType)
+              }
+            >
+              <option value="Remote">Remote</option>
+              <option value="Onsite">Onsite</option>
+              <option value="In house">In house</option>
+            </select>
+          </label>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2 rounded-md border border-cyan-300/20 bg-cyan-300/[0.06] p-3 text-xs text-slate-200">
-          <span className="font-semibold text-cyan-100">{pending.bookingType}</span>
-          <span>{pending.workDurationMinutes} min work</span>
-          <span>{pending.noteTimeMinutes} min notes</span>
-          <span>{pending.durationMinutes} min total reserved</span>
-        </div>
+        <fieldset className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3">
+          <legend className="px-1 text-sm font-semibold text-slate-200">
+            Additional crew
+          </legend>
+          <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {technicians
+              .filter((candidate) => candidate.id !== pending.technicianId)
+              .map((candidate) => (
+                <label
+                  className="flex cursor-pointer items-center gap-2 rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-200"
+                  key={candidate.id}
+                >
+                  <input
+                    checked={(pending.crewTechnicianIds ?? []).includes(
+                      candidate.id,
+                    )}
+                    className="h-4 w-4 accent-[var(--cc-orange)]"
+                    disabled={saving}
+                    type="checkbox"
+                    onChange={(event) =>
+                      onCrewChange?.(candidate.id, event.target.checked)
+                    }
+                  />
+                  {candidate.displayName}
+                </label>
+              ))}
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            The lead owns the MSP Central request. Every selected technician gets
+            the booking in Outlook, Command Centre, and the phone app.
+          </p>
+        </fieldset>
+
+        {pending.bookingType === "Onsite" ? (
+          <p className="mt-2 text-xs text-slate-400">
+            Includes 15 minutes for onsite notes.
+          </p>
+        ) : null}
 
         {pending.travel ? (
           <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] p-3 text-sm">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               Travel
             </div>
-            <div className="mt-3 grid gap-2 text-xs">
+            <div className="mt-3 grid gap-x-8 gap-y-2 text-xs sm:grid-cols-2">
               <DetailInline label="From" value={pending.travel.officeOriginAddress} />
               <DetailInline
                 label="To"
@@ -1556,7 +3762,7 @@ function ScheduleConfirmModal({
             </div>
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {pending.warnings.map((warning) => (
-                <li key={`${warning.code}-${warning.message}`}>{warning.message}</li>
+                <li key={warning.code}>{warning.message}</li>
               ))}
             </ul>
           </div>
@@ -1566,7 +3772,1600 @@ function ScheduleConfirmModal({
           </div>
         )}
 
+        {error ? (
+          <div className="mt-4 rounded-md border border-rose-300/25 bg-rose-400/10 px-3 py-2 text-sm font-semibold text-rose-100" role="alert">
+            {error}
+          </div>
+        ) : null}
+
+        {saving ? (
+          <div
+            className="mt-4 flex items-center gap-2 rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-orange-100"
+            role="status"
+          >
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Saving booking and starting background sync
+          </div>
+        ) : null}
+
         <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-wait disabled:opacity-50"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            aria-busy={saving}
+            className="inline-flex min-w-36 items-center justify-center gap-2 rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-wait disabled:opacity-70"
+            disabled={saving}
+            type="button"
+            onClick={confirmSchedule}
+          >
+            {saving ? (
+              "Scheduling..."
+            ) : liveSchedule ? (
+              "Confirm schedule"
+            ) : (
+              "Confirm mock schedule"
+            )}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function CreateRequestModal({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void;
+  onCreated: (result: IntegrationOperationReceipt & { pendingRequestId?: string }) => void;
+}) {
+  const [subject, setSubject] = useState("");
+  const [description, setDescription] = useState("");
+  const [requesterEmail, setRequesterEmail] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [site, setSite] = useState("");
+  const [priority, setPriority] = useState<DispatchRequest["priority"]>("Medium");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const [idempotencyKey] = useState(() => createClientCommandId("request"));
+
+  async function submit() {
+    if (!subject.trim() || saving) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const created = await publishMspCentralRequest({
+        customer: customer.trim(),
+        description: description.trim(),
+        idempotencyKey,
+        priority,
+        requesterEmail: requesterEmail.trim(),
+        site: site.trim(),
+        subject: subject.trim(),
+      });
+      if (!created.operationId) throw new Error("Request was not queued.");
+      onCreated(created);
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Request could not be created.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+      <section
+        aria-label="Create request"
+        aria-modal="true"
+        className="w-full max-w-3xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">MSP Central</p>
+            <h2 className="mt-1 text-xl font-semibold">Create request</h2>
+          </div>
+          <button
+            aria-label="Close create request"
+            className="rounded-md border border-white/10 bg-white/5 p-2"
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Subject
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Requester email
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              type="email"
+              value={requesterEmail}
+              onChange={(event) => setRequesterEmail(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Priority
+            <select
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={priority}
+              onChange={(event) =>
+                setPriority(event.target.value as DispatchRequest["priority"])
+              }
+            >
+              {(["Low", "Medium", "High", "Critical"] as const).map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold">
+            Customer
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={customer}
+              onChange={(event) => setCustomer(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Site
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={site}
+              onChange={(event) => setSite(event.target.value)}
+            />
+          </label>
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Description
+            <textarea
+              className="mt-2 min-h-36 w-full rounded-md border border-white/10 bg-[#111d30] p-3 font-normal"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+        </div>
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            aria-busy={saving}
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+            disabled={!subject.trim() || saving}
+            type="button"
+            onClick={submit}
+          >
+            {saving ? "Creating request..." : "Create request"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function TicketWorkspaceModal({
+  appointment,
+  appointments,
+  liveWriteback,
+  onClose,
+  onOpenWorkLog,
+  onSchedule,
+  onSaved,
+  request,
+}: {
+  appointment?: Appointment;
+  appointments: Appointment[];
+  liveWriteback: boolean;
+  onClose: () => void;
+  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
+  onSchedule?: (requestId: string) => void;
+  onSaved: (result: IntegrationOperationReceipt) => void;
+  request?: DispatchRequest;
+}) {
+  const [tab, setTab] = useState<"comms" | "details" | "tracks">("details");
+  const [context, setContext] = useState<MspCentralRequestContext>();
+  const [loading, setLoading] = useState(liveWriteback);
+  const [error, setError] = useState<string>();
+  const [refreshWarning, setRefreshWarning] = useState<string>();
+  const [message, setMessage] = useState("");
+  const [visibility, setVisibility] = useState<"customer" | "internal">("customer");
+  const [sending, setSending] = useState(false);
+  const [workflow, setWorkflow] = useState<RequestWorkflow | null>();
+  const [workflowStatus, setWorkflowStatus] = useState<
+    "loading" | "loaded" | "saving"
+  >(liveWriteback ? "loading" : "loaded");
+  const [workflowError, setWorkflowError] = useState<string>();
+  const [workflowBusyAction, setWorkflowBusyAction] = useState<string>();
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    () => classifyTicketTemplate(request ?? { subject: "" })?.templateId ?? "general-support",
+  );
+  const [trackReasons, setTrackReasons] = useState<Record<string, string>>({});
+  const [trackValues, setTrackValues] = useState<Record<string, string>>({});
+  const [bookingChoiceId, setBookingChoiceId] = useState(appointment?.id ?? "");
+  const pendingCommunication = useRef<{
+    idempotencyKey: string;
+    message: string;
+    occurredAt: string;
+    visibility: "customer" | "internal";
+  } | undefined>(undefined);
+
+  useEffect(() => {
+    if (!liveWriteback || !request?.id) return;
+    let active = true;
+    let initialRefresh = true;
+    let refreshTimer: number | undefined;
+
+    const refresh = async () => {
+      if (initialRefresh) {
+        initialRefresh = false;
+        setContext(undefined);
+        setError(undefined);
+        setRefreshWarning(undefined);
+        setLoading(true);
+      }
+      try {
+        const next = await loadMspCentralRequestContext(request.id);
+        if (!active) return;
+        setContext(next);
+        setError(undefined);
+        setRefreshWarning(undefined);
+      } catch (refreshError) {
+        if (!active) return;
+        setError(
+          refreshError instanceof Error
+            ? refreshError.message
+            : "Latest ticket information could not be loaded.",
+        );
+      } finally {
+        if (active) {
+          setLoading(false);
+          refreshTimer = window.setTimeout(refresh, TICKET_CONTEXT_REFRESH_MS);
+        }
+      }
+    };
+    void refresh();
+    return () => {
+      active = false;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+    };
+  }, [liveWriteback, request?.id]);
+
+  useEffect(() => {
+    if (tab !== "tracks" || !request?.id || workflowStatus !== "loading") return;
+    if (!liveWriteback) return;
+    let active = true;
+    loadRequestWorkflow(request.id)
+      .then(async (stored) => {
+        if (!active) return;
+        if (stored) return stored;
+        const classification = classifyTicketTemplate(request);
+        if (!classification) return null;
+        return publishRequestWorkflowAction(request.id, {
+          action: "apply_template",
+          automatic: true,
+          request: {
+            category: request.category,
+            item: request.item,
+            notes: request.notes,
+            subcategory: request.subcategory,
+            subject: request.subject,
+          },
+          templateId: classification.templateId,
+        });
+      })
+      .then((stored) => {
+        if (!active) return;
+        setWorkflow(stored);
+        if (stored) setSelectedTemplateId(stored.templateId);
+        setWorkflowStatus("loaded");
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        setWorkflowError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Ticket workflow could not be loaded.",
+        );
+        setWorkflowStatus("loaded");
+      });
+    return () => {
+      active = false;
+    };
+  }, [liveWriteback, request, tab, workflowStatus]);
+
+  if (!request) return null;
+  const latestRequest = context?.request ?? request;
+  const chosenAppointment =
+    appointment ?? resolveWorkLogAppointment(appointments, bookingChoiceId);
+  const scheduledTime = chosenAppointment
+    ? `${chosenAppointment.start}-${chosenAppointment.end}`
+    : latestRequest.scheduledStart
+      ? `${formatTime(latestRequest.scheduledStart)}-${formatTime(latestRequest.scheduledEnd ?? latestRequest.scheduledStart)}`
+      : "Not scheduled";
+  const suggestedClassification = classifyTicketTemplate(latestRequest);
+
+  async function applySelectedTemplate() {
+    const template = serviceTicketTemplates.find(
+      (candidate) => candidate.id === selectedTemplateId,
+    );
+    if (!template || workflowStatus === "saving") return;
+    setWorkflowError(undefined);
+    setWorkflowBusyAction("apply");
+    setWorkflowStatus("saving");
+    try {
+      const next = liveWriteback
+        ? await publishRequestWorkflowAction(latestRequest.id, {
+            action: "apply_template",
+            templateId: template.id,
+          })
+        : applyTicketTemplate({
+            actorEmail: "mock@command-centre.local",
+            classification: {
+              confidence: 1,
+              reason: "Dispatcher selected the template.",
+              source: "manual",
+              templateId: template.id,
+            },
+            requestId: latestRequest.id,
+            template,
+          });
+      setWorkflow(next);
+    } catch (saveError) {
+      setWorkflowError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Ticket template could not be applied.",
+      );
+    } finally {
+      setWorkflowBusyAction(undefined);
+      setWorkflowStatus("loaded");
+    }
+  }
+
+  async function saveTrackItem(
+    item: RequestTrackItem,
+    status: TrackItemStatus,
+  ) {
+    if (!workflow || workflowStatus === "saving") return;
+    setWorkflowError(undefined);
+    setWorkflowBusyAction(`${item.id}:${status}`);
+    setWorkflowStatus("saving");
+    try {
+      const update = {
+        action: "update_track_item",
+        itemId: item.id,
+        notApplicableReason: trackReasons[item.id],
+        status,
+        value: trackValues[item.id] ?? item.value,
+      };
+      const next = liveWriteback
+        ? await publishRequestWorkflowAction(latestRequest.id, update)
+        : updateTrackItem(workflow, item.id, {
+            actorEmail: "mock@command-centre.local",
+            notApplicableReason: trackReasons[item.id],
+            status,
+            value: trackValues[item.id] ?? item.value,
+          });
+      setWorkflow(next);
+    } catch (saveError) {
+      setWorkflowError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Track item could not be saved.",
+      );
+    } finally {
+      setWorkflowBusyAction(undefined);
+      setWorkflowStatus("loaded");
+    }
+  }
+
+  async function sendCommunication() {
+    const nextMessage = message.trim();
+    if (!nextMessage || sending || !request) return;
+    setSending(true);
+    setError(undefined);
+    setRefreshWarning(undefined);
+    try {
+      const current = pendingCommunication.current;
+      const command =
+        current?.message === nextMessage && current.visibility === visibility
+          ? current
+          : {
+              idempotencyKey: createClientCommandId("comms"),
+              message: nextMessage,
+              occurredAt: new Date().toISOString(),
+              visibility,
+            };
+      pendingCommunication.current = command;
+      const result = await publishMspCentralCommunication({
+        idempotencyKey: command.idempotencyKey,
+        message: command.message,
+        occurredAt: command.occurredAt,
+        requestId: request.id,
+        visibility: command.visibility,
+      });
+      pendingCommunication.current = undefined;
+      setMessage("");
+      onSaved(result);
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error
+          ? sendError.message
+          : "Communication could not be saved.",
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 sm:p-4">
+      <section
+        aria-label="Ticket workspace"
+        aria-modal="true"
+        className="flex h-[94vh] w-[94vw] max-w-[1500px] flex-col overflow-hidden rounded-lg border border-cc-orange/25 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+          <div className="min-w-0">
+            <p className="font-mono text-xs text-cc-orange">{latestRequest.requestNumber}</p>
+            <h2 className="mt-1 truncate text-xl font-semibold">{latestRequest.subject}</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {latestRequest.customer} / {latestRequest.site}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {onSchedule ? (
+              <button
+                className="flex items-center gap-2 rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-sm font-semibold text-cc-orange"
+                type="button"
+                onClick={() => onSchedule(request.id)}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Schedule
+              </button>
+            ) : null}
+            {!appointment && appointments.length > 0 ? (
+              <label className="text-xs font-semibold text-slate-300">
+                Booking for Work Log
+                <select
+                  aria-label="Booking for Work Log"
+                  className="ml-2 rounded-md border border-white/10 bg-[#111d30] px-2 py-2 text-xs text-slate-100"
+                  value={bookingChoiceId}
+                  onChange={(event) => setBookingChoiceId(event.target.value)}
+                >
+                  <option value="">Choose booking</option>
+                  {appointments.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.date ?? "Current day"} {candidate.start}-{candidate.end} · {candidate.technicianId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <button
+              className="flex items-center gap-2 rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!appointment && appointments.length > 0 && !chosenAppointment}
+              title={!appointment && appointments.length > 0 && !chosenAppointment ? "Choose the exact booking before recording time." : "Open Work Log for this booking."}
+              type="button"
+              onClick={() => onOpenWorkLog(request.id, chosenAppointment?.id)}
+            >
+              <Clock3 className="h-4 w-4" />
+              Work Log
+            </button>
+            {latestRequest.helpdeskUrl ? (
+              <a
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold"
+                href={latestRequest.helpdeskUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Helpdesk
+              </a>
+            ) : null}
+            <button
+              aria-label="Close ticket workspace"
+              className="rounded-md border border-white/10 bg-white/5 p-2"
+              type="button"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+        <div className="flex shrink-0 gap-1 border-b border-white/10 px-5 pt-2" role="tablist">
+          {(["details", "comms", "tracks"] as const).map((value) => (
+            <button
+              key={value}
+              aria-selected={tab === value}
+              className={`border-b-2 px-4 py-2 text-sm font-semibold ${
+                tab === value
+                  ? "border-cc-orange text-cc-orange"
+                  : "border-transparent text-slate-400 hover:text-slate-100"
+              }`}
+              role="tab"
+              type="button"
+              onClick={() => setTab(value)}
+            >
+              {value === "details" ? "Overview" : value === "comms" ? "Comms" : "Tracks"}
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {tab === "details" ? (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+              <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+                <h3 className="text-sm font-semibold">Job description</h3>
+                <SafeRequestContent
+                  className="mt-3 text-sm leading-6 text-slate-200"
+                  value={latestRequest.notes ?? "No job description has been recorded."}
+                />
+              </section>
+              <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+                <h3 className="text-sm font-semibold">Request summary</h3>
+                <div className="mt-3 grid gap-2 text-sm">
+                  <DetailInline label="Status" value={latestRequest.status} />
+                  <DetailInline label="Priority" value={latestRequest.priority} />
+                  <DetailInline label="Requester" value={latestRequest.requester} />
+                  <DetailInline label="Contact" value={latestRequest.contact} />
+                  <DetailInline label="Scheduled" value={scheduledTime} />
+                  <DetailInline label="Site" value={latestRequest.siteAddress || latestRequest.site} />
+                </div>
+              </section>
+            </div>
+          ) : tab === "comms" ? (
+            <div className="grid gap-4">
+              <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+                <CommunicationThread
+                  emptyLabel="No customer emails or replies are recorded."
+                  title="Customer conversation"
+                  updates={context?.customerResponses ?? []}
+                />
+                <CommunicationThread
+                  emptyLabel="No internal notes are recorded."
+                  title="Internal notes"
+                  updates={context?.internalNotes ?? []}
+                />
+              </div>
+              <section
+                className="rounded-md border border-white/10 bg-white/[0.03] p-4"
+                data-testid="communication-composer"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold">New communication</h3>
+                  <div className="grid min-w-64 grid-cols-2 rounded-md border border-white/10 p-1">
+                    {(["customer", "internal"] as const).map((value) => (
+                      <button
+                        key={value}
+                        aria-pressed={visibility === value}
+                        className={`rounded px-2 py-2 text-xs font-semibold ${
+                          visibility === value
+                            ? "bg-cc-orange text-cc-surface-1"
+                            : "text-slate-400"
+                        }`}
+                        type="button"
+                        onClick={() => setVisibility(value)}
+                      >
+                        {value === "customer" ? "Customer reply" : "Internal note"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="mt-3 block text-sm font-semibold">
+                  Message
+                  <textarea
+                    aria-label="Communication message"
+                    className="mt-2 min-h-56 w-full resize-y rounded-md border border-white/10 bg-[#111d30] p-4 font-normal leading-6"
+                    value={message}
+                    onChange={(event) => setMessage(event.target.value)}
+                  />
+                </label>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    {!liveWriteback ? (
+                      <p className="text-xs text-amber-200">
+                        Communications require a live MSP Central request.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400">
+                        {visibility === "customer"
+                          ? "This reply will be visible to the customer."
+                          : "This note will remain internal."}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    aria-busy={sending}
+                    className="flex min-w-52 items-center justify-center gap-2 rounded-md bg-cc-orange px-5 py-2.5 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+                    disabled={!liveWriteback || !message.trim() || sending}
+                    type="button"
+                    onClick={sendCommunication}
+                  >
+                    {!sending ? <MessageSquare className="h-4 w-4" /> : null}
+                    {sending
+                      ? "Sending..."
+                      : visibility === "customer"
+                        ? "Send to customer"
+                        : "Add internal note"}
+                  </button>
+                </div>
+              </section>
+            </div>
+          ) : (
+            <TrackWorkspace
+              error={workflowError}
+              busyAction={workflowBusyAction}
+              loading={workflowStatus === "loading"}
+              saving={workflowStatus === "saving"}
+              selectedTemplateId={selectedTemplateId}
+              suggestedClassification={suggestedClassification}
+              trackReasons={trackReasons}
+              trackValues={trackValues}
+              workflow={workflow}
+              onApply={applySelectedTemplate}
+              onReasonChange={(itemId, value) =>
+                setTrackReasons((current) => ({ ...current, [itemId]: value }))
+              }
+              onStatusChange={saveTrackItem}
+              onTemplateChange={setSelectedTemplateId}
+              onValueChange={(itemId, value) =>
+                setTrackValues((current) => ({ ...current, [itemId]: value }))
+              }
+            />
+          )}
+          {loading ? <p className="mt-4 text-xs text-slate-400">Refreshing ticket...</p> : null}
+          {refreshWarning ? (
+            <p className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-50">
+              Message saved. {refreshWarning}
+            </p>
+          ) : null}
+          {error ? (
+            <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CommunicationThread({
+  emptyLabel,
+  title,
+  updates,
+}: {
+  emptyLabel: string;
+  title: string;
+  updates: MspCentralRequestUpdate[];
+}) {
+  return (
+    <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {updates.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-400">{emptyLabel}</p>
+      ) : (
+        <div className="mt-3 grid gap-3">
+          {updates.map((update) => (
+            <article key={update.id} className="rounded-md border border-white/10 bg-[#111d30] p-3">
+              <div className="flex justify-between gap-3 text-xs text-slate-400">
+                <span className="font-semibold text-slate-200">{update.author}</span>
+                <span>{update.createdAt ? formatDateTime(update.createdAt) : ""}</span>
+              </div>
+              <SafeRequestContent className="mt-2 text-sm leading-6" value={update.body} />
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TrackWorkspace({
+  busyAction,
+  error,
+  loading,
+  onApply,
+  onReasonChange,
+  onStatusChange,
+  onTemplateChange,
+  onValueChange,
+  saving,
+  selectedTemplateId,
+  suggestedClassification,
+  trackReasons,
+  trackValues,
+  workflow,
+}: {
+  busyAction?: string;
+  error?: string;
+  loading: boolean;
+  onApply: () => void;
+  onReasonChange: (itemId: string, value: string) => void;
+  onStatusChange: (item: RequestTrackItem, status: TrackItemStatus) => void;
+  onTemplateChange: (templateId: string) => void;
+  onValueChange: (itemId: string, value: string) => void;
+  saving: boolean;
+  selectedTemplateId: string;
+  suggestedClassification: ReturnType<typeof classifyTicketTemplate>;
+  trackReasons: Record<string, string>;
+  trackValues: Record<string, string>;
+  workflow?: RequestWorkflow | null;
+}) {
+  if (loading) {
+    return <p className="text-sm text-slate-400">Loading ticket template and Track...</p>;
+  }
+  const items = workflow?.track?.items ?? [];
+  const resolvedCount = items.filter((item) => item.status !== "pending").length;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+      <aside className="h-fit rounded-md border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="h-5 w-5 text-cc-orange" />
+          <h3 className="text-sm font-semibold">Ticket template</h3>
+        </div>
+        {suggestedClassification && !workflow ? (
+          <p className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-xs text-emerald-50">
+            High-confidence match: {serviceTicketTemplates.find((template) => template.id === suggestedClassification.templateId)?.name}
+          </p>
+        ) : !workflow ? (
+          <p className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+            Needs classification. Choose the service workflow that fits this request.
+          </p>
+        ) : null}
+        {workflow ? (
+          <div className="mt-3 rounded-md border border-cc-orange/25 bg-cc-orange/[0.06] p-3">
+            <p className="font-semibold text-slate-50">{workflow.templateName}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Version {workflow.templateVersion} · {workflow.classification.source} · {Math.round(workflow.classification.confidence * 100)}%
+            </p>
+          </div>
+        ) : null}
+        <label className="mt-4 block text-xs font-semibold text-slate-300">
+          {workflow ? "Replace template" : "Template"}
+          <select
+            aria-label="Ticket template"
+            className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+            value={selectedTemplateId}
+            onChange={(event) => onTemplateChange(event.target.value)}
+          >
+            {serviceTicketTemplates.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          aria-busy={busyAction === "apply"}
+          className="mt-3 w-full rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+          disabled={saving}
+          type="button"
+          onClick={onApply}
+        >
+          {busyAction === "apply" ? "Saving Track..." : workflow ? "Replace Track" : "Apply ticket template"}
+        </button>
+        <p className="mt-3 text-xs leading-5 text-slate-400">
+          Replacing a Track starts the selected version with fresh checklist items. The change is recorded in ticket history.
+        </p>
+      </aside>
+
+      <section className="min-w-0 rounded-md border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">{workflow?.track?.name ?? "Track"}</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Mandatory items must be completed or marked N/A with a reason before closure.
+            </p>
+          </div>
+          {workflow?.track ? (
+            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs font-semibold tabular-nums">
+              {resolvedCount}/{items.length}
+            </span>
+          ) : null}
+        </div>
+
+        {!workflow?.track ? (
+          <div className="mt-5 grid min-h-44 place-items-center rounded-md border border-dashed border-white/10 text-sm text-slate-500">
+            Apply a ticket template to start its Track.
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-2">
+            {items.map((item, index) => (
+              <article
+                key={item.id}
+                className={`rounded-md border p-3 ${
+                  item.status === "completed"
+                    ? "border-emerald-300/25 bg-emerald-300/[0.06]"
+                    : item.status === "not_applicable"
+                      ? "border-slate-400/20 bg-slate-400/[0.05]"
+                      : "border-white/10 bg-[#111d30]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase text-slate-500">Step {index + 1} · {trackItemTypeLabel(item.type)}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">{item.label}</p>
+                    {item.status === "not_applicable" ? (
+                      <p className="mt-1 text-xs text-slate-400">N/A: {item.notApplicableReason}</p>
+                    ) : null}
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${
+                    item.status === "completed"
+                      ? "bg-emerald-300/15 text-emerald-100"
+                      : item.status === "not_applicable"
+                        ? "bg-slate-300/10 text-slate-300"
+                        : "bg-amber-300/10 text-amber-100"
+                  }`}>
+                    {item.status === "not_applicable" ? "N/A" : item.status}
+                  </span>
+                </div>
+                {trackItemNeedsValue(item) ? (
+                  item.type === "choice" ? (
+                    <select
+                      aria-label={`${item.label} value`}
+                      className="mt-3 w-full rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-sm"
+                      value={trackValues[item.id] ?? item.value ?? ""}
+                      onChange={(event) => onValueChange(item.id, event.target.value)}
+                    >
+                      <option value="">Choose...</option>
+                      {item.options?.map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label={`${item.label} value`}
+                      className="mt-3 w-full rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-sm"
+                      placeholder={trackItemPlaceholder(item.type)}
+                      type={item.type === "date_time" ? "datetime-local" : "text"}
+                      value={trackValues[item.id] ?? item.value ?? ""}
+                      onChange={(event) => onValueChange(item.id, event.target.value)}
+                    />
+                  )
+                ) : null}
+                <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(160px,1fr)_auto_auto]">
+                  <input
+                    aria-label={`${item.label} not applicable reason`}
+                    className="rounded-md border border-white/10 bg-[#071423] px-3 py-2 text-xs"
+                    placeholder="Reason if not applicable"
+                    value={trackReasons[item.id] ?? item.notApplicableReason ?? ""}
+                    onChange={(event) => onReasonChange(item.id, event.target.value)}
+                  />
+                  <button
+                    aria-busy={busyAction === `${item.id}:not_applicable`}
+                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold disabled:opacity-40"
+                    disabled={saving}
+                    type="button"
+                    onClick={() => onStatusChange(item, "not_applicable")}
+                  >
+                    {busyAction === `${item.id}:not_applicable` ? "Saving..." : "Not applicable"}
+                  </button>
+                  <button
+                    aria-busy={busyAction === `${item.id}:${item.status === "completed" ? "pending" : "completed"}`}
+                    className={`rounded-md px-3 py-2 text-xs font-semibold disabled:opacity-40 ${
+                      item.status === "completed"
+                        ? "border border-white/10 bg-white/5 text-slate-200"
+                        : "bg-emerald-400 text-[#071423]"
+                    }`}
+                    disabled={saving}
+                    type="button"
+                    onClick={() => onStatusChange(item, item.status === "completed" ? "pending" : "completed")}
+                  >
+                    {busyAction === `${item.id}:${item.status === "completed" ? "pending" : "completed"}`
+                      ? "Saving..."
+                      : item.status === "completed" ? "Reopen" : "Complete"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">{error}</p>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function trackItemNeedsValue(item: RequestTrackItem) {
+  return item.type !== "checkbox" && item.type !== "approval";
+}
+
+function trackItemTypeLabel(type: RequestTrackItem["type"]) {
+  return {
+    approval: "Approval",
+    asset: "Asset",
+    checkbox: "Check",
+    choice: "Choice",
+    date_time: "Date/time",
+    evidence: "Evidence",
+    text: "Required text",
+  }[type];
+}
+
+function trackItemPlaceholder(type: RequestTrackItem["type"]) {
+  if (type === "asset") return "Asset name or identifier";
+  if (type === "evidence") return "Evidence or attachment reference";
+  return "Required detail";
+}
+
+function SafeRequestContent({ className, value }: { className?: string; value: string }) {
+  const parts = safeRequestContentParts(value);
+  return (
+    <div className={`whitespace-pre-wrap ${className ?? ""}`}>
+      {parts.map((part, index) =>
+        part.href ? (
+          <a
+            key={`${part.href}-${index}`}
+            className="font-semibold text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200"
+            href={part.href}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {part.text}
+          </a>
+        ) : (
+          <span key={`text-${index}`}>{part.text}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+export function safeRequestContentParts(value: string) {
+  const normalised = value
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/p\s*>/gi, "\n")
+    .replace(/<\s*p\b[^>]*>/gi, "");
+  const parts: Array<{ href?: string; text: string }> = [];
+  const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(normalised))) {
+    appendLinkifiedText(parts, normalised.slice(cursor, match.index));
+    const href = safeHttpUrl(decodeHtml(match[1] ?? ""));
+    const text = decodeHtml(stripHtml(match[2] ?? "")).trim() || href || "Link";
+    parts.push(href ? { href, text } : { text });
+    cursor = match.index + match[0].length;
+  }
+  appendLinkifiedText(parts, normalised.slice(cursor));
+  return parts.length > 0 ? parts : [{ text: "" }];
+}
+
+function appendLinkifiedText(parts: Array<{ href?: string; text: string }>, value: string) {
+  const text = decodeHtml(stripHtml(value));
+  const urlPattern = /https?:\/\/[^\s<>"']+/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlPattern.exec(text))) {
+    if (match.index > cursor) parts.push({ text: text.slice(cursor, match.index) });
+    const displayText = match[0];
+    const linkText = displayText.replace(/[.,;:!?]+$/, "");
+    const punctuation = displayText.slice(linkText.length);
+    const href = safeHttpUrl(linkText);
+    parts.push(href ? { href, text: displayText } : { text: displayText });
+    if (punctuation && href) {
+      parts[parts.length - 1] = { href, text: linkText };
+      parts.push({ text: punctuation });
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < text.length) parts.push({ text: text.slice(cursor) });
+}
+
+function safeHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripHtml(value: string) {
+  return value.replace(/<[^>]*>/g, "");
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/gi, "'");
+}
+
+export function WorkLogModal({
+  appointment,
+  liveWriteback,
+  onCancel,
+  onSave,
+  request,
+  technician,
+  technicians,
+}: {
+  appointment?: Appointment;
+  liveWriteback: boolean;
+  onCancel: () => void;
+  onSave: (input: {
+    billable: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
+    minutes: string;
+    notes: string;
+    solution?: string;
+    transfer?: WorklogTransfer;
+    workType: WorklogType;
+  }) => Promise<void>;
+  request?: DispatchRequest;
+  technician: string;
+  technicians: Technician[];
+}) {
+  const resolvedBookingType =
+    appointment?.bookingType ??
+    request?.bookingType ??
+    (request?.onsite === true
+      ? "Onsite"
+      : request?.onsite === false
+        ? "Remote"
+        : undefined);
+  const chargeableTime = getChargeableTicketTime({
+    appointment,
+    bookingType: resolvedBookingType,
+  });
+  const [minutes, setMinutes] = useState(
+    String(Math.max(1, chargeableTime.totalMinutes)),
+  );
+  const [notes, setNotes] = useState("");
+  const [useAsSolution, setUseAsSolution] = useState(false);
+  const [workType, setWorkType] = useState<WorklogType>(
+    request?.billable === false ? "non_billable" : "billable",
+  );
+  const scheduled = Boolean(appointment || request?.scheduledStart);
+  const [disposition, setDisposition] = useState<WorklogDisposition>();
+  const [idempotencyKey] = useState(
+    () => `worklog-${request?.id ?? "request"}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const [forwardTechnicianId, setForwardTechnicianId] = useState(
+    appointment?.technicianId ?? request?.technicianId ?? technicians[0]?.id ?? "",
+  );
+  const [forwardDate, setForwardDate] = useState(
+    appointment?.date ?? todayDateKey(),
+  );
+  const [forwardStart, setForwardStart] = useState(appointment?.end ?? "09:00");
+  const [forwardBookingType, setForwardBookingType] =
+    useState<BookingType>(resolvedBookingType ?? "Remote");
+  const [forwardEnd, setForwardEnd] = useState(() =>
+    timeFromMinutes(
+      minutesFromTime(appointment?.end ?? "09:00") +
+        bookingTiming(60, resolvedBookingType ?? "Remote").totalDurationMinutes,
+    ),
+  );
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [requestContext, setRequestContext] =
+    useState<MspCentralRequestContext>();
+  const [contextStatus, setContextStatus] = useState<
+    "idle" | "loading" | "loaded" | "failed"
+  >(liveWriteback ? "loading" : "idle");
+  const [contextError, setContextError] = useState<string>();
+  const [closureWorkflow, setClosureWorkflow] = useState<RequestWorkflow | null>();
+  const [closureWorkflowStatus, setClosureWorkflowStatus] = useState<
+    "idle" | "loading" | "loaded" | "failed"
+  >(liveWriteback ? "loading" : "loaded");
+
+  useEffect(() => {
+    let active = true;
+    if (!liveWriteback || !request?.id) {
+      return () => {
+        active = false;
+      };
+    }
+
+    loadMspCentralRequestContext(request.id)
+      .then((context) => {
+        if (!active) return;
+        setRequestContext(context);
+        setContextStatus("loaded");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setContextStatus("failed");
+        setContextError(
+          error instanceof Error
+            ? error.message
+            : "Latest ticket information could not be loaded.",
+        );
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [liveWriteback, request?.id]);
+
+  useEffect(() => {
+    let active = true;
+    if (!liveWriteback || !request?.id) return () => { active = false; };
+    loadRequestWorkflow(request.id)
+      .then((stored) => {
+        if (!active) return;
+        setClosureWorkflow(stored);
+        setClosureWorkflowStatus("loaded");
+      })
+      .catch(() => {
+        if (!active) return;
+        setClosureWorkflowStatus("failed");
+      });
+    return () => { active = false; };
+  }, [liveWriteback, request?.id]);
+
+  if (!request) {
+    return null;
+  }
+
+  const latestRequest = requestContext?.request ?? request;
+
+  const scheduledTime = appointment
+    ? `${appointment.start}-${appointment.end}`
+    : request.scheduledStart
+      ? `${formatTime(request.scheduledStart)}-${formatTime(request.scheduledEnd ?? request.scheduledStart)}`
+      : "Not scheduled";
+  const bookingType = resolvedBookingType ?? "Not set";
+  const billable = workType === "billable";
+  const selectedForwardTechnician = technicians.find(
+    (candidate) => candidate.id === forwardTechnicianId,
+  );
+  const selectedTransferTechnician = technicians.find(
+    (candidate) => candidate.id === transferTargetId,
+  );
+  const baseOutcomeComplete =
+    !scheduled ||
+    (disposition === "book_forward"
+      ? Boolean(
+          selectedForwardTechnician &&
+            forwardDate &&
+            forwardStart &&
+            forwardEnd &&
+            minutesFromTime(forwardEnd) > minutesFromTime(forwardStart),
+        )
+      : disposition === "transfer_escalate"
+        ? Boolean(selectedTransferTechnician && transferReason.trim())
+        : Boolean(disposition));
+  const closureGuardrails = evaluateClosureGuardrails({
+    disposition,
+    solution: disposition === "complete" && useAsSolution ? notes.trim() : undefined,
+    track: closureWorkflow?.track,
+    workflow: closureWorkflow,
+    worklogDescription: notes,
+    worklogMinutes: Number(minutes),
+  });
+  const outcomeComplete =
+    baseOutcomeComplete &&
+    (disposition !== "complete" ||
+      ((!liveWriteback || closureWorkflowStatus === "loaded") &&
+        closureGuardrails.canClose));
+
+  async function submitWorklog() {
+    if (!outcomeComplete || submitting) return;
+    setSubmitting(true);
+    try {
+      const booking: WorklogForwardBooking | undefined =
+        disposition === "book_forward" && selectedForwardTechnician
+          ? {
+              bookingType: forwardBookingType,
+              customer: request?.customer,
+              date: forwardDate,
+              end: forwardEnd,
+              location: request?.siteAddress || request?.site,
+              requestNumber: request?.requestNumber ?? "",
+              start: forwardStart,
+              subject: request?.subject ?? "",
+              technicianEmail: selectedForwardTechnician.mspCentralEmail,
+              technicianId: selectedForwardTechnician.id,
+              technicianName: selectedForwardTechnician.displayName,
+              userPrincipalName:
+                selectedForwardTechnician.outlookUserPrincipalName ??
+                selectedForwardTechnician.outlookEmail,
+            }
+          : undefined;
+      const transfer: WorklogTransfer | undefined =
+        disposition === "transfer_escalate" && selectedTransferTechnician
+          ? {
+              reason: transferReason,
+              targetEmail: selectedTransferTechnician.mspCentralEmail,
+              targetTechnicianId: selectedTransferTechnician.id,
+              targetTechnicianName: selectedTransferTechnician.displayName,
+            }
+          : undefined;
+      await onSave({
+        billable,
+        booking,
+        disposition,
+        idempotencyKey,
+        minutes,
+        notes,
+        solution:
+          disposition === "complete" && useAsSolution ? notes.trim() : undefined,
+        transfer,
+        workType,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
+      <section
+        aria-labelledby="work-log-title"
+        aria-modal="true"
+        className="flex h-[96vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-lg border border-cc-orange/20 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        data-layout="full-screen-split"
+        role="dialog"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+              {liveWriteback ? "MSP Central" : "Mock/test-sync only"}
+            </p>
+            <h2 id="work-log-title" className="mt-2 text-xl font-semibold">
+              Work Log
+            </h2>
+          </div>
+          <button
+            aria-label="Close Work Log"
+            className="rounded-md border border-white/10 bg-white/5 p-2 text-slate-200"
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+        <section
+          aria-label="Ticket information"
+          className="min-h-0 overflow-y-auto p-4 sm:p-5"
+        >
+        <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
+          <h3 className="text-sm font-semibold text-slate-50">
+            Latest job information
+          </h3>
+          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <DetailInline label="Request number" value={latestRequest.requestNumber} />
+            <DetailInline label="Subject" value={latestRequest.subject} />
+            <DetailInline
+              label="Customer/site"
+              value={`${latestRequest.customer} / ${latestRequest.site}`}
+            />
+            <DetailInline label="Status" value={latestRequest.status} />
+            <DetailInline label="Priority" value={latestRequest.priority} />
+            <DetailInline label="Technician" value={technician} />
+            <DetailInline label="Scheduled time" value={scheduledTime} />
+            <DetailInline
+              label="Due time"
+              value={formatDateTime(latestRequest.dueAt)}
+            />
+            <DetailInline label="Booking type" value={bookingType} />
+            {chargeableTime.travelMinutes > 0 ? (
+              <DetailInline
+                label="Chargeable time"
+                value={`${chargeableTime.jobMinutes} min job + ${chargeableTime.travelMinutes} min travel = ${chargeableTime.totalMinutes} min`}
+              />
+            ) : null}
+            <DetailInline
+              label="Contact"
+              value={`${latestRequest.requester} / ${latestRequest.contact}`}
+            />
+            <DetailInline
+              label="Site/address"
+              value={latestRequest.siteAddress || latestRequest.site}
+            />
+          </div>
+
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <h4 className="text-xs font-semibold uppercase text-slate-300">
+              Job description
+            </h4>
+            <SafeRequestContent
+              className="mt-2 text-sm leading-5 text-slate-100"
+              value={latestRequest.notes ?? "No job description is recorded in MSP Central."}
+            />
+          </div>
+
+          {contextStatus === "loading" ? (
+            <p className="mt-4 text-xs text-slate-400">
+              Loading previous Work Logs...
+            </p>
+          ) : null}
+          {contextStatus === "failed" ? (
+            <p className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+              {contextError}
+            </p>
+          ) : null}
+          {requestContext ? (
+            <div className="mt-4 grid gap-4">
+              <TicketUpdateList
+                emptyLabel="No previous work logs are recorded."
+                title="Previous work logs"
+                updates={requestContext.worklogs ?? []}
+                warning={requestContext.worklogsWarning}
+              />
+            </div>
+          ) : null}
+        </section>
+        </section>
+
+        <section
+          aria-label="Work Log entry"
+          className="min-h-0 overflow-y-auto border-t border-white/10 bg-black/10 p-4 lg:border-l lg:border-t-0 sm:p-5"
+        >
+        <div className="grid gap-4">
+          <label className="block text-sm font-semibold text-slate-200">
+            Work Log notes
+            <textarea
+              aria-label="Work Log notes"
+              className="mt-2 min-h-28 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </label>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-200">
+              Time spent
+              <input
+                aria-label="Time spent"
+                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+                min="0"
+                placeholder="Minutes"
+                type="number"
+                value={minutes}
+                onChange={(event) => setMinutes(event.target.value)}
+              />
+              <span className="mt-1 block text-xs font-normal text-slate-400">
+                Rounded up to the next 15 minutes.
+              </span>
+            </label>
+            <label className="block text-sm font-semibold text-slate-200">
+              Work type
+              <select
+                aria-label="Work type"
+                className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 text-sm text-slate-100"
+                value={workType}
+                onChange={(event) =>
+                  setWorkType(event.target.value as WorklogType)
+                }
+              >
+                <option value="billable">Billable</option>
+                <option value="non_billable">Non-billable</option>
+                <option value="internal">Internal</option>
+              </select>
+            </label>
+          </div>
+
+          {scheduled ? (
+            <fieldset className="rounded-md border border-cc-orange/25 bg-cc-orange/[0.04] p-3">
+              <legend className="px-1 text-sm font-semibold text-slate-100">
+                Outcome
+              </legend>
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                {(
+                  [
+                    ["complete", "Complete ticket"],
+                    ["return_to_queue", "Return to queue"],
+                    ["book_forward", "Book forward"],
+                    ["transfer_escalate", "Transfer / escalate"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <label
+                    className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 ${
+                      disposition === value
+                        ? "border-cc-orange/60 bg-cc-orange/10 text-white"
+                        : "border-white/10 bg-white/[0.03] text-slate-300"
+                    }`}
+                    key={value}
+                  >
+                    <input
+                      aria-label={label}
+                      checked={disposition === value}
+                      name="worklog-outcome"
+                      type="radio"
+                      value={value}
+                      onChange={() => setDisposition(value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ) : null}
+
+          {disposition === "book_forward" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-200">
+                Technician
+                <select
+                  aria-label="Forward technician"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardTechnicianId}
+                  onChange={(event) => setForwardTechnicianId(event.target.value)}
+                >
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Date
+                <input
+                  aria-label="Forward date"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  type="date"
+                  value={forwardDate}
+                  onChange={(event) => setForwardDate(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Start
+                <input
+                  aria-label="Forward start time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardStart}
+                  onChange={(event) => setForwardStart(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                End
+                <input
+                  aria-label="Forward end time"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  step="900"
+                  type="time"
+                  value={forwardEnd}
+                  onChange={(event) => setForwardEnd(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-200 sm:col-span-2">
+                Booking type
+                <select
+                  aria-label="Forward booking type"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={forwardBookingType}
+                  onChange={(event) => {
+                    const nextType = event.target.value as BookingType;
+                    setForwardBookingType(nextType);
+                    setForwardEnd(
+                      timeFromMinutes(
+                        minutesFromTime(forwardStart) +
+                          bookingTiming(60, nextType).totalDurationMinutes,
+                      ),
+                    );
+                  }}
+                >
+                  <option value="Remote">Remote</option>
+                  <option value="Onsite">Onsite</option>
+                  <option value="In house">In house</option>
+                </select>
+              </label>
+            </section>
+          ) : null}
+
+          {disposition === "transfer_escalate" ? (
+            <section className="grid gap-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <label className="text-sm font-semibold text-slate-200">
+                Transfer target
+                <select
+                  aria-label="Transfer target"
+                  className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferTargetId}
+                  onChange={(event) => setTransferTargetId(event.target.value)}
+                >
+                  <option value="">Select technician</option>
+                  {technicians.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-200">
+                Reason
+                <textarea
+                  aria-label="Transfer reason"
+                  className="mt-2 min-h-20 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2"
+                  value={transferReason}
+                  onChange={(event) => setTransferReason(event.target.value)}
+                />
+              </label>
+            </section>
+          ) : null}
+
+          {disposition === "complete" ? (
+            <div className="grid gap-3">
+              <label className="flex items-start gap-3 rounded-md border border-sky-300/20 bg-sky-400/[0.08] p-3 text-sm text-slate-200">
+                <input
+                  aria-label="Use Work Log as solution"
+                  checked={useAsSolution}
+                  className="mt-0.5 h-4 w-4 accent-[#ff823a]"
+                  type="checkbox"
+                  onChange={(event) => setUseAsSolution(event.target.checked)}
+                />
+                <span>
+                  <strong className="block text-slate-50">
+                    Use as solution{closureWorkflow?.requiresSolution ? " · Required" : ""}
+                  </strong>
+                  Writes these notes as the ticket resolution and includes them in the customer completion response.
+                </span>
+              </label>
+              {closureWorkflowStatus === "loading" ? (
+                <p className="rounded-md border border-white/10 bg-white/5 p-3 text-xs text-slate-300">
+                  Checking closure requirements...
+                </p>
+              ) : closureWorkflowStatus === "failed" ? (
+                <p className="rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+                  Closure requirements could not be loaded. Completion remains blocked until they can be checked.
+                </p>
+              ) : closureGuardrails.blockers.length > 0 ? (
+                <div className="rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+                  <strong className="block">Before completing</strong>
+                  <ul className="mt-2 list-disc space-y-1 pl-4">
+                    {closureGuardrails.blockers.map((blocker) => (
+                      <li key={blocker.code}>{blocker.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="flex items-center gap-2 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-xs font-semibold text-emerald-50">
+                  <CheckCircle2 className="h-4 w-4" /> Closure requirements complete
+                </p>
+              )}
+            </div>
+          ) : null}
+
+        </div>
+
+        <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50">
+          {liveWriteback
+            ? "Saving writes this Work Log and its charged time to MSP Central. Onsite travel is included in the ticket time."
+            : "This request is not a live MSP Central ticket. The Work Log remains local/test-sync only."}
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button
             className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-200"
             type="button"
@@ -1575,12 +5374,28 @@ function ScheduleConfirmModal({
             Cancel
           </button>
           <button
-            className="rounded-md bg-cyan-400 px-4 py-2 text-sm font-semibold text-[#07111f]"
+            aria-busy={submitting}
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!outcomeComplete || submitting}
             type="button"
-            onClick={onConfirm}
+            onClick={submitWorklog}
           >
-            Confirm mock schedule
+            {submitting
+              ? "Saving Work Log..."
+              : !scheduled
+                ? "Save Work Log"
+                : disposition === "complete"
+                  ? "Save Work Log and complete ticket"
+                  : disposition === "return_to_queue"
+                    ? "Save Work Log and return to queue"
+                    : disposition === "book_forward"
+                      ? "Save Work Log and book forward"
+                      : disposition === "transfer_escalate"
+                        ? "Save Work Log and transfer"
+                        : "Choose an outcome"}
           </button>
+        </div>
+        </section>
         </div>
       </section>
     </div>
@@ -1603,7 +5418,7 @@ function ScheduleSummary({
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </div>
-      <div className="mt-2 font-mono text-sm font-semibold text-cyan-100">
+      <div className="mt-2 font-mono text-sm font-semibold text-cc-orange">
         {time}
       </div>
       <div className="mt-1 text-xs text-slate-400">{date}</div>
@@ -1612,11 +5427,116 @@ function ScheduleSummary({
   );
 }
 
+export function ReadOnlyDispatchCalendar({
+  data,
+  dateKey,
+  now,
+  viewMode,
+}: {
+  data: DispatchDashboardData;
+  dateKey: string;
+  now: Date;
+  viewMode: ViewMode;
+}) {
+  const weekDays = useMemo(() => getWeekRange(dateKey), [dateKey]);
+  const dayAppointments = useMemo(
+    () => appointmentsForDate(data.appointments, dateKey),
+    [data.appointments, dateKey],
+  );
+  const weekAppointments = useMemo(
+    () =>
+      appointmentsForRange(
+        data.appointments,
+        weekDays.map((day) => day.dateKey),
+      ),
+    [data.appointments, weekDays],
+  );
+  const currentTimeIndicator = useMemo(
+    () => getCurrentTimeIndicator(dateKey, now),
+    [dateKey, now],
+  );
+  const weekToday = useMemo(
+    () => getWeekTodayDateKey(weekDays, now),
+    [now, weekDays],
+  );
+  const seenUpdates = useMemo(() => new Set<string>(), []);
+  const ignoreAppointment = () => undefined;
+  const ignoreDrop = () => undefined;
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-cc-surface-1 shadow-xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2">
+        <div>
+          <p className="text-[10px] font-semibold uppercase text-slate-400">
+            Schedule
+          </p>
+          <h2 className="text-base font-semibold">
+            {viewMode === "week" ? "Weekly planner" : "Technician timeline"}
+          </h2>
+          <p className="text-[11px] text-slate-400">
+            {viewMode === "week"
+              ? `${weekDays[0]?.shortLabel} - ${weekDays[6]?.shortLabel}`
+              : "9:00 AM - 5:00 PM"}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-slate-300">
+          <Legend color="bg-sky-400" label="Scheduled" />
+          <Legend color="bg-amber-400" label="Warning" />
+          <Legend color="bg-rose-500" label="Conflict" />
+        </div>
+      </div>
+      <div className="pointer-events-none flex min-h-0 flex-1 flex-col">
+        {viewMode === "week" ? (
+          <WeekPlanner
+            appointments={weekAppointments}
+            readOnly
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            technicians={data.technicians}
+            todayDateKey={weekToday}
+            weekDays={weekDays}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDateOpen={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onOpenAppointment={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onWeekDrop={ignoreDrop}
+          />
+        ) : (
+          <TimelineBoard
+            appointments={dayAppointments}
+            currentTimeIndicator={currentTimeIndicator}
+            globalSearch=""
+            requests={data.requests}
+            seenTicketUpdateIds={seenUpdates}
+            stackOverlaps
+            technicians={data.technicians}
+            onBeginAppointmentDrag={ignoreAppointment}
+            onDragEnd={ignoreAppointment}
+            onOpenAppointment={ignoreAppointment}
+            onSelectAppointment={ignoreAppointment}
+            onTimelineDrop={ignoreDrop}
+            onTimelineHover={ignoreDrop}
+          />
+        )}
+      </div>
+      {data.calendarError ? (
+        <div className="border-t border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-50">
+          {data.calendarError}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CommandHeader({
   authDisabled,
   calendarStatusLabel,
   date,
   dateKey,
+  integrationOperations,
+  showIntegrationStatus,
+  showIntegrations,
   searchValue,
   onClearSearch,
   onDateChange,
@@ -1625,6 +5545,7 @@ function CommandHeader({
   onSearchChange,
   onToday,
   onViewModeChange,
+  technicians,
   timezone,
   viewMode,
 }: {
@@ -1632,6 +5553,9 @@ function CommandHeader({
   calendarStatusLabel?: string;
   date: string;
   dateKey: string;
+  integrationOperations: TrackedIntegrationOperation[];
+  showIntegrationStatus: boolean;
+  showIntegrations: boolean;
   searchValue: string;
   onClearSearch: () => void;
   onDateChange: (dateKey: string) => void;
@@ -1640,20 +5564,19 @@ function CommandHeader({
   onSearchChange: (value: string) => void;
   onToday: () => void;
   onViewModeChange: (mode: ViewMode) => void;
+  technicians: Technician[];
   timezone: string;
   viewMode: ViewMode;
 }) {
   return (
-    <header className="border-b border-white/10 bg-[#0b1628] px-3 py-2.5">
+    <header className="border-b border-cc-border bg-cc-surface-1 px-3 py-2.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <Image
-            alt=""
-            className="h-11 w-11 shrink-0 object-contain"
-            height={150}
+          <CommandCentreLogo
+            className="h-12 w-12 shrink-0 object-contain"
+            decorative
             priority
-            src="/assets/command-centre-logo-header.png"
-            width={150}
+            variant="icon-colour"
           />
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1668,7 +5591,7 @@ function CommandHeader({
               </span>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
-              <CalendarDays className="h-4 w-4 text-cyan-200" />
+              <CalendarDays className="h-4 w-4 text-cc-orange" />
               <span className="font-semibold text-slate-100">{date}</span>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs">
                 {timezone}
@@ -1684,7 +5607,7 @@ function CommandHeader({
                 aria-pressed={viewMode === mode}
                 className={`rounded px-2.5 py-1 text-sm font-semibold capitalize ${
                   viewMode === mode
-                    ? "bg-cyan-300 text-[#07111f]"
+                    ? "bg-cc-orange text-cc-surface-1"
                     : "text-slate-300 hover:bg-white/5"
                 }`}
                 type="button"
@@ -1698,7 +5621,7 @@ function CommandHeader({
             <ChevronLeft className="h-4 w-4" />
           </IconButton>
           <button
-            className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1.5 text-sm font-semibold text-cyan-100"
+            className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-2.5 py-1.5 text-sm font-semibold text-cc-orange"
             type="button"
             onClick={onToday}
           >
@@ -1714,7 +5637,7 @@ function CommandHeader({
             value={dateKey}
             onChange={(event) => onDateChange(event.target.value)}
           />
-          <label className="flex min-w-[220px] items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-400 focus-within:border-cyan-200/40">
+          <label className="flex min-w-[220px] items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-slate-400 focus-within:border-cc-orange/40">
             <Search className="h-4 w-4" />
             <input
               className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-400 focus:outline-none"
@@ -1739,11 +5662,53 @@ function CommandHeader({
               </button>
             ) : null}
           </label>
+          <PresenceControls technicians={technicians} />
+          {showIntegrationStatus ? (
+            <GlobalIntegrationStatus
+              localOperations={integrationOperations}
+              showRecoveryLink={showIntegrations}
+            />
+          ) : null}
+          {showIntegrations ? (
+            <>
+              <Link
+                className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+                href="/integrations"
+              >
+                <PlugZap className="h-4 w-4" />
+                Integrations
+              </Link>
+            </>
+          ) : null}
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/dispatch/queue"
+          >
+            <Inbox className="h-4 w-4" />
+            Dispatch Queue
+          </Link>
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/calls"
+          >
+            <PhoneCall className="h-4 w-4" />
+            Calls
+          </Link>
+          <Link
+            className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200 hover:border-cc-orange/40 hover:bg-cc-orange/10"
+            href="/wallboard"
+          >
+            <Monitor className="h-4 w-4" />
+            Wallboard
+          </Link>
           {authDisabled ? null : (
             <button
               className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm font-semibold text-slate-200"
               type="button"
-              onClick={() => signOut({ callbackUrl: "/auth/sign-in" })}
+              onClick={() => {
+                clearCachedDashboard(window.localStorage);
+                void signOut({ callbackUrl: "/auth/sign-in" });
+              }}
             >
               <LogOut className="h-4 w-4" />
               Sign out
@@ -1825,7 +5790,7 @@ function QueueFilterMenu({
         aria-expanded={open}
         className={`flex w-full items-center justify-between rounded-md border px-2 py-1.5 text-xs transition ${
           activeValue
-            ? "border-cyan-200/35 bg-cyan-300/10 text-cyan-100"
+            ? "border-cc-orange/35 bg-cc-orange/10 text-cc-orange"
             : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25"
         }`}
         type="button"
@@ -1837,14 +5802,14 @@ function QueueFilterMenu({
         <Filter className="h-3.5 w-3.5 shrink-0 text-slate-500" />
       </button>
       {open ? (
-        <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-full min-w-[160px] rounded-md border border-white/10 bg-[#081425] p-1 shadow-2xl">
+        <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-full min-w-[160px] rounded-md border border-white/10 bg-cc-surface-2 p-1 shadow-2xl">
           {options.map((option) => (
             <button
               key={option.value ?? "all"}
               aria-pressed={activeValue === option.value}
               className={`w-full rounded px-2 py-1 text-left text-xs transition ${
                 activeValue === option.value
-                  ? "bg-cyan-300/15 text-cyan-100"
+                  ? "bg-cc-orange/15 text-cc-orange"
                   : "text-slate-300 hover:bg-white/5"
               }`}
               type="button"
@@ -1864,72 +5829,173 @@ function QueueFilterMenu({
 
 function RequestQueueCard({
   active,
+  hasUnreadUpdate,
+  mergeEnabled,
   onDragEnd,
   onDragStart,
+  onMerge,
+  onOpenWorkspace,
   onSelect,
   request,
   technician,
 }: {
   active: boolean;
+  hasUnreadUpdate: boolean;
+  mergeEnabled: boolean;
   onDragEnd: () => void;
   onDragStart: () => void;
+  onMerge: () => void;
+  onOpenWorkspace: () => void;
   onSelect: () => void;
   request: DispatchRequest;
   technician: string;
 }) {
   return (
-    <button
-      aria-label={`${request.requestNumber} ${request.subject}`}
+    <article
       draggable
-      className={`w-full rounded-md border p-2.5 text-left transition ${
+      className={`w-full overflow-hidden rounded-md border text-left transition ${
         active
-          ? "border-cyan-200/80 bg-cyan-300/15 shadow-[0_0_0_1px_rgba(103,232,249,0.28),0_14px_32px_rgba(8,145,178,0.16)]"
+          ? "border-cc-orange/80 bg-cc-orange/15 shadow-[0_0_0_1px_rgba(255,130,58,0.28),0_14px_32px_rgba(255,130,58,0.16)]"
           : "border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.06]"
       }`}
-      type="button"
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", `request:${request.id}`);
         onDragStart();
       }}
-      onClick={onSelect}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="font-mono text-[11px] text-cyan-200">
-            {request.requestNumber}
+      <button
+        aria-label={`${request.requestNumber} ${request.subject}`}
+        className="w-full p-2.5 text-left"
+        type="button"
+        onClick={onSelect}
+        onDoubleClick={onOpenWorkspace}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-mono text-[11px] text-cc-orange">
+              {request.requestNumber}
+            </div>
+            <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
+              {request.subject}
+            </div>
           </div>
-          <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
-            {request.subject}
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <PriorityChip priority={request.priority} />
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge dataTestId={`queue-ticket-update-${request.id}`} />
+            ) : null}
           </div>
         </div>
-        <PriorityChip priority={request.priority} />
-      </div>
-      <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
-        <span>{request.customer}</span>
-        <span>/</span>
-        <span>{request.site}</span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1">
-        <Badge tone="info">{request.status}</Badge>
-        <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
-          {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
-        </Badge>
-        {request.warnings.slice(0, 2).map((warning) => (
-          <Badge key={warning} tone="warning">
-            {warning}
+        <div className="mt-1.5 flex items-center gap-1 text-xs text-slate-400">
+          <span>{request.customer}</span>
+          {hasDisplayableSite(request.site) ? (
+            <>
+              <span>/</span>
+              <span>{request.site}</span>
+            </>
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge tone="info">{request.status}</Badge>
+          <Badge tone={request.slaState === "normal" ? "muted" : "critical"}>
+            {request.slaState === "normal" ? "SLA normal" : "SLA risk"}
           </Badge>
-        ))}
+          {request.warnings.slice(0, 2).map((warning) => (
+            <Badge key={warning} tone="warning">
+              {warning}
+            </Badge>
+          ))}
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-x-2 text-[11px] text-slate-400">
+          <span>Age {request.ageHours}h</span>
+          <span className="truncate text-center">{technician}</span>
+          <span className="text-right">Due {formatTime(request.dueAt)}</span>
+        </div>
+      </button>
+      <div className="flex justify-end gap-1 border-t border-white/[0.07] px-2 py-1">
+          <button
+            aria-label={`Open ${request.requestNumber} ticket workspace`}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
+            draggable={false}
+            type="button"
+            onClick={onOpenWorkspace}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+            Open
+          </button>
+        {mergeEnabled ? (
+          <button
+            aria-label={`Merge ${request.requestNumber}`}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-slate-400 transition hover:bg-white/[0.06] hover:text-cc-orange"
+            draggable={false}
+            type="button"
+            onClick={onMerge}
+          >
+            <GitMerge className="h-3.5 w-3.5" />
+            Merge
+          </button>
+        ) : null}
       </div>
-      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400">
-        <span>Age {request.ageHours}h</span>
-        <span>{request.billable ? "Billable" : "Non-billable"}</span>
-        <span>{technician}</span>
-        <span>Due {formatTime(request.dueAt)}</span>
-      </div>
-    </button>
+    </article>
   );
+}
+
+function TicketUpdateList({
+  emptyLabel,
+  title,
+  updates,
+  warning,
+}: {
+  emptyLabel: string;
+  title: string;
+  updates: MspCentralRequestUpdate[];
+  warning?: string;
+}) {
+  return (
+    <section>
+      <h4 className="text-xs font-semibold uppercase text-slate-300">{title}</h4>
+      {warning ? (
+        <p className="mt-2 text-xs text-amber-200">{warning}</p>
+      ) : updates.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-400">{emptyLabel}</p>
+      ) : (
+        <div className="mt-2 grid max-h-40 gap-2 overflow-auto pr-1">
+          {updates.map((update) => (
+            <article
+              className="rounded-md border border-white/10 bg-[#111d30] p-2"
+              key={update.id}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                <span className="font-semibold text-slate-200">{update.author}</span>
+                <span className="flex flex-wrap items-center gap-2">
+                  {update.durationMinutes ? (
+                    <span>{formatWorklogDuration(update.durationMinutes)}</span>
+                  ) : null}
+                  {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
+                </span>
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-100">
+                {update.body}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatWorklogDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours === 0) {
+    return `${remainingMinutes}m`;
+  }
+
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function TimelineBoard({
@@ -1941,11 +6007,14 @@ function TimelineBoard({
   globalSearch,
   onBeginAppointmentDrag,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   onTimelineDrop,
   onTimelineHover,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
+  stackOverlaps = true,
   technicians,
 }: {
   activeHealth?: string;
@@ -1956,6 +6025,7 @@ function TimelineBoard({
   globalSearch: string;
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   onTimelineDrop: (
     payload: DragPayload,
@@ -1968,7 +6038,9 @@ function TimelineBoard({
     start: string,
   ) => void;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
+  stackOverlaps?: boolean;
   technicians: Technician[];
 }) {
   const markers = timelineMarkers();
@@ -2026,7 +6098,7 @@ function TimelineBoard({
   return (
     <div
       ref={viewportRef}
-      className="min-h-0 flex-1 overflow-hidden"
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       data-testid="timeline-viewport"
     >
       <div
@@ -2047,29 +6119,38 @@ function TimelineBoard({
             className="relative h-10 bg-[#0f1b2e]"
             style={{ width: timelineTrackWidth }}
           >
-            {markers.map((marker) => (
-              <div
-                key={marker.time}
-                className="absolute inset-y-0 border-l border-white/10"
-                style={{ left: scaleTimelineX(marker.leftPx, timelineTrackWidth) }}
-              >
-                {marker.kind === "end" ? (
-                  <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
-                    {marker.label}
-                  </span>
-                ) : (
-                  <span
-                    className={`absolute top-3 whitespace-nowrap px-3 text-xs font-semibold text-slate-300 ${
-                      marker.time === "17:00"
-                        ? "hidden min-[1180px]:inline"
-                        : ""
-                    }`}
-                  >
-                    {marker.label}
-                  </span>
-                )}
-              </div>
-            ))}
+            {markers.map((marker) => {
+              const showLabel = shouldShowTimelineHourLabel(
+                marker.time,
+                timelineTrackWidth,
+              );
+
+              return (
+                <div
+                  key={marker.time}
+                  className="absolute inset-y-0 border-l border-white/10"
+                  style={{
+                    left: scaleTimelineX(marker.leftPx, timelineTrackWidth),
+                  }}
+                >
+                  {marker.kind === "end" ? (
+                    <span className="absolute right-0 top-3 -translate-x-full whitespace-nowrap pr-3 text-[10px] font-semibold text-slate-400">
+                      {marker.label}
+                    </span>
+                  ) : (
+                    <span
+                      className={`absolute top-3 whitespace-nowrap text-xs font-semibold text-slate-300 ${
+                        marker.time === "17:00"
+                          ? "-translate-x-1/2 px-1"
+                          : "px-3"
+                      } ${showLabel ? "" : "hidden"}`}
+                    >
+                      {marker.label}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
             <CurrentTimeHeaderMarker
               indicator={currentTimeIndicator}
               trackWidth={timelineTrackWidth}
@@ -2080,7 +6161,9 @@ function TimelineBoard({
           const laneAppointments = appointments.filter(
             (appointment) => appointment.technicianId === technician.id,
           );
-          const layout = buildTimelineLayout(laneAppointments);
+          const layout = stackOverlaps
+            ? buildStackedTimelineLayout(laneAppointments)
+            : buildTimelineLayout(laneAppointments);
           const rowHeight = Math.max(layout.rowHeight, distributedRowHeight);
           const rowExtra = Math.max(0, rowHeight - layout.rowHeight);
           const rowOffset = rowExtra / 2;
@@ -2111,8 +6194,8 @@ function TimelineBoard({
                 </p>
               </div>
               <div
-                className={`relative bg-[#0b1628] ${
-                  dragPayload ? "outline outline-1 outline-cyan-300/10" : ""
+                className={`relative bg-cc-surface-1 ${
+                  dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                 }`}
                 data-testid="timeline-track"
                 style={{ height: rowHeight, width: timelineTrackWidth }}
@@ -2178,6 +6261,7 @@ function TimelineBoard({
                       trackWidth={timelineTrackWidth}
                       onBeginAppointmentDrag={onBeginAppointmentDrag}
                       onDragEnd={onDragEnd}
+                      onOpenAppointment={onOpenAppointment}
                       onSelectAppointment={onSelectAppointment}
                     />
                   ) : (
@@ -2197,8 +6281,15 @@ function TimelineBoard({
                       request={requests.find(
                         (request) => request.id === item.appointment.requestId,
                       )}
+                      hasUnreadUpdate={hasUnreadTicketUpdate(
+                        requests.find(
+                          (request) => request.id === item.appointment.requestId,
+                        ),
+                        seenTicketUpdateIds,
+                      )}
                       onBeginDrag={() => onBeginAppointmentDrag(item.appointment.id)}
                       onDragEnd={onDragEnd}
+                      onOpen={() => onOpenAppointment(item.appointment)}
                       onSelect={() => onSelectAppointment(item.appointment)}
                       trackWidth={timelineTrackWidth}
                     />
@@ -2226,9 +6317,12 @@ function WeekPlanner({
   onBeginAppointmentDrag,
   onDateOpen,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   onWeekDrop,
+  readOnly = false,
   requests,
+  seenTicketUpdateIds,
   selectedAppointmentId,
   technicians,
   todayDateKey,
@@ -2239,19 +6333,35 @@ function WeekPlanner({
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDateOpen: (dateKey: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   onWeekDrop: (
     payload: DragPayload,
     technicianId: string,
     dateKey: string,
   ) => void;
+  readOnly?: boolean;
   requests: DispatchRequest[];
+  seenTicketUpdateIds: SeenTicketUpdateIds;
   selectedAppointmentId?: string;
   technicians: Technician[];
   todayDateKey?: string;
   weekDays: ReturnType<typeof getWeekRange>;
 }) {
   const grouped = groupWeekAppointments(appointments, technicians, weekDays);
+  const [expandedCell, setExpandedCell] = useState<
+    { dateKey: string; technicianId: string } | undefined
+  >();
+  const expandedTechnician = expandedCell
+    ? technicians.find((technician) => technician.id === expandedCell.technicianId)
+    : undefined;
+  const expandedDay = expandedCell
+    ? weekDays.find((day) => day.dateKey === expandedCell.dateKey)
+    : undefined;
+  const expandedAppointments =
+    expandedCell && expandedTechnician && expandedDay
+      ? grouped[expandedCell.technicianId]?.[expandedCell.dateKey] ?? []
+      : [];
 
   return (
     <div
@@ -2270,7 +6380,7 @@ function WeekPlanner({
               key={day.dateKey}
               className={`border-l px-2.5 py-2.5 text-left text-xs font-semibold hover:bg-white/[0.04] ${
                 isToday
-                  ? "border-cyan-300/30 bg-cyan-300/[0.08] text-cyan-50"
+                  ? "border-cc-orange/30 bg-cc-orange/[0.08] text-cc-orange"
                   : "border-white/10 bg-[#0f1b2e] text-slate-200"
               }`}
               type="button"
@@ -2278,7 +6388,7 @@ function WeekPlanner({
             >
               <span>{day.shortLabel}</span>
               {isToday ? (
-                <span className="ml-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-100">
+                <span className="ml-2 rounded-full border border-cc-orange/30 bg-cc-orange/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cc-orange">
                   Today
                 </span>
               ) : null}
@@ -2289,9 +6399,9 @@ function WeekPlanner({
         {technicians.map((technician) => (
           <div
             key={technician.id}
-            className="grid grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
+            className="grid min-h-[96px] grid-cols-[170px_repeat(7,minmax(0,1fr))] border-b border-white/10"
           >
-            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-4 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
+            <div className="sticky left-0 z-20 bg-[#0d1829] px-3 py-3 shadow-[8px_0_18px_rgba(0,0,0,0.22)]">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-slate-50">
                   {technician.displayName}
@@ -2312,17 +6422,20 @@ function WeekPlanner({
             </div>
             {weekDays.map((day) => {
               const cellAppointments = grouped[technician.id][day.dateKey];
+              const visibleAppointments = cellAppointments.slice(0, 1);
+              const hiddenAppointments = cellAppointments.slice(1);
               const isToday = day.dateKey === todayDateKey;
               return (
                 <div
                   key={`${technician.id}-${day.dateKey}`}
-                  className={`min-h-[132px] border-l p-1.5 ${
+                  className={`relative min-h-[96px] border-l p-1.5 ${
                     isToday
-                      ? "border-cyan-300/20 bg-cyan-300/[0.045]"
-                      : "border-white/[0.06] bg-[#0b1628]"
+                      ? "border-cc-orange/20 bg-cc-orange/[0.045]"
+                      : "border-white/[0.06] bg-cc-surface-1"
                   } ${
-                    dragPayload ? "outline outline-1 outline-cyan-300/10" : ""
+                    dragPayload ? "outline outline-1 outline-cc-orange/10" : ""
                   }`}
+                  data-testid={`week-cell-${technician.id}-${day.dateKey}`}
                   onDragOver={(event) => {
                     if (!dragPayload) {
                       return;
@@ -2339,22 +6452,45 @@ function WeekPlanner({
                     onWeekDrop(dragPayload, technician.id, day.dateKey);
                   }}
                 >
-                  <div className="space-y-2">
-                    {cellAppointments.map((appointment) => (
+                  <div className="space-y-1.5">
+                    {visibleAppointments.map((appointment) => (
                       <WeekAppointmentCard
                         key={appointment.id}
                         active={selectedAppointmentId === appointment.id}
                         appointment={appointment}
+                        dataTestId="week-appointment-card"
                         request={requests.find(
                           (request) => request.id === appointment.requestId,
                         )}
+                        hasUnreadUpdate={hasUnreadTicketUpdate(
+                          requests.find(
+                            (request) => request.id === appointment.requestId,
+                          ),
+                          seenTicketUpdateIds,
+                        )}
                         onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
                         onDragEnd={onDragEnd}
+                        onOpen={() => onOpenAppointment(appointment)}
                         onSelect={() => onSelectAppointment(appointment)}
                       />
                     ))}
                   </div>
-                  {cellAppointments.length === 0 ? (
+                  {hiddenAppointments.length > 0 ? (
+                    <button
+                      aria-label={`Show ${hiddenAppointments.length} more ${technician.displayName} bookings on ${day.shortLabel}`}
+                      className="mt-1.5 w-full rounded-md border border-cc-orange/20 bg-cc-orange/10 px-2 py-1 text-center text-[11px] font-bold text-cc-orange transition hover:border-cc-orange/45 hover:bg-cc-orange/16"
+                      type="button"
+                      onClick={() =>
+                        setExpandedCell({
+                          dateKey: day.dateKey,
+                          technicianId: technician.id,
+                        })
+                      }
+                    >
+                      +{hiddenAppointments.length}
+                    </button>
+                  ) : null}
+                  {cellAppointments.length === 0 && !readOnly ? (
                     <div className="rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-[11px] text-slate-500">
                       Drop here
                     </div>
@@ -2365,6 +6501,63 @@ function WeekPlanner({
           </div>
         ))}
       </div>
+      {expandedCell && expandedTechnician && expandedDay ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-6">
+          <section
+            aria-label={`${expandedTechnician.displayName} bookings on ${expandedDay.shortLabel}`}
+            className="max-h-[72vh] w-full max-w-xl overflow-hidden rounded-lg border border-cc-orange/25 bg-cc-surface-1 shadow-2xl"
+            data-testid="week-overflow-reveal"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
+                  Week bookings
+                </p>
+                <h3 className="mt-0.5 text-base font-semibold text-slate-50">
+                  {expandedTechnician.displayName} · {expandedDay.shortLabel}
+                </h3>
+              </div>
+              <button
+                aria-label="Close week bookings"
+                className="rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-200 hover:border-white/25"
+                type="button"
+                onClick={() => setExpandedCell(undefined)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[calc(72vh-76px)] space-y-2 overflow-auto p-3">
+              {expandedAppointments.map((appointment) => (
+                <WeekAppointmentCard
+                  key={appointment.id}
+                  active={selectedAppointmentId === appointment.id}
+                  appointment={appointment}
+                  dataTestId="week-overflow-appointment"
+                  request={requests.find(
+                    (request) => request.id === appointment.requestId,
+                  )}
+                  hasUnreadUpdate={hasUnreadTicketUpdate(
+                    requests.find(
+                      (request) => request.id === appointment.requestId,
+                    ),
+                    seenTicketUpdateIds,
+                  )}
+                  onBeginDrag={() => onBeginAppointmentDrag(appointment.id)}
+                  onDragEnd={onDragEnd}
+                  onOpen={() => {
+                    onOpenAppointment(appointment);
+                    setExpandedCell(undefined);
+                  }}
+                  onSelect={() => {
+                    onSelectAppointment(appointment);
+                    setExpandedCell(undefined);
+                  }}
+                />
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2372,35 +6565,43 @@ function WeekPlanner({
 function WeekAppointmentCard({
   active,
   appointment,
+  dataTestId,
+  hasUnreadUpdate,
   onBeginDrag,
   onDragEnd,
+  onOpen,
   onSelect,
   request,
 }: {
   active: boolean;
   appointment: Appointment;
+  dataTestId?: string;
+  hasUnreadUpdate: boolean;
   onBeginDrag: () => void;
   onDragEnd: () => void;
+  onOpen: () => void;
   onSelect: () => void;
   request?: DispatchRequest;
 }) {
   const warning = Boolean(appointment.syncIssue);
-  const bookingType = appointmentBookingType(appointment, request);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
+  const priorityClass = bookingCardPriorityClass(request?.priority);
 
   return (
     <button
       aria-label={`${appointment.title} ${appointment.customer}`}
       aria-pressed={active}
-      data-booking-type={bookingType ?? "None"}
-      data-priority={request?.priority ?? "None"}
-      draggable
-      className={`w-full cursor-pointer rounded-md border px-2.5 py-2 text-left text-xs transition hover:-translate-y-0.5 ${bookingPriorityCardTone(
-        request?.priority,
-      )} ${active ? "ring-2 ring-cyan-200" : ""} ${
-        warning ? "ring-1 ring-amber-200/70" : ""
+      data-testid={dataTestId}
+      draggable={!appointment.readOnly}
+      className={`w-full cursor-pointer rounded-md border px-2 py-1.5 text-left text-xs transition hover:-translate-y-0.5 ${
+        active
+          ? "border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange"
+          : `${priorityClass} ${warning ? "ring-1 ring-amber-200/70" : ""}`
       }`}
       type="button"
       onClick={onSelect}
+      onDoubleClick={request ? onOpen : undefined}
       onDragEnd={onDragEnd}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
@@ -2409,22 +6610,41 @@ function WeekAppointmentCard({
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="font-mono text-[11px] font-semibold">
+        <span className="flex items-center gap-1 font-mono text-[11px] font-semibold">
+          {appointment.activityType === "external_call" ? (
+            <PhoneCall className="h-3 w-3" />
+          ) : null}
           {appointment.start}
         </span>
-        {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        <span className="flex shrink-0 items-center gap-1">
+          <SentimentIcon sentiment={request?.sentiment} />
+          {hasUnreadUpdate ? (
+            <TicketUpdateBadge
+              compact
+              dataTestId={`week-ticket-update-${appointment.id}`}
+            />
+          ) : null}
+          {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+          {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
+          {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+        </span>
       </div>
       <div className="mt-1 line-clamp-2 font-semibold leading-snug">
         {appointment.customer}
       </div>
       <div className="mt-1 truncate opacity-90">{appointment.title}</div>
+      {appointment.activityType === "external_call" ? (
+        <div className="mt-1 text-[10px] font-semibold text-cyan-100">
+          {formatTalkTime(appointment.externalTalkSeconds ?? 0)} external talk
+        </div>
+      ) : null}
       {request ? (
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-mono text-[10px]">
             {request.requestNumber}
           </span>
           <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
-            {request.priority} · {bookingType}
+            {request.priority}
           </span>
         </div>
       ) : null}
@@ -2450,10 +6670,10 @@ function CurrentTimeHeaderMarker({
 
   return (
     <div
-      className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-cyan-300/35 bg-[#081425]/95 px-2 py-1 text-[10px] font-semibold text-cyan-50 shadow-[0_0_16px_rgba(34,211,238,0.32)]"
+      className="pointer-events-none absolute top-2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-cc-orange/35 bg-cc-surface-2/95 px-2 py-1 text-[10px] font-semibold text-cc-orange shadow-[0_0_16px_rgba(255,130,58,0.32)]"
       style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
     >
-      <span className="uppercase tracking-wide text-cyan-200">Now</span>
+      <span className="uppercase tracking-wide text-cc-orange">Now</span>
       <span className="font-mono text-white">{indicator.label}</span>
     </div>
   );
@@ -2473,11 +6693,13 @@ function CurrentTimeLaneOverlay({
   return (
     <>
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-[1] bg-cyan-300/[0.045]"
+        data-testid="current-time-elapsed-shade"
+        className="pointer-events-none absolute inset-y-0 left-0 z-[2] bg-cc-orange/[0.14] shadow-[inset_-34px_0_42px_rgba(255,130,58,0.12)]"
         style={{ width: scaleTimelineX(indicator.elapsedWidthPx, trackWidth) }}
       />
       <div
-        className="pointer-events-none absolute inset-y-0 z-[4] w-px bg-cyan-300/90 shadow-[0_0_14px_rgba(34,211,238,0.6)]"
+        data-testid="current-time-line"
+        className="pointer-events-none absolute inset-y-0 z-[12] w-0.5 -translate-x-1/2 bg-cc-orange shadow-[0_0_18px_rgba(255,130,58,0.82)]"
         style={{ left: scaleTimelineX(indicator.positionPx, trackWidth) }}
       />
     </>
@@ -2489,6 +6711,7 @@ function TimelineOverlapGroup({
   item,
   onBeginAppointmentDrag,
   onDragEnd,
+  onOpenAppointment,
   onSelectAppointment,
   requests,
   rowOffset,
@@ -2499,6 +6722,7 @@ function TimelineOverlapGroup({
   item: TimelineLayoutItem;
   onBeginAppointmentDrag: (appointmentId: string) => void;
   onDragEnd: () => void;
+  onOpenAppointment: (appointment: Appointment) => void;
   onSelectAppointment: (appointment: Appointment) => void;
   requests: DispatchRequest[];
   rowOffset: number;
@@ -2513,10 +6737,6 @@ function TimelineOverlapGroup({
   const frontRequest = requests.find(
     (request) => request.id === frontAppointment.requestId,
   );
-  const frontBookingType = appointmentBookingType(
-    frontAppointment,
-    frontRequest,
-  );
   const groupWidth = timelineWidth(item.groupStart, item.groupEnd, trackWidth);
   const frontLeftWithinGroup =
     timelineLeft(frontAppointment.start, trackWidth) -
@@ -2526,15 +6746,14 @@ function TimelineOverlapGroup({
     frontAppointment.end,
     trackWidth,
   );
+  const frontPriorityClass = bookingCardPriorityClass(frontRequest?.priority);
 
   return (
     <div
       className={`absolute z-30 transition ${
         searchState === "dimmed" ? "opacity-35 grayscale" : ""
-      } ${searchState === "match" ? "drop-shadow-[0_0_16px_rgba(34,211,238,0.18)]" : ""}`}
+      } ${searchState === "match" ? "drop-shadow-[0_0_16px_rgba(255,130,58,0.18)]" : ""}`}
       data-search-state={searchState}
-      data-booking-type={frontBookingType ?? "None"}
-      data-priority={frontRequest?.priority ?? "None"}
       data-testid={`timeline-overlap-${frontAppointment.id}`}
       style={{
         height: item.cardHeight,
@@ -2552,13 +6771,13 @@ function TimelineOverlapGroup({
       <button
         aria-label={`${item.overlapCount} overlapping appointments. ${frontAppointment.title} ${frontAppointment.customer}`}
         aria-pressed={active}
-        data-booking-type={frontBookingType ?? "None"}
-        data-priority={frontRequest?.priority ?? "None"}
-        draggable
+        draggable={!frontAppointment.readOnly}
         title={`${frontAppointment.title} | ${frontAppointment.start}-${frontAppointment.end} | ${frontAppointment.customer}${frontRequest ? ` | ${frontRequest.requestNumber}` : ""}`}
-        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${bookingPriorityCardTone(
-          frontRequest?.priority,
-        )} ${active ? "ring-2 ring-cyan-200" : ""}`}
+        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
+          active
+            ? "border-cc-orange bg-cc-orange/24 text-cc-orange ring-2 ring-cc-orange"
+            : `${frontPriorityClass} ring-1 ring-rose-200/70`
+        }`}
         style={{
           height: item.cardHeight,
           left: Math.max(0, frontLeftWithinGroup),
@@ -2577,6 +6796,9 @@ function TimelineOverlapGroup({
           setOpen(false);
         }}
         onClick={() => onSelectAppointment(frontAppointment)}
+        onDoubleClick={
+          frontRequest ? () => onOpenAppointment(frontAppointment) : undefined
+        }
         onDragEnd={onDragEnd}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
@@ -2589,7 +6811,10 @@ function TimelineOverlapGroup({
             {frontAppointment.title}
           </span>
           <span className="shrink-0 rounded-full border border-rose-100/40 bg-rose-100/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-50">
-            +{item.overlapCount - 1}
+            <span className="flex items-center gap-1">
+              <SentimentIcon sentiment={frontRequest?.sentiment} />
+              +{item.overlapCount - 1}
+            </span>
           </span>
         </div>
         <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] font-semibold leading-4 text-white/90">
@@ -2603,12 +6828,11 @@ function TimelineOverlapGroup({
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {frontAppointment.customer}
           {frontRequest ? ` - ${frontRequest.requestNumber}` : ""}
-          {frontBookingType ? ` · ${frontBookingType}` : ""}
         </div>
       </button>
       {open ? (
         <div
-          className="absolute left-0 top-[66px] z-50 w-[300px] rounded-lg border border-rose-200/30 bg-[#081425]/98 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
+          className="absolute left-0 top-[66px] z-50 w-[300px] rounded-lg border border-rose-200/30 bg-cc-surface-2/98 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
           data-testid="timeline-overlap-reveal"
         >
           <div className="mb-2 flex items-center justify-between gap-2 px-1">
@@ -2625,19 +6849,21 @@ function TimelineOverlapGroup({
                 (candidate) => candidate.id === appointment.requestId,
               );
               const selected = appointment.id === activeAppointmentId;
-              const bookingType = appointmentBookingType(appointment, request);
               return (
                 <button
                   key={appointment.id}
                   aria-label={`${appointment.title} ${appointment.customer}`}
-                  data-booking-type={bookingType ?? "None"}
-                  data-priority={request?.priority ?? "None"}
-                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cyan-200/60 ${bookingPriorityCardTone(
-                    request?.priority,
-                  )} ${selected ? "ring-2 ring-cyan-200/70" : ""}`}
-                  draggable
+                  className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cc-orange/60 hover:bg-cc-orange/10 ${
+                    selected
+                      ? "border-cc-orange/70 bg-cc-orange/14"
+                      : "border-white/10 bg-white/[0.035]"
+                  }`}
+                  draggable={!appointment.readOnly}
                   type="button"
                   onClick={() => onSelectAppointment(appointment)}
+                  onDoubleClick={
+                    request ? () => onOpenAppointment(appointment) : undefined
+                  }
                   onDragEnd={onDragEnd}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "move";
@@ -2649,8 +6875,9 @@ function TimelineOverlapGroup({
                     <span className="line-clamp-2 font-semibold leading-snug text-slate-50">
                       {appointment.title}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-cyan-100">
-                      {appointment.start}-{appointment.end}
+                    <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-cc-orange">
+                      <SentimentIcon sentiment={request?.sentiment} />
+                      <span>{appointment.start}-{appointment.end}</span>
                     </span>
                   </div>
                   <div className="mt-1 truncate text-[11px] text-slate-300">
@@ -2660,7 +6887,6 @@ function TimelineOverlapGroup({
                     <span className="truncate font-mono">
                       {request?.requestNumber ??
                         (appointment.source === "outlook" ? "Outlook event" : "Calendar")}
-                      {bookingType ? ` · ${bookingType}` : ""}
                     </span>
                     <span className="rounded-full bg-rose-300/12 px-1.5 py-0.5 font-semibold text-rose-100">
                       {appointment.syncIssue ? "Conflict" : appointment.status}
@@ -2680,9 +6906,11 @@ function TimelineAppointment({
   active,
   appointment,
   cardHeight,
+  hasUnreadUpdate,
   laneTop,
   onBeginDrag,
   onDragEnd,
+  onOpen,
   onSelect,
   request,
   searchState,
@@ -2691,17 +6919,21 @@ function TimelineAppointment({
   active: boolean;
   appointment: Appointment;
   cardHeight: number;
+  hasUnreadUpdate: boolean;
   laneTop: number;
   onBeginDrag: () => void;
   onDragEnd: () => void;
+  onOpen: () => void;
   onSelect: () => void;
   request?: DispatchRequest;
   searchState: SearchState;
   trackWidth: number;
 }) {
   const warning = Boolean(appointment.syncIssue);
-  const bookingType = appointmentBookingType(appointment, request);
+  const syncing = request?.warnings.includes("Syncing");
+  const reviewRequired = request?.warnings.includes("Review required");
   const segments = getTimelineAppointmentSegments(appointment);
+  const priorityClass = bookingCardPriorityClass(request?.priority);
   return (
     <>
       <TravelSideExtension
@@ -2718,20 +6950,20 @@ function TimelineAppointment({
       <button
         aria-label={`${appointment.title} ${appointment.customer}`}
         aria-pressed={active}
-        data-booking-type={bookingType ?? "None"}
-        data-priority={request?.priority ?? "None"}
         data-search-state={searchState}
         data-testid={`timeline-appointment-${appointment.id}`}
-        draggable
+        draggable={!appointment.readOnly}
         title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
-        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${bookingPriorityCardTone(
-          request?.priority,
-        )} ${active ? "z-20 ring-2 ring-cyan-200 shadow-[0_0_0_1px_rgba(103,232,249,0.34),0_18px_42px_rgba(8,145,178,0.22)]" : "z-10"} ${
-          warning ? "ring-1 ring-amber-200/70" : ""
+        className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
+          active
+            ? "z-20 border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange shadow-[0_0_0_1px_rgba(255,130,58,0.34),0_18px_42px_rgba(255,130,58,0.22)]"
+            : `z-10 ${priorityClass} ${
+                warning ? "ring-1 ring-amber-200/70" : ""
+              }`
         } ${
           searchState === "dimmed" ? "opacity-35 grayscale" : ""
         } ${
-          searchState === "match" ? "ring-1 ring-cyan-200/60" : ""
+          searchState === "match" ? "ring-1 ring-cc-orange/60" : ""
         }`}
         style={{
           height: cardHeight,
@@ -2747,22 +6979,40 @@ function TimelineAppointment({
           onBeginDrag();
         }}
         onClick={onSelect}
+        onDoubleClick={request ? onOpen : undefined}
       >
         <div className="flex items-start justify-between gap-2">
-          <span className="block truncate text-[12px] font-bold leading-4">
+          <span className="flex min-w-0 items-center gap-1 truncate text-[12px] font-bold leading-4">
+            {appointment.activityType === "external_call" ? (
+              <PhoneCall className="h-3 w-3 shrink-0" />
+            ) : null}
             {appointment.title}
           </span>
-          {warning || appointment.travelWarning ? (
-            <MailWarning className="h-3.5 w-3.5 shrink-0" />
-          ) : null}
+          <span className="flex shrink-0 items-center gap-1">
+            <SentimentIcon sentiment={request?.sentiment} />
+            {hasUnreadUpdate ? (
+              <TicketUpdateBadge
+                compact
+                dataTestId={`timeline-ticket-update-${appointment.id}`}
+              />
+            ) : null}
+            {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
+            {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
+            {warning || appointment.travelWarning ? (
+              <MailWarning className="h-3.5 w-3.5 shrink-0" />
+            ) : null}
+          </span>
         </div>
         <div className="mt-0.5 font-mono text-[11px] font-semibold leading-4 text-white/90">
           {appointment.start}-{appointment.end}
         </div>
         <div className="truncate text-[10px] font-medium leading-3 opacity-90">
           {appointment.customer}
-          {request ? ` - ${request.requestNumber}` : ""}
-          {bookingType ? ` · ${bookingType}` : ""}
+          {request
+            ? ` - ${request.requestNumber}`
+            : appointment.activityType === "external_call"
+              ? ` - ${formatTalkTime(appointment.externalTalkSeconds ?? 0)}`
+              : ""}
         </div>
       </button>
       <TravelSideExtension
@@ -2814,7 +7064,7 @@ function TimelineDropPreview({
         className={`pointer-events-none absolute z-0 overflow-hidden rounded-md border border-dashed px-2 py-1 text-xs ${
           preview.warning
             ? "border-amber-300/60 bg-amber-300/10 text-amber-50"
-            : "border-cyan-300/60 bg-cyan-300/10 text-cyan-50"
+            : "border-cc-orange/60 bg-cc-orange/10 text-cc-orange"
         }`}
         style={{
           height,
@@ -2882,7 +7132,7 @@ function TravelSideExtension({
           : "rounded-l-none rounded-r-md border-l-0 justify-start"
       } ${
         active
-          ? "border-cyan-200/40 bg-[repeating-linear-gradient(135deg,rgba(103,232,249,0.18)_0,rgba(103,232,249,0.18)_5px,rgba(103,232,249,0.07)_5px,rgba(103,232,249,0.07)_10px)] text-cyan-100/85"
+          ? "border-cc-orange/40 bg-[repeating-linear-gradient(135deg,rgba(255,130,58,0.18)_0,rgba(255,130,58,0.18)_5px,rgba(255,130,58,0.07)_5px,rgba(255,130,58,0.07)_10px)] text-cc-orange/85"
           : warning
             ? "border-amber-300/25 bg-[repeating-linear-gradient(135deg,rgba(251,191,36,0.16)_0,rgba(251,191,36,0.16)_5px,rgba(251,191,36,0.06)_5px,rgba(251,191,36,0.06)_10px)] text-amber-100/80"
             : "border-slate-300/16 bg-[repeating-linear-gradient(135deg,rgba(148,163,184,0.16)_0,rgba(148,163,184,0.16)_5px,rgba(148,163,184,0.06)_5px,rgba(148,163,184,0.06)_10px)]"
@@ -2901,11 +7151,27 @@ function TravelSideExtension({
 
 function DetailDrawer({
   appointment,
+  calendarWriteEnabled,
+  integrationState,
+  now,
+  showIntegrations,
+  onOpenWorkLog,
+  onOpenWorkspace,
+  onReschedule,
+  onSyncCalendar,
   request,
   selectionKind,
   technician,
 }: {
   appointment?: Appointment;
+  calendarWriteEnabled: boolean;
+  integrationState?: TrackedIntegrationOperation["state"];
+  now: Date;
+  showIntegrations: boolean;
+  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
+  onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
+  onReschedule: (appointment: Appointment) => void;
+  onSyncCalendar: () => void;
   request?: DispatchRequest;
   selectionKind: Selection["kind"];
   technician: string;
@@ -2917,25 +7183,28 @@ function DetailDrawer({
   const eyebrow = isOutlookOnly
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
-  const helpdeskUrl = request?.helpdeskUrl;
-  const bookingType = appointment
-    ? appointmentBookingType(appointment, request)
-    : request
-      ? bookingTypeForRequest(request)
-      : undefined;
+  const helpdeskUrl = request?.helpdeskUrl ?? appointment?.helpdeskUrl;
+  const normalizedWarnings = normalizeIntegrationWarnings(
+    request?.warnings ?? outlookWarnings(appointment),
+    integrationState,
+  );
+  const secondaryWarnings = normalizedWarnings.filter(
+    (warning) =>
+      !integrationState || !["syncing", "review required"].includes(warning.toLowerCase()),
+  );
 
   return (
     <aside
-      className="min-h-0 overflow-auto rounded-lg border border-cyan-300/20 bg-[#0b1628] shadow-[0_0_0_1px_rgba(103,232,249,0.08),0_20px_44px_rgba(0,0,0,0.28)]"
+      className="min-h-0 overflow-auto rounded-lg border border-cc-orange/20 bg-cc-surface-1 shadow-[0_0_0_1px_rgba(255,130,58,0.08),0_20px_44px_rgba(0,0,0,0.28)]"
       data-testid="command-centre-drawer"
     >
-      <div className="border-b border-cyan-300/10 bg-cyan-300/[0.03] p-3">
+      <div className="border-b border-cc-orange/10 bg-cc-orange/[0.03] p-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           {isOutlookOnly ? "Calendar Event" : "Request"}
         </p>
         <div className="mt-1.5 flex items-start justify-between gap-2">
           <div>
-            <div className="font-mono text-xs text-cyan-200">
+            <div className="font-mono text-xs text-cc-orange">
               {eyebrow}
             </div>
             <h2 className="mt-0.5 text-base font-semibold leading-snug text-slate-50">
@@ -2944,36 +7213,95 @@ function DetailDrawer({
           </div>
           {request ? <PriorityChip priority={request.priority} /> : null}
         </div>
-        <div className="mt-2 h-1 rounded-full bg-cyan-300/20">
+        <div className="mt-2 h-1 rounded-full bg-cc-orange/20">
           <div
-            className={`h-full rounded-full bg-cyan-300 ${
+            className={`h-full rounded-full bg-cc-orange ${
               selectionKind === "appointment" ? "w-full" : "w-2/3"
             }`}
           />
         </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          {(request?.warnings ?? outlookWarnings(appointment)).map((warning) => (
+        <div aria-label="Selected request warnings" className="mt-2 flex flex-wrap gap-1">
+          {integrationState === "review_required" ? (
+            showIntegrations ? (
+              <Link
+                className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100"
+                href="/integrations"
+              >
+                Review required
+              </Link>
+            ) : (
+              <span className="rounded-full border border-amber-300/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
+                Review required
+              </span>
+            )
+          ) : integrationState === "queued" ||
+            integrationState === "syncing" ||
+            integrationState === "retrying" ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-100">
+              <RefreshCw className="h-3 w-3 animate-spin" /> Syncing
+            </span>
+          ) : null}
+          {secondaryWarnings.map((warning) => (
             <Badge key={warning} tone="warning">
               {warning}
             </Badge>
           ))}
         </div>
+        {request?.updateInfo ? (
+          <div className="mt-2 rounded-md border border-cc-orange/25 bg-cc-orange/10 px-2.5 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-cc-orange">
+                Ticket update
+              </span>
+              <span className="text-[10px] font-semibold text-slate-300">
+                {formatTicketUpdateSource(request.updateInfo.source)}{" - "}
+                {formatDateTime(request.updateInfo.at)}
+              </span>
+            </div>
+            <div className="mt-1 text-xs font-semibold text-slate-50">
+              {request.updateInfo.summary}
+            </div>
+            {request.updateInfo.detail ? (
+              <div className="mt-0.5 text-xs leading-snug text-slate-300">
+                {request.updateInfo.detail}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="space-y-2.5 p-3">
         <DrawerSection title="Helpdesk">
           {request ? (
             <>
               <DetailRow label="Customer/site" value={`${request.customer} / ${request.site}`} />
+              {request.siteAddress ? (
+                <DetailRow label="Address" value={request.siteAddress} />
+              ) : null}
+              {request.siteAddressSource ? (
+                <DetailRow
+                  label="Address source"
+                  value={
+                    request.siteAddressSource === "zoho-crm"
+                      ? "Zoho CRM"
+                      : request.siteAddressSource === "msp-central"
+                        ? "MSP Central"
+                        : "Needs review"
+                  }
+                />
+              ) : null}
               <DetailRow label="Contact" value={`${request.requester} / ${request.contact}`} />
               <DetailRow label="Source" value={requestSourceLabel(request)} />
               <DetailRow label="Status" value={request.status} />
               <DetailRow label="Due time" value={formatDateTime(request.dueAt)} />
+              {request.sentiment ? (
+                <DetailRow
+                  label="Sentiment"
+                  value={sentimentLabel(request.sentiment)}
+                />
+              ) : null}
               <DetailRow
                 label="Notes"
-                value={
-                  request.notes ??
-                  "Mock note. Confirm access and parts before dispatch."
-                }
+                value={requestNotesSummary(request)}
               />
             </>
           ) : (
@@ -2985,12 +7313,24 @@ function DetailDrawer({
           )}
         </DrawerSection>
         <DrawerSection title="Schedule and sync">
+          {request?.activeTimer ? (
+            <div className="mb-2 rounded-md border border-cc-orange/45 bg-cc-orange/15 p-2.5 shadow-[0_0_24px_rgba(255,130,58,0.12)]">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-cc-orange">
+                    Active mobile timer
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-300">
+                    {request.activeTimer.technicianName ?? technician}
+                  </div>
+                </div>
+                <div className="font-mono text-2xl font-bold tabular-nums text-slate-50">
+                  {formatActiveTimerElapsed(request.activeTimer.startedAt, now)}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <DetailRow label="Technician" value={technician} />
-          <DetailRow label="Booking type" value={bookingType ?? "Not set"} />
-          <DetailRow
-            label="Notes allowance"
-            value={`${appointment?.noteTimeMinutes ?? 0} minutes`}
-          />
           <DetailRow
             label="Technician mapping"
             value={request?.technicianId ? "Mapped" : "Review required"}
@@ -3049,6 +7389,32 @@ function DetailDrawer({
         <DrawerSection title="Actions">
           <div className="grid gap-2">
             <ActionButton
+              disabled={!request}
+              icon={<Clock3 className="h-4 w-4" />}
+              onClick={() =>
+                request && onOpenWorkLog(request.id, appointment?.id)
+              }
+              primary={Boolean(request)}
+              title={
+                request
+                  ? "Record a local/test-sync Work Log for this request-backed ticket."
+                  : "Work Log requires a linked helpdesk request."
+              }
+            >
+              Work Log
+            </ActionButton>
+            <ActionButton
+              disabled={!request}
+              icon={<MessageSquare className="h-4 w-4" />}
+              onClick={() =>
+                request && onOpenWorkspace(request.id, appointment?.id)
+              }
+              primary={Boolean(request)}
+              title={request ? "Open ticket details and customer communications." : "Comms requires a linked Helpdesk request."}
+            >
+              Comms
+            </ActionButton>
+            <ActionButton
               disabled={!helpdeskUrl}
               href={helpdeskUrl}
               icon={<ExternalLink className="h-4 w-4" />}
@@ -3073,18 +7439,28 @@ function DetailDrawer({
               Open Outlook Event
             </ActionButton>
             <ActionButton
-              disabled
+              disabled={!appointment || appointment.readOnly}
               icon={<Clock3 className="h-4 w-4" />}
-              title="MSP Central API access is not configured yet."
+              onClick={() => appointment && onReschedule(appointment)}
+              title={
+                appointment && !appointment.readOnly
+                  ? "Change this booking's technician, date, time, or duration."
+                  : "Outlook-only bookings cannot be rescheduled from Command Centre."
+              }
             >
               Reschedule
             </ActionButton>
             <ActionButton
-              disabled
+              disabled={!request || !appointment || !calendarWriteEnabled}
               icon={<RefreshCw className="h-4 w-4" />}
-              title="Outlook writeback is not enabled yet."
+              onClick={onSyncCalendar}
+              title={
+                request && appointment && calendarWriteEnabled
+                  ? "Create or update the linked Outlook event and MSP Central schedule."
+                  : "Select a linked scheduled request while Outlook writeback is enabled."
+              }
             >
-              {appointment?.readOnly ? "Calendar Read Only" : "Create / Update Calendar Event"}
+              Create / Update Calendar Event
             </ActionButton>
           </div>
         </DrawerSection>
@@ -3180,6 +7556,7 @@ function ActionButton({
   disabled = false,
   href,
   icon,
+  onClick,
   primary = false,
   title,
 }: {
@@ -3187,6 +7564,7 @@ function ActionButton({
   disabled?: boolean;
   href?: string;
   icon: React.ReactNode;
+  onClick?: () => void;
   primary?: boolean;
   title?: string;
 }) {
@@ -3194,7 +7572,7 @@ function ActionButton({
     disabled
       ? "cursor-not-allowed border border-white/10 bg-white/[0.03] text-slate-500"
       : primary
-      ? "bg-cyan-500 text-[#07111f]"
+      ? "bg-cc-orange text-cc-surface-1"
       : "border border-white/10 bg-white/5 text-slate-200"
   }`;
 
@@ -3217,6 +7595,7 @@ function ActionButton({
     <button
       className={className}
       disabled={disabled}
+      onClick={onClick}
       title={title}
       type="button"
     >
@@ -3227,6 +7606,10 @@ function ActionButton({
 }
 
 function requestSourceLabel(request: DispatchRequest) {
+  if (request.sourceSystem === "command-centre-db") {
+    return "Command Centre DB";
+  }
+
   if (request.sourceSystem === "msp-central") {
     return "MSP Central";
   }
@@ -3236,6 +7619,56 @@ function requestSourceLabel(request: DispatchRequest) {
   }
 
   return "Mock";
+}
+
+export function requestNotesSummary(request: DispatchRequest) {
+  if (request.notes?.trim()) {
+    return request.notes;
+  }
+
+  return request.sourceSystem === "msp-central" ||
+    request.sourceSystem === "msp-central-fixture"
+    ? "No notes provided."
+    : "Mock note. Confirm access and parts before dispatch.";
+}
+
+function hasUnreadTicketUpdate(
+  request: DispatchRequest | undefined,
+  seenTicketUpdateIds: SeenTicketUpdateIds,
+) {
+  return Boolean(
+    request?.updateInfo && !seenTicketUpdateIds.has(request.id),
+  );
+}
+
+function formatTicketUpdateSource(
+  source: NonNullable<DispatchRequest["updateInfo"]>["source"],
+) {
+  if (source === "msp-central") {
+    return "MSP Central";
+  }
+
+  if (source === "technician-app") {
+    return "Technician app";
+  }
+
+  if (source === "test-sync") {
+    return "Test sync";
+  }
+
+  return "Command Centre";
+}
+
+function workTypeLabel(value: string) {
+  if (value === "non_billable") {
+    return "non-billable";
+  }
+
+  if (value === "internal") {
+    return "internal";
+  }
+
+  return "billable";
 }
 
 function outlookWarnings(appointment?: Appointment) {
@@ -3275,6 +7708,64 @@ function PriorityChip({ priority }: { priority: DispatchRequest["priority"] }) {
       className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${classes[priority]}`}
     >
       {priority}
+    </span>
+  );
+}
+
+function SentimentIcon({
+  sentiment,
+}: {
+  sentiment?: DispatchRequest["sentiment"];
+}) {
+  if (!sentiment) {
+    return null;
+  }
+
+  const config = {
+    negative: {
+      className: "text-rose-200",
+      Icon: Frown,
+      label: "Negative sentiment",
+    },
+    neutral: {
+      className: "text-slate-200",
+      Icon: Meh,
+      label: "Neutral sentiment",
+    },
+    positive: {
+      className: "text-emerald-200",
+      Icon: Smile,
+      label: "Positive sentiment",
+    },
+  }[sentiment];
+
+  return (
+    <config.Icon
+      aria-label={config.label}
+      className={`h-3.5 w-3.5 shrink-0 ${config.className}`}
+    />
+  );
+}
+
+function sentimentLabel(sentiment: NonNullable<DispatchRequest["sentiment"]>) {
+  return `${sentiment[0].toUpperCase()}${sentiment.slice(1)}`;
+}
+
+function TicketUpdateBadge({
+  compact = false,
+  dataTestId,
+}: {
+  compact?: boolean;
+  dataTestId?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border border-cc-orange/45 bg-cc-orange/20 font-bold uppercase tracking-wide text-cc-orange shadow-[0_0_12px_rgba(255,130,58,0.18)] ${
+        compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[10px]"
+      }`}
+      data-testid={dataTestId}
+    >
+      Updated
     </span>
   );
 }
@@ -3334,7 +7825,7 @@ function severityClass(severity: Severity) {
   return {
     critical: "border-rose-300/25 bg-rose-400/12 text-rose-50",
     warning: "border-amber-300/25 bg-amber-300/12 text-amber-50",
-    info: "border-cyan-300/20 bg-cyan-300/10 text-cyan-50",
+    info: "border-cc-orange/20 bg-cc-orange/10 text-cc-orange",
     healthy: "border-emerald-300/20 bg-emerald-300/10 text-emerald-50",
   }[severity];
 }
@@ -3422,11 +7913,22 @@ function requestSearchFields(
     request.subcategory,
     request.item,
     request.assetNames,
-    request.billable ? "Billable" : "Non-billable",
+    request.updateInfo?.summary,
+    request.updateInfo?.detail,
+    request.updateInfo?.source,
     request.readyToBook ? "Ready to book" : undefined,
     technicianLabel(technicians, request.technicianId),
     ...request.warnings,
   ];
+}
+
+function hasDisplayableSite(site?: string) {
+  const normalized = site?.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      normalized !== "unknown site" &&
+      normalized !== "site not provided",
+  );
 }
 
 function includesQuery(values: unknown, search: string) {
@@ -3685,7 +8187,7 @@ function appointmentIsOutOfHours(appointment: Appointment) {
   }
 
   return minutesFromTime(appointment.start) < 9 * 60 ||
-    minutesFromTime(appointment.end) > 17 * 60 + 30;
+    minutesFromTime(appointment.end) > 17 * 60;
 }
 
 function appointmentIsClosedDay(appointment: Appointment) {
@@ -3799,7 +8301,7 @@ function healthCardClass(item: HealthItem, active: boolean) {
       ? "border-white/10 bg-white/[0.025] text-slate-400 hover:bg-white/[0.045]"
       : severityClass(item.severity),
     active
-      ? "ring-2 ring-cyan-200 shadow-[0_0_28px_rgba(103,232,249,0.16)]"
+      ? "ring-2 ring-cc-orange shadow-[0_0_28px_rgba(255,130,58,0.16)]"
       : "",
   ].join(" ");
 }
@@ -3826,7 +8328,7 @@ function formatDuration(minutes: number) {
 
 function scheduleTimeOptions() {
   const options: string[] = [];
-  for (let minutes = 9 * 60; minutes <= 17 * 60 + 30; minutes += 15) {
+  for (let minutes = 9 * 60; minutes <= 17 * 60; minutes += 15) {
     const hours = Math.floor(minutes / 60);
     const remainder = minutes % 60;
     options.push(
@@ -3865,7 +8367,7 @@ function timelineWidth(
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return "Unknown";
   }
   return new Intl.DateTimeFormat("en-AU", {
     hour: "numeric",
@@ -3875,9 +8377,32 @@ function formatTime(value: string) {
 }
 
 function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
   return new Intl.DateTimeFormat("en-AU", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Australia/Melbourne",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function formatActiveTimerElapsed(startedAt: string, now: Date) {
+  const started = new Date(startedAt);
+  if (Number.isNaN(started.getTime())) {
+    return "0m";
+  }
+
+  const elapsedMinutes = Math.max(
+    0,
+    Math.floor((now.getTime() - started.getTime()) / 60_000),
+  );
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m`;
+  }
+
+  const hours = Math.floor(elapsedMinutes / 60);
+  const minutes = elapsedMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }

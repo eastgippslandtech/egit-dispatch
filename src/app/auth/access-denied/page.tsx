@@ -1,5 +1,10 @@
-import { AccessNotApproved } from "../auth-screen";
+import { AccessNotApproved, AuthenticationProblem } from "../auth-screen";
 
-export default function AccessDeniedPage() {
-  return <AccessNotApproved />;
+export default async function AccessDeniedPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+  return error ? <AuthenticationProblem /> : <AccessNotApproved />;
 }

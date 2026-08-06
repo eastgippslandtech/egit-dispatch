@@ -10,6 +10,15 @@ describe("dispatch runtime config", () => {
     expect(config.calendarDataSource).toBe("mock");
     expect(config.dispatchDataSource).toBe("mock");
     expect(config.timezone).toBe("Australia/Melbourne");
+    expect(config.trainingSamplesEnabled).toBe(false);
+  });
+
+  it("can enable local Command Centre training samples", () => {
+    const config = readDispatchConfig({
+      COMMAND_CENTRE_TRAINING_SAMPLES: "true",
+    });
+
+    expect(config.trainingSamplesEnabled).toBe(true);
   });
 
   it("can select MSP Central fixture dispatch data without live API mode", () => {
@@ -19,6 +28,16 @@ describe("dispatch runtime config", () => {
 
     expect(config.dispatchDataSource).toBe("msp-central-fixture");
     expect(config.mode).toBe("mock");
+  });
+
+  it("can select the existing Command Centre database dispatch source", () => {
+    const config = readDispatchConfig({
+      DATABASE_URL: "postgresql://command-centre-db",
+      DISPATCH_DATA_SOURCE: "command-centre-db",
+    });
+
+    expect(config.dispatchDataSource).toBe("command-centre-db");
+    expect(config.databaseUrl).toBe("postgresql://command-centre-db");
   });
 
   it("can enable Outlook calendar reads without enabling MSP Central live mode", () => {
@@ -77,5 +96,43 @@ describe("dispatch runtime config", () => {
     expect(config.databaseUrl).toBe("postgresql://example");
     expect(config.mspCentral.baseUrl).toBe("https://msp.example");
     expect(config.microsoft.clientId).toBe("graph-client");
+  });
+
+  it("removes invisible markers and surrounding whitespace from integration values", () => {
+    const config = readDispatchConfig({
+      APP_BASE_URL: " \uFEFFhttps://command.egit.com.au \u200B",
+      DATABASE_URL: "\uFEFFpostgresql://example ",
+      MSP_CENTRAL_ACCOUNTS_URL: "\u200Bhttps://accounts.zoho.com.au ",
+      MSP_CENTRAL_BASE_URL:
+        "\uFEFFhttps://servicedeskplus.net.au/app/memsp1783593801295 ",
+      MSP_CENTRAL_CLIENT_ID: " msp-client ",
+      MSP_CENTRAL_CLIENT_SECRET: "\uFEFFmsp-secret",
+      MSP_CENTRAL_PORTAL: " memsp1783593801295 ",
+      MSP_CENTRAL_REFRESH_TOKEN: " msp-refresh\u200B",
+      MSP_CENTRAL_REQUEST_WEB_BASE_URL:
+        " \uFEFFhttps://servicedeskplus.net.au/app/memsp1783593801295 ",
+      MICROSOFT_CLIENT_ID: " graph-client ",
+      MICROSOFT_CLIENT_SECRET: " graph-secret ",
+      MICROSOFT_TENANT_ID: "\uFEFFtenant ",
+    });
+
+    expect(config.appBaseUrl).toBe("https://command.egit.com.au");
+    expect(config.databaseUrl).toBe("postgresql://example");
+    expect(config.mspCentral).toMatchObject({
+      accountsUrl: "https://accounts.zoho.com.au",
+      baseUrl:
+        "https://servicedeskplus.net.au/app/memsp1783593801295",
+      clientId: "msp-client",
+      clientSecret: "msp-secret",
+      portal: "memsp1783593801295",
+      refreshToken: "msp-refresh",
+      requestWebBaseUrl:
+        "https://servicedeskplus.net.au/app/memsp1783593801295",
+    });
+    expect(config.microsoft).toMatchObject({
+      clientId: "graph-client",
+      clientSecret: "graph-secret",
+      tenantId: "tenant",
+    });
   });
 });

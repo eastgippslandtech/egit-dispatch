@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 
 import { AccessNotApproved } from "@/app/auth/auth-screen";
-import { getCommandCentreAccess } from "@/server/auth/session";
+import {
+  getCommandCentreAccess,
+  isApprovedStaffAccess,
+} from "@/server/auth/session";
 import {
   getMobilePageData,
   resolveStaffProfileForMobile,
@@ -16,7 +19,11 @@ export default async function MobilePage() {
     redirect("/auth/sign-in?callbackUrl=/mobile");
   }
 
-  if (access.status === "not-approved") {
+  if (access.status === "wallboard-only") {
+    redirect("/wallboard");
+  }
+
+  if (!isApprovedStaffAccess(access)) {
     return <AccessNotApproved email={access.email} name={access.name} />;
   }
 

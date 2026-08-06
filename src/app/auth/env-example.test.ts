@@ -6,9 +6,10 @@ describe("auth env example", () => {
   const envExample = readFileSync(".env.example", "utf8");
 
   it("documents Auth.js and NextAuth secret/url aliases", () => {
-    expect(envExample).toContain("AUTH_URL=");
+    expect(envExample).toContain("APP_BASE_URL=http://localhost:3000");
+    expect(envExample).toContain("AUTH_URL=http://localhost:3000");
     expect(envExample).toContain("AUTH_SECRET=");
-    expect(envExample).toContain("NEXTAUTH_URL=");
+    expect(envExample).toContain("NEXTAUTH_URL=http://localhost:3000");
     expect(envExample).toContain("NEXTAUTH_SECRET=");
   });
 

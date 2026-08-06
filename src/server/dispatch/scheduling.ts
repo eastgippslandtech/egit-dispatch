@@ -12,12 +12,13 @@ import {
 } from "./travel";
 
 export const WORKDAY_START_MINUTES = 9 * 60;
-export const WORKDAY_END_MINUTES = 17 * 60 + 30;
+export const WORKDAY_END_MINUTES = 17 * 60;
 export const TIMELINE_MINUTES = WORKDAY_END_MINUTES - WORKDAY_START_MINUTES;
 export const TIMELINE_PIXELS_PER_MINUTE = 2;
 export const TIMELINE_TRACK_WIDTH_PX =
   TIMELINE_MINUTES * TIMELINE_PIXELS_PER_MINUTE;
 export const SNAP_MINUTES = 15;
+export const TIMELINE_END_LABEL_MINIMUM_GAP_PX = 76;
 
 export type ScheduleWarningCode =
   | "missing-technician-mapping"
@@ -182,6 +183,27 @@ export function buildTimelineMarkers({
   return markers;
 }
 
+export function shouldShowTimelineHourLabel(
+  time: string,
+  trackWidth: number,
+  minimumEndGapPx = TIMELINE_END_LABEL_MINIMUM_GAP_PX,
+) {
+  if (minutesFromTime(time) >= WORKDAY_END_MINUTES) {
+    return true;
+  }
+
+  if (time !== "17:00") {
+    return true;
+  }
+
+  const minutesToTimelineEnd =
+    WORKDAY_END_MINUTES - minutesFromTime(time);
+  const availableEndGap =
+    (Math.max(0, trackWidth) * minutesToTimelineEnd) / TIMELINE_MINUTES;
+
+  return availableEndGap >= minimumEndGapPx;
+}
+
 function formatTimelineMarkerLabel(totalMinutes: number) {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -279,7 +301,7 @@ export function detectScheduleWarnings({
   if (startMinutes < WORKDAY_START_MINUTES || endMinutes > WORKDAY_END_MINUTES) {
     warnings.push({
       code: "out-of-hours",
-      message: "This booking sits outside 9:00 AM to 5:30 PM.",
+      message: "This booking sits outside 9:00 AM to 5:00 PM.",
     });
   }
 
@@ -364,14 +386,14 @@ export function scheduleRequest({
     technicianId,
     title: request.subject,
     customer: request.customer,
-    bookingType: resolvedBookingType,
-    noteTimeMinutes: timing.noteTimeMinutes,
-    workDurationMinutes: timing.workDurationMinutes,
     siteAddress: request.siteAddress,
     siteArea: request.siteArea,
     siteTown: request.siteTown,
     start: slot.start,
     end: slot.end,
+    bookingType: resolvedBookingType,
+    noteTimeMinutes: timing.noteTimeMinutes,
+    workDurationMinutes: timing.workDurationMinutes,
     status: "tentative",
     source: "linked",
   };

@@ -1,0 +1,33 @@
+appId: au.com.egit.commandcentre
+---
+- launchApp:
+    clearState: true
+- openLink: "exp+egit-command-centre-technician://expo-development-client/?url=http%3A%2F%2F192.168.69.170%3A8081"
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "http://192.168.69.170:8081"
+    optional: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- extendedWaitUntil:
+    visible: "Sign in with Zoho"
+    timeout: 30000
+- tapOn: "Sign in with Zoho"
+- tapOn: "Open Firewall firmware window"
+- scrollUntilVisible:
+    element:
+      text: "Work note input"
+    direction: DOWN
+- tapOn: "Work note input"
+- inputText: "Completed checks while offline; queued for sync."
+- tapOn: "done"
+- tapOn: "Save worklog"
+- assertVisible: "saved"

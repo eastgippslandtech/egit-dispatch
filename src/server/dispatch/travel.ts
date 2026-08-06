@@ -8,7 +8,7 @@ import type {
 } from "./types";
 
 const WORKDAY_START_MINUTES = 9 * 60;
-const WORKDAY_END_MINUTES = 17 * 60 + 30;
+const WORKDAY_END_MINUTES = 17 * 60;
 
 export type OfficeLocation = {
   address: string;

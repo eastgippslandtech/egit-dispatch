@@ -247,7 +247,12 @@ function getPostgresSql(databaseUrl?: string) {
     throw new Error("DATABASE_URL is required for presence overrides.");
   }
 
-  return getSharedPostgresClient(databaseUrl);
+  // Presence controls are internal Command Centre state and must stay responsive
+  // even when MSP Central or Outlook snapshot refreshes are slow.
+  return getSharedPostgresClient(databaseUrl, "require", {
+    max: 2,
+    poolKey: "presence-overrides",
+  });
 }
 
 function mapRow(row: PresenceOverrideRow): PresenceOverride {

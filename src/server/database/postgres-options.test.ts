@@ -17,6 +17,12 @@ describe("serverless Postgres connection URL", () => {
     });
   });
 
+  it("allows a small explicit pool size for isolated lightweight paths", () => {
+    expect(getServerlessPostgresOptions("require", { max: 2 })).toMatchObject({
+      max: 2,
+    });
+  });
+
   it("uses the Supabase transaction pooler instead of session mode", () => {
     expect(
       normalizeServerlessDatabaseUrl(

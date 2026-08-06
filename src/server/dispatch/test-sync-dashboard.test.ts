@@ -260,4 +260,54 @@ describe("test-synced dispatch dashboard", () => {
       { message: "Command Centre live dashboard read timed out." },
     );
   });
+
+  it("allows live dashboard reads long enough for Outlook's dashboard budget", async () => {
+    vi.useFakeTimers();
+    getDispatchDashboardDataMock.mockReturnValue(
+      new Promise((resolve) => {
+        setTimeout(
+          () =>
+            resolve({
+              ...dashboard,
+              calendarDataSource: "outlook",
+              dispatchDataSource: "msp-central",
+            }),
+          12_500,
+        );
+      }),
+    );
+
+    const resultPromise = getTestSyncedDispatchDashboardData({
+      appBaseUrl: "https://command.egit.com.au",
+      calendarDataSource: "outlook",
+      databaseUrl: "postgresql://example",
+      dispatchDataSource: "msp-central",
+      microsoft: {
+        clientId: "graph-client",
+        clientSecret: "graph-secret",
+        tenantId: "graph-tenant",
+        timezone: "Australia/Melbourne",
+      },
+      mode: "live",
+      mspCentral: {
+        baseUrl: "https://servicedeskplus.net.au",
+        clientId: "msp-client",
+        clientSecret: "msp-secret",
+        portal: "memsp1783593801295",
+        refreshToken: "msp-refresh",
+      },
+      timezone: "Australia/Melbourne",
+      trainingSamplesEnabled: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(12_501);
+
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      calendarDataSource: "outlook",
+      requests: dashboard.requests,
+    });
+    expect(result.calendarError).toBeUndefined();
+  });
 });

@@ -9,7 +9,7 @@ import {
 import { buildDispatchHealthItems } from "./health";
 import type { DispatchDashboardData } from "./types";
 
-const DASHBOARD_READ_TIMEOUT_MS = 10_000;
+const DASHBOARD_READ_TIMEOUT_MS = 15_000;
 const OVERLAY_READ_TIMEOUT_MS = 4_000;
 const SERVER_DASHBOARD_CACHE_MAX_AGE_MS = 30_000;
 

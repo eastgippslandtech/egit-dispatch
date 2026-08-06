@@ -140,6 +140,7 @@ describe("internal presence API", () => {
         technicianEmail: "jervy@egit.com.au",
       }),
     );
+    expect(snapshotMock).not.toHaveBeenCalled();
   });
 
   it("validates manual Leave and rejects unknown technicians", async () => {

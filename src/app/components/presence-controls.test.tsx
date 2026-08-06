@@ -117,4 +117,52 @@ describe("Dispatch presence controls", () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
   });
+
+  it("clears the Lunch spinner as soon as the presence write succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(snapshot), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            override: {
+              createdAt: "2026-07-26T02:00:00.000Z",
+              createdByEmail: "simeon@egit.com.au",
+              endsAt: "2026-07-26T02:30:00.000Z",
+              id: "lunch",
+              source: "dispatch",
+              startsAt: "2026-07-26T02:00:00.000Z",
+              status: "lunch",
+              technicianEmail: "jervy@egit.com.au",
+            },
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          },
+        ),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<PresenceControls technicians={[technician]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Team status" }));
+    const panel = await screen.findByRole("dialog", { name: "Team status" });
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Start Lunch for Jervy" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        within(panel).getByRole("button", { name: "Clear status for Jervy" }),
+      ).toBeEnabled(),
+    );
+    expect(within(panel).getByText(/Lunch .* Lunch break/)).toBeInTheDocument();
+  });
 });

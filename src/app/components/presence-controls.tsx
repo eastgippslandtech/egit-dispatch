@@ -11,7 +11,13 @@ import {
 import { useMemo, useState } from "react";
 
 import type { Technician } from "@/server/dispatch/types";
-import type { WallboardSnapshot } from "@/server/presence/types";
+import type {
+  PresenceOverride,
+  TechnicianPresence,
+  WallboardSnapshot,
+} from "@/server/presence/types";
+
+const PRESENCE_FETCH_TIMEOUT_MS = 8_000;
 
 export function PresenceControls({
   technicians,
@@ -37,9 +43,13 @@ export function PresenceControls({
   async function loadSnapshot() {
     setError("");
     try {
-      const response = await fetch("/api/internal/presence", {
-        cache: "no-store",
-      });
+      const response = await fetchWithTimeout(
+        "/api/internal/presence",
+        {
+          cache: "no-store",
+        },
+        PRESENCE_FETCH_TIMEOUT_MS,
+      );
       if (!response.ok) throw new Error(await responseMessage(response));
       setSnapshot((await response.json()) as WallboardSnapshot);
     } catch (loadError) {
@@ -63,14 +73,25 @@ export function PresenceControls({
     setBusyAction(body.action);
     setError("");
     try {
-      const response = await fetch("/api/internal/presence", {
-        body: JSON.stringify(body),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
+      const response = await fetchWithTimeout(
+        "/api/internal/presence",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        PRESENCE_FETCH_TIMEOUT_MS,
+      );
       if (!response.ok) throw new Error(await responseMessage(response));
+      const result = (await response.json()) as {
+        ok?: boolean;
+        override?: PresenceOverride;
+      };
+      setSnapshot((current) =>
+        updatePresenceSnapshot(current, technicians, technicianId, body.action, result.override),
+      );
       setLeaveTechnicianId(null);
-      await loadSnapshot();
+      void loadSnapshot();
     } catch (updateError) {
       setError(
         errorMessage(updateError, "The team status could not be updated."),
@@ -306,4 +327,87 @@ async function responseMessage(response: Response) {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function updatePresenceSnapshot(
+  snapshot: WallboardSnapshot | null,
+  technicians: Technician[],
+  technicianId: string,
+  action: "clear" | "set_leave" | "start_lunch",
+  override?: PresenceOverride,
+): WallboardSnapshot | null {
+  if (!snapshot) return snapshot;
+
+  const technician = technicians.find((candidate) => candidate.id === technicianId);
+  if (!technician) return snapshot;
+
+  const nextPresence =
+    action === "clear" || !override
+      ? fallbackOfficePresence(technician)
+      : presenceFromOverride(technicianId, override);
+
+  return {
+    ...snapshot,
+    presences: snapshot.presences.map((presence) =>
+      presence.technicianId === technicianId ? nextPresence : presence,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function presenceFromOverride(
+  technicianId: string,
+  override: PresenceOverride,
+): TechnicianPresence {
+  return {
+    conflicts: [],
+    context:
+      override.status === "lunch"
+        ? "Lunch break"
+        : override.reason ?? "Unavailable",
+    endsAt: override.endsAt,
+    label: override.status === "lunch" ? "Lunch" : "Leave",
+    source: "manual_override",
+    startsAt: override.startsAt,
+    status: override.status,
+    technicianId,
+  };
+}
+
+function fallbackOfficePresence(technician: Technician): TechnicianPresence {
+  return {
+    conflicts: [],
+    context:
+      technician.baseOfficeName ??
+      technician.storeLocation ??
+      technician.baseOfficeId ??
+      "Office",
+    label: "In office",
+    source: "schedule",
+    status: "in_office",
+    technicianId: technician.id,
+  };
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Team status request timed out.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }

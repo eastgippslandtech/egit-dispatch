@@ -7,7 +7,10 @@ import {
 } from "@/server/auth/session";
 import { getConfiguredPresenceOverrideRepository } from "@/server/presence/repository";
 import { getWallboardSnapshot } from "@/server/presence/service";
+import { getInitialStaffProfiles, staffProfileToTechnician } from "@/server/staff/profiles";
 import { getDeploymentVersion } from "@/app/wallboard/deployment-version";
+
+const PRESENCE_WRITE_TIMEOUT_MS = 5_000;
 
 export async function GET() {
   const access = await approvedWallboardAccess();
@@ -31,10 +34,11 @@ export async function POST(request: Request) {
       reason?: string;
       technicianId?: string;
     };
-    const snapshot = await getWallboardSnapshot();
-    const technician = snapshot.dashboard.technicians.find(
-      (candidate) =>
-        candidate.active && candidate.id === body.technicianId,
+    const technician = getInitialStaffProfiles()
+      .map(staffProfileToTechnician)
+      .find(
+        (candidate) =>
+          candidate.active && candidate.id === body.technicianId,
     );
     if (!technician) {
       throw new Error("Technician is not enabled for Command Centre presence.");
@@ -47,11 +51,15 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "start_lunch") {
-      const override = await repository.startLunch({
-        createdByEmail: access.email,
-        source: "dispatch",
-        technicianEmail,
-      });
+      const override = await withTimeout(
+        repository.startLunch({
+          createdByEmail: access.email,
+          source: "dispatch",
+          technicianEmail,
+        }),
+        PRESENCE_WRITE_TIMEOUT_MS,
+        "Presence update timed out.",
+      );
       return noStoreJson({ ok: true, override });
     }
 
@@ -59,24 +67,32 @@ export async function POST(request: Request) {
       if (!body.endsAt) {
         throw new Error("Leave end date and time is required.");
       }
-      const override = await repository.setLeave({
-        createdByEmail: access.email,
-        endsAt: body.endsAt,
-        reason: body.reason,
-        source: "dispatch",
-        technicianEmail,
-      });
+      const override = await withTimeout(
+        repository.setLeave({
+          createdByEmail: access.email,
+          endsAt: body.endsAt,
+          reason: body.reason,
+          source: "dispatch",
+          technicianEmail,
+        }),
+        PRESENCE_WRITE_TIMEOUT_MS,
+        "Presence update timed out.",
+      );
       return noStoreJson({ ok: true, override });
     }
 
     if (body.action === "clear") {
-      await repository.clear({ technicianEmail });
+      await withTimeout(
+        repository.clear({ technicianEmail }),
+        PRESENCE_WRITE_TIMEOUT_MS,
+        "Presence update timed out.",
+      );
       return noStoreJson({ ok: true });
     }
 
     throw new Error("Unknown presence action.");
   } catch (error) {
-    return presenceError(error, 400);
+    return presenceError(error, isTimeoutError(error) ? 503 : 400);
   }
 }
 
@@ -118,4 +134,24 @@ function presenceError(error: unknown, status: number) {
     error instanceof Error ? error.message : "Presence request failed.";
   console.error("Presence route failed", { message });
   return noStoreJson({ error: message, ok: false }, { status });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function isTimeoutError(error: unknown) {
+  return error instanceof Error && /timed out/i.test(error.message);
 }

@@ -32,14 +32,16 @@ export async function processTechnicianNotifications({
   client,
   now = new Date(),
   repository,
+  requests: providedRequests,
   sendPush = sendExpoPushNotification,
 }: {
   client: MspCentralClient;
   now?: Date;
   repository: NotificationRepository;
+  requests?: DispatchRequest[];
   sendPush?: (message: PushMessage) => Promise<{ receiptId?: string }>;
 }) {
-  const requests = await client.listRequests();
+  const requests = providedRequests ?? (await client.listRequests());
   const requestIds = requests.map((request) => request.id);
   const technicianIds = [
     ...new Set(

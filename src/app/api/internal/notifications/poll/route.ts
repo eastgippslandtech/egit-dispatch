@@ -36,12 +36,13 @@ export async function GET(request: Request) {
     });
     const refreshedRequests = await client.listRequests({ forceRefresh: true });
     await integrationRepository.recordConnectorRead({
-      connector: "command_centre",
+      connector: "msp_central",
       succeeded: true,
     });
     const result = await processTechnicianNotifications({
       client,
       repository,
+      requests: refreshedRequests,
     });
     return NextResponse.json({
       ok: true,
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
       databaseUrl: config.databaseUrl,
     })
       .recordConnectorRead({
-        connector: "command_centre",
+        connector: "msp_central",
         error: error instanceof Error ? error.message : "Unknown poll error",
         status: "unavailable",
         succeeded: false,

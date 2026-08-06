@@ -36,9 +36,9 @@ import type {
 } from "./types";
 import { roundWorklogMinutes } from "@/server/worklogs/time";
 
-const MSP_REQUEST_TIMEOUT_MS = 20_000;
+const MSP_REQUEST_TIMEOUT_MS = 12_000;
 const MSP_REQUEST_PAGE_SIZE = 100;
-const MSP_REQUEST_MAX_PAGES = 5;
+const MSP_REQUEST_MAX_PAGES = 2;
 
 type MspCentralActionResponse = {
   request?: {

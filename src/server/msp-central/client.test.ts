@@ -190,12 +190,12 @@ describe("MSP Central live client", () => {
 
     const requests = await client.listRequests();
 
-    expect(requests).toHaveLength(500);
+    expect(requests).toHaveLength(200);
     expect(
       fetchMock.mock.calls.filter(([input]) =>
         String(input).includes("/api/v3/requests?"),
       ),
-    ).toHaveLength(5);
+    ).toHaveLength(2);
   });
 
   it("does not duplicate the portal path when the MSP API base already includes /app/<portal>", async () => {

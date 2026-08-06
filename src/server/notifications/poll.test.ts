@@ -161,6 +161,28 @@ describe("technician notification poll", () => {
     expect(saveState).not.toHaveBeenCalled();
   });
 
+  it("uses a provided request snapshot instead of reading MSP Central again", async () => {
+    const listRequests = vi.fn(async () => {
+      throw new Error("Duplicate MSP Central read");
+    });
+    const client = {
+      assignRequest: vi.fn(async () => undefined),
+      listRequests,
+    } as unknown as MspCentralClient;
+    const repository = createRepository();
+
+    const result = await processTechnicianNotifications({
+      client,
+      now: new Date("2026-07-29T14:02:00+10:00"),
+      repository,
+      requests: [request],
+      sendPush: vi.fn(async () => ({ receiptId: "expo-provided" })),
+    });
+
+    expect(result.observed).toBe(1);
+    expect(listRequests).not.toHaveBeenCalled();
+  });
+
   it("notifies a technician when a recent assigned request is first observed", async () => {
     const assignedRequest = {
       ...request,

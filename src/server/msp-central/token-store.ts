@@ -22,7 +22,10 @@ export function getConfiguredMspOAuthTokenStore(
   }
 
   storeSingleton ??= createPostgresMspOAuthTokenStore(
-    getSharedPostgresClient(databaseUrl),
+    getSharedPostgresClient(databaseUrl, "require", {
+      max: 2,
+      poolKey: "msp-oauth-tokens",
+    }),
   );
   return storeSingleton;
 }

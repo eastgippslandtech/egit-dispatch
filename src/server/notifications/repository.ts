@@ -272,7 +272,10 @@ export function getConfiguredNotificationRepository(
   }
 
   repositorySingleton ??= new PostgresNotificationRepository(
-    getSharedPostgresClient(databaseUrl),
+    getSharedPostgresClient(databaseUrl, "require", {
+      max: 2,
+      poolKey: "notification-state",
+    }),
   );
   return repositorySingleton;
 }

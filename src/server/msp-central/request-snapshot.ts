@@ -242,7 +242,10 @@ export function getConfiguredMspRequestSnapshotStore({
   if (existing) return existing;
 
   const store = createPostgresMspRequestSnapshotStore(
-    getSharedPostgresClient(databaseUrl),
+    getSharedPostgresClient(databaseUrl, "require", {
+      max: 2,
+      poolKey: "msp-request-snapshots",
+    }),
     cacheKey,
   );
   stores.set(storeKey, store);

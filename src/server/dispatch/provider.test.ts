@@ -236,7 +236,7 @@ describe("dispatch dashboard provider", () => {
         outlookLoader: vi.fn(() => new Promise(() => undefined)),
       },
     );
-    await vi.advanceTimersByTimeAsync(6_001);
+    await vi.advanceTimersByTimeAsync(12_001);
     const data = await dataPromise;
 
     expect(data.requests).toHaveLength(1);
@@ -244,6 +244,66 @@ describe("dispatch dashboard provider", () => {
     expect(data.calendarError).toBe(
       "Outlook calendar read failed. The last Helpdesk data remains available.",
     );
+  });
+
+  it("allows Outlook a full dashboard budget longer than one Graph request", async () => {
+    vi.useFakeTimers();
+    const mspClient = {
+      listRequests: async () => [
+        {
+          ageHours: 1,
+          billable: false,
+          contact: "help@acme.example",
+          customer: "Acme Health",
+          id: "request-1",
+          priority: "Medium",
+          readyToBook: false,
+          requester: "Alex",
+          requestNumber: "REQ-1",
+          site: "Sale",
+          slaState: "normal",
+          sourceSystem: "msp-central",
+          status: "Scheduled",
+          subject: "Scheduled ticket",
+          technicianId: "tech-jervy",
+          warnings: [],
+        },
+      ],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    const dataPromise = getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DISPATCH_DATA_SOURCE: "msp-central",
+      }),
+      {
+        crmClient: null,
+        mspClient,
+        outlookLoader: vi.fn(
+          ({ mockData }) =>
+            new Promise((resolve) => {
+              setTimeout(
+                () =>
+                  resolve({
+                    ...mockData,
+                    appointments: [],
+                    calendarDataSource: "outlook" as const,
+                    calendarReadOnly: false,
+                    calendarStatusLabel: "Outlook Read/Write",
+                  }),
+                7_000,
+              );
+            }),
+        ),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(7_001);
+
+    await expect(dataPromise).resolves.toMatchObject({
+      calendarDataSource: "outlook",
+      calendarError: undefined,
+    });
   });
 
   it("enriches live MSP Central requests with an exact Zoho CRM account address", async () => {

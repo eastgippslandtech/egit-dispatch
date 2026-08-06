@@ -1128,7 +1128,10 @@ function getSql(databaseUrl?: string) {
   if (!databaseUrl?.trim()) {
     throw new Error("DATABASE_URL is required for integration operations.");
   }
-  return getSharedPostgresClient(databaseUrl);
+  return getSharedPostgresClient(databaseUrl, "require", {
+    max: 2,
+    poolKey: "integration-operations",
+  });
 }
 
 function requiredRow<T>(rows: readonly unknown[], message: string): T {

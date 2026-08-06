@@ -27,7 +27,7 @@ import {
 type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
-const OUTLOOK_DASHBOARD_TIMEOUT_MS = 6_000;
+const OUTLOOK_DASHBOARD_TIMEOUT_MS = 12_000;
 const CRM_ENRICHMENT_TIMEOUT_MS = 2_500;
 const MSP_REQUESTS_TIMEOUT_MS = 7_000;
 const MSP_TECHNICIANS_TIMEOUT_MS = 2_500;

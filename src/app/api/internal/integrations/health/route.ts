@@ -11,7 +11,7 @@ import { staffRouteAccess } from "@/server/yeastar/route-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const INTEGRATION_ROUTE_TIMEOUT_MS = 3_500;
+const INTEGRATION_ROUTE_TIMEOUT_MS = 6_500;
 
 export async function GET() {
   if (!(await staffRouteAccess())) {
@@ -22,7 +22,7 @@ export async function GET() {
     const [connectorsResult, countsResult] = await Promise.all([
       withIntegrationFallback(
         repository.getHealth(),
-        unavailableHealth("Integration health timed out."),
+        unknownHealth("Integration health timed out."),
         "Integration health timed out.",
       ),
       withIntegrationFallback(
@@ -64,6 +64,25 @@ function unavailableHealth(error: string): IntegrationConnectorHealth[] {
       lastCheckedAt: new Date().toISOString(),
       lastError: safeIntegrationSummary(error),
       status: "unavailable",
+    },
+  ];
+}
+
+function unknownHealth(error: string): IntegrationConnectorHealth[] {
+  return [
+    {
+      connector: "msp_central",
+      consecutiveFailures: 0,
+      lastCheckedAt: new Date().toISOString(),
+      lastError: safeIntegrationSummary(error),
+      status: "unknown",
+    },
+    {
+      connector: "outlook",
+      consecutiveFailures: 0,
+      lastCheckedAt: new Date().toISOString(),
+      lastError: safeIntegrationSummary(error),
+      status: "unknown",
     },
   ];
 }

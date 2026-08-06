@@ -70,8 +70,12 @@ describe("integration health route", () => {
     expect(payload.counts).toEqual({ pending: 4, reviewRequired: 2 });
     expect(payload.connectors).toEqual([
       expect.objectContaining({
-        connector: "command_centre",
-        status: "unavailable",
+        connector: "msp_central",
+        status: "unknown",
+      }),
+      expect.objectContaining({
+        connector: "outlook",
+        status: "unknown",
       }),
     ]);
     expect(payload.warning).toContain("CONNECT_TIMEOUT");

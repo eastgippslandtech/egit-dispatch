@@ -2,6 +2,7 @@ import type { DispatchConfig } from "./env";
 import { todayDateKey } from "./date-scope";
 import { readDispatchConfig } from "./env";
 import { buildDispatchHealthItems } from "./health";
+import { mergeMspCentralScheduleWithOutlook } from "./live-schedule";
 import { getDispatchDesignMockData, getEmptyCommandCentreData } from "./mock-data";
 import {
   buildDatabaseDispatchDashboardData,
@@ -144,17 +145,18 @@ export async function getDispatchDashboardData(
         safeError(crmAccountsResult.reason),
       );
     }
+    const mspSchedule = mergeMspCentralScheduleWithOutlook(requests, []);
     const mspData: DispatchDashboardData = {
-      appointments: [],
+      appointments: mspSchedule.appointments,
       calendarDataSource: "mock",
       calendarError: mspCentralError,
       calendarReadOnly: false,
       calendarStatusLabel: "MSP Central",
       dispatchDataSource: "msp-central",
       healthItems: [],
-      requests,
+      requests: mspSchedule.requests,
       selectedDateLabel: todayDateKey(),
-      selectedRequestId: requests[0]?.id ?? "",
+      selectedRequestId: mspSchedule.requests[0]?.id ?? "",
       technicians,
       timezone: config.timezone,
     };
@@ -176,13 +178,18 @@ export async function getDispatchDashboardData(
               calendarStatusLabel:
                 config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
             };
+      const linkedSchedule = mergeMspCentralScheduleWithOutlook(
+        requests,
+        outlookData.appointments,
+      );
       const combined = {
         ...dashboard,
-        appointments: outlookData.appointments,
+        appointments: linkedSchedule.appointments,
         calendarDataSource: outlookData.calendarDataSource,
         calendarError: joinErrors(mspCentralError, outlookData.calendarError),
         calendarReadOnly: outlookData.calendarReadOnly,
         calendarStatusLabel: outlookData.calendarStatusLabel,
+        requests: linkedSchedule.requests,
       };
 
       return addTrainingSamples({

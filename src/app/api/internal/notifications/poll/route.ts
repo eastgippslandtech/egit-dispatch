@@ -11,6 +11,10 @@ import { cronAuthorized } from "@/server/yeastar/route-auth";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+const MSP_REFRESH_TIMEOUT_MS = 42_000;
+const CONNECTOR_HEALTH_TIMEOUT_MS = 3_000;
+const NOTIFICATION_PROCESS_TIMEOUT_MS = 10_000;
+
 function isAuthorized(request: Request) {
   return cronAuthorized(request);
 }
@@ -34,15 +38,32 @@ export async function GET(request: Request) {
     const integrationRepository = createPostgresIntegrationRepository({
       databaseUrl: config.databaseUrl,
     });
-    const refreshedRequests = await client.listRequests({ forceRefresh: true });
-    await integrationRepository.recordConnectorRead({
-      connector: "msp_central",
-      succeeded: true,
-    });
-    const result = await processTechnicianNotifications({
-      client,
-      repository,
-      requests: refreshedRequests,
+    const refreshedRequests = await withPollTimeout(
+      client.listRequests({ forceRefresh: true }),
+      MSP_REFRESH_TIMEOUT_MS,
+      "MSP Central request refresh timed out.",
+    );
+    await withPollTimeout(
+      integrationRepository.recordConnectorRead({
+        connector: "msp_central",
+        succeeded: true,
+      }),
+      CONNECTOR_HEALTH_TIMEOUT_MS,
+      "MSP Central health write timed out.",
+    ).catch(() => undefined);
+    const result = await withPollTimeout(
+      processTechnicianNotifications({
+        client,
+        repository,
+        requests: refreshedRequests,
+      }),
+      NOTIFICATION_PROCESS_TIMEOUT_MS,
+      "Technician notification processing timed out.",
+    ).catch((error) => {
+      console.error("Technician notification processing skipped", {
+        message: error instanceof Error ? error.message : "Unknown poll error",
+      });
+      return { notificationWarning: "Notification processing skipped." };
     });
     return NextResponse.json({
       ok: true,
@@ -50,16 +71,19 @@ export async function GET(request: Request) {
       ...result,
     });
   } catch (error) {
-    await createPostgresIntegrationRepository({
+    const integrationRepository = createPostgresIntegrationRepository({
       databaseUrl: config.databaseUrl,
-    })
-      .recordConnectorRead({
+    });
+    await withPollTimeout(
+      integrationRepository.recordConnectorRead({
         connector: "msp_central",
         error: error instanceof Error ? error.message : "Unknown poll error",
         status: "unavailable",
         succeeded: false,
-      })
-      .catch(() => undefined);
+      }),
+      CONNECTOR_HEALTH_TIMEOUT_MS,
+      "MSP Central health write timed out.",
+    ).catch(() => undefined);
     console.error("Technician notification poll failed", {
       message: error instanceof Error ? error.message : "Unknown poll error",
     });
@@ -68,6 +92,26 @@ export async function GET(request: Request) {
       { status: 500 },
     );
   }
+}
+
+function withPollTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 export async function POST(request: Request) {

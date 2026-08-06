@@ -8,6 +8,7 @@ import type { MspCentralRawRequest } from "./types";
 const FRESH_FOR_MS = 5 * 60_000;
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
 const REFRESH_LEASE_MS = 20_000;
+const SNAPSHOT_DESCRIPTION_LIMIT = 2_000;
 
 export type MspRequestSnapshot = {
   fetchedAt: number;
@@ -81,7 +82,9 @@ export async function loadMspRequestsWithSnapshot({
 
   try {
     const requests = await fetchRequests();
-    await store.save(requests, timestamp).catch(() => undefined);
+    await store
+      .save(compactRequestsForSnapshot(requests), timestamp)
+      .catch(() => undefined);
     return requests;
   } catch (error) {
     if (isRateLimitError(error)) {
@@ -108,7 +111,7 @@ export async function refreshMspRequestsSnapshot({
 }) {
   const requests = await fetchRequests();
   if (store) {
-    await store.save(requests, now());
+    await store.save(compactRequestsForSnapshot(requests), now());
   }
   return requests;
 }
@@ -145,7 +148,9 @@ async function refreshSnapshotInBackground({
 }) {
   try {
     const requests = await fetchRequests();
-    await store.save(requests, fetchedAt).catch(() => undefined);
+    await store
+      .save(compactRequestsForSnapshot(requests), fetchedAt)
+      .catch(() => undefined);
   } catch (error) {
     if (isRateLimitError(error)) {
       await store
@@ -156,6 +161,69 @@ async function refreshSnapshotInBackground({
 
     await store.releaseRefreshLease().catch(() => undefined);
   }
+}
+
+export function compactRequestsForSnapshot(
+  requests: MspCentralRawRequest[],
+): MspCentralRawRequest[] {
+  return requests.map((request) => ({
+    account: request.account,
+    assets: request.assets,
+    category: request.category,
+    created_time: request.created_time,
+    customer: request.customer,
+    description: truncateSnapshotText(request.description),
+    due_by_time: request.due_by_time,
+    id: request.id,
+    is_onsite: request.is_onsite,
+    item: request.item,
+    onsite: request.onsite,
+    priority: request.priority,
+    request_number: request.request_number,
+    requester: request.requester,
+    requester_email: request.requester_email,
+    requester_name: request.requester_name,
+    requester_sentiment: request.requester_sentiment,
+    scheduled_end_time: request.scheduled_end_time,
+    scheduled_start_time: request.scheduled_start_time,
+    sentiment: request.sentiment,
+    sentiment_analysis: request.sentiment_analysis,
+    site: request.site,
+    site_address: request.site_address,
+    site_area: request.site_area,
+    site_name: request.site_name,
+    site_town: request.site_town,
+    sla: request.sla,
+    sla_status: request.sla_status,
+    status: request.status,
+    subcategory: request.subcategory,
+    subject: request.subject,
+    technician: request.technician,
+    udf_fields: compactUdfFields(request.udf_fields),
+    updated_by: request.updated_by,
+    updated_time: request.updated_time,
+    last_updated_by: request.last_updated_by,
+  }));
+}
+
+function compactUdfFields(value: MspCentralRawRequest["udf_fields"]) {
+  if (!value) return value;
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, fieldValue]) => [
+      key,
+      typeof fieldValue === "string"
+        ? truncateSnapshotText(fieldValue)
+        : fieldValue,
+    ]),
+  );
+}
+
+function truncateSnapshotText(value?: string | null) {
+  if (!value) return value;
+  return value.length > SNAPSHOT_DESCRIPTION_LIMIT
+    ? `${value.slice(0, SNAPSHOT_DESCRIPTION_LIMIT)}...`
+    : value;
 }
 
 const stores = new Map<string, MspRequestSnapshotStore>();

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MspCentralRawRequest } from "./types";
 import {
+  compactRequestsForSnapshot,
   createPostgresMspRequestSnapshotStore,
   loadCachedMspRequestsSnapshot,
   loadMspRequestsWithSnapshot,
@@ -160,6 +161,23 @@ describe("MSP Central request snapshots", () => {
       }),
     ).resolves.toEqual([refreshedRequest]);
     expect(store.save).toHaveBeenCalledWith([refreshedRequest], 200_000);
+  });
+
+  it("trims heavy request fields before storing dashboard snapshots", () => {
+    const compacted = compactRequestsForSnapshot([
+      {
+        ...cachedRequest,
+        description: "x".repeat(2_500),
+        udf_fields: {
+          ready_to_book: true,
+          site_hint: "y".repeat(2_500),
+        },
+      },
+    ]);
+
+    expect(compacted[0]?.description).toHaveLength(2_003);
+    expect(compacted[0]?.udf_fields?.site_hint).toHaveLength(2_003);
+    expect(compacted[0]?.udf_fields?.ready_to_book).toBe(true);
   });
 
   it("serves cached snapshots without starting a provider refresh", async () => {

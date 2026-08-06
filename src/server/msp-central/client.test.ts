@@ -80,7 +80,10 @@ describe("MSP Central live client", () => {
     );
     expect(requestInput).toMatchObject({
       list_info: {
-        row_count: 100,
+        filter_by: {
+          name: "Open_Requests",
+        },
+        row_count: 50,
         search_criteria: {
           condition: "is",
           field: "status.in_progress",
@@ -163,10 +166,10 @@ describe("MSP Central live client", () => {
         json: async () => ({
           list_info: {
             has_more_rows: true,
-            row_count: 100,
+            row_count: 50,
             start_index: startIndex,
           },
-          requests: Array.from({ length: 100 }, (_, index) => ({
+          requests: Array.from({ length: 50 }, (_, index) => ({
             id: `${startIndex + index}`,
             request_number: `${startIndex + index}`,
             status: { name: "Open" },
@@ -190,7 +193,7 @@ describe("MSP Central live client", () => {
 
     const requests = await client.listRequests();
 
-    expect(requests).toHaveLength(200);
+    expect(requests).toHaveLength(100);
     expect(
       fetchMock.mock.calls.filter(([input]) =>
         String(input).includes("/api/v3/requests?"),

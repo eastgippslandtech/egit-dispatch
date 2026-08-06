@@ -37,7 +37,7 @@ import type {
 import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 const MSP_REQUEST_TIMEOUT_MS = 12_000;
-const MSP_REQUEST_PAGE_SIZE = 100;
+const MSP_REQUEST_PAGE_SIZE = 50;
 const MSP_REQUEST_MAX_PAGES = 2;
 
 type MspCentralActionResponse = {
@@ -733,6 +733,9 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
             sort_field: "created_time",
             sort_order: "desc",
             start_index: startIndex,
+            filter_by: params?.status
+              ? undefined
+              : { name: "Open_Requests" },
             search_criteria: requestSearchCriteria(params?.status),
           },
         }),

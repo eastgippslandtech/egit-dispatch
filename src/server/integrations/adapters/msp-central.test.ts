@@ -280,6 +280,35 @@ describe("MSP Central integration adapters", () => {
     ).rejects.toBeInstanceOf(AuthenticationIntegrationError);
   });
 
+  it("treats OAuth throttling as a safe retry before any MSP write is sent", async () => {
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestWorklog: vi
+          .fn()
+          .mockRejectedValue(
+            new Error("MSP Central OAuth refresh is temporarily throttled."),
+          ),
+      }),
+    });
+
+    await expect(
+      adapters["msp.add_worklog"].execute(
+        step("msp.add_worklog", {
+          description: "Completed diagnostics.",
+          durationMinutes: 15,
+          endedAt: "2026-08-04T10:15:00+10:00",
+          ownerId: "msp-simeon",
+          requestId: "request-42",
+          startedAt: "2026-08-04T10:00:00+10:00",
+          worklogType: "internal",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "retryable",
+      safeToRetry: true,
+    });
+  });
+
   it("does not reconcile an old identical customer message", async () => {
     const adapters = createMspCentralAdapters({
       client: client({

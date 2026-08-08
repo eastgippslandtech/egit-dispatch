@@ -98,6 +98,39 @@ describe("dispatch runtime config", () => {
     expect(config.microsoft.clientId).toBe("graph-client");
   });
 
+  it("accepts Graph-prefixed Microsoft credentials as production aliases", () => {
+    const config = readDispatchConfig({
+      GRAPH_CLIENT_ID: "graph-client",
+      GRAPH_CLIENT_SECRET: "graph-secret",
+      GRAPH_TENANT_ID: "tenant",
+    });
+
+    expect(config.microsoft).toMatchObject({
+      clientId: "graph-client",
+      clientSecret: "graph-secret",
+      tenantId: "tenant",
+    });
+  });
+
+  it("allows live MSP mode when Microsoft credentials use Graph aliases", () => {
+    const config = readDispatchConfig({
+      MOCK_INTEGRATIONS: "false",
+      DATABASE_URL: "postgresql://example",
+      DISPATCH_DATA_SOURCE: "msp-central",
+      MSP_CENTRAL_BASE_URL: "https://msp.example",
+      MSP_CENTRAL_PORTAL: "egit",
+      MSP_CENTRAL_CLIENT_ID: "msp-client",
+      MSP_CENTRAL_CLIENT_SECRET: "msp-secret",
+      MSP_CENTRAL_REFRESH_TOKEN: "msp-refresh",
+      GRAPH_TENANT_ID: "tenant",
+      GRAPH_CLIENT_ID: "graph-client",
+      GRAPH_CLIENT_SECRET: "graph-secret",
+    });
+
+    expect(config.mode).toBe("live");
+    expect(config.microsoft.clientId).toBe("graph-client");
+  });
+
   it("removes invisible markers and surrounding whitespace from integration values", () => {
     const config = readDispatchConfig({
       APP_BASE_URL: " \uFEFFhttps://command.egit.com.au \u200B",
@@ -134,5 +167,23 @@ describe("dispatch runtime config", () => {
       clientSecret: "graph-secret",
       tenantId: "tenant",
     });
+  });
+
+  it("does not treat quoted empty placeholders as live integration secrets", () => {
+    expect(() =>
+      readDispatchConfig({
+        MOCK_INTEGRATIONS: "false",
+        DATABASE_URL: '""',
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_BASE_URL: "https://msp.example",
+        MSP_CENTRAL_PORTAL: "egit",
+        MSP_CENTRAL_CLIENT_ID: '""',
+        MSP_CENTRAL_CLIENT_SECRET: "''",
+        MSP_CENTRAL_REFRESH_TOKEN: '""',
+        MICROSOFT_TENANT_ID: "tenant",
+        MICROSOFT_CLIENT_ID: "graph-client",
+        MICROSOFT_CLIENT_SECRET: "graph-secret",
+      }),
+    ).toThrow(/Missing dispatch integration environment variables/);
   });
 });

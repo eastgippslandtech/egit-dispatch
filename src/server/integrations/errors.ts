@@ -8,11 +8,13 @@ export type IntegrationErrorCode =
 type ErrorOptions = {
   cause?: unknown;
   httpStatus?: number;
+  safeToRetry?: boolean;
 };
 
 class IntegrationError extends Error {
   readonly code: IntegrationErrorCode;
   readonly httpStatus?: number;
+  readonly safeToRetry: boolean;
 
   constructor(
     message: string,
@@ -31,6 +33,9 @@ class IntegrationError extends Error {
       typeof httpStatusOrOptions === "number"
         ? httpStatusOrOptions
         : httpStatusOrOptions?.httpStatus;
+    this.safeToRetry =
+      typeof httpStatusOrOptions === "object" &&
+      Boolean(httpStatusOrOptions.safeToRetry);
   }
 }
 
@@ -76,7 +81,11 @@ export function classifyIntegrationError(
   { writeSafety }: { writeSafety: "idempotent" | "non_idempotent" },
 ): ClassifiedIntegrationError {
   if (error instanceof IntegrationError) {
-    if (writeSafety === "non_idempotent" && error.code === "retryable") {
+    if (
+      writeSafety === "non_idempotent" &&
+      error.code === "retryable" &&
+      !error.safeToRetry
+    ) {
       return new AmbiguousIntegrationError(error.message, {
         cause: error,
         httpStatus: error.httpStatus,

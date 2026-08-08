@@ -231,6 +231,7 @@ async function executeWithReconciliation({
   } catch (error) {
     const mapped = mapMspError(error);
     if (!(mapped instanceof RetryableIntegrationError)) throw mapped;
+    if (mapped.safeToRetry) throw mapped;
 
     try {
       const existing = await reconcile();
@@ -408,6 +409,12 @@ function mapMspError(error: unknown) {
   }
   if (/oauth refresh failed|api request was denied|access denied/i.test(message)) {
     return new AuthenticationIntegrationError(message, options);
+  }
+  if (/oauth refresh is temporarily throttled/i.test(message)) {
+    return new RetryableIntegrationError(message, {
+      ...options,
+      safeToRetry: true,
+    });
   }
   if (status === 409) return new ConflictIntegrationError(message, options);
   if (isNetworkError(error) || status === 429 || (status && status >= 500)) {

@@ -40,9 +40,6 @@ const requiredLiveKeys = [
   "MSP_CENTRAL_CLIENT_ID",
   "MSP_CENTRAL_CLIENT_SECRET",
   "MSP_CENTRAL_REFRESH_TOKEN",
-  "MICROSOFT_TENANT_ID",
-  "MICROSOFT_CLIENT_ID",
-  "MICROSOFT_CLIENT_SECRET",
 ] as const;
 
 export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConfig {
@@ -56,7 +53,10 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
   );
 
   if (mode === "live" && dispatchDataSource === "msp-central") {
-    const missing = requiredLiveKeys.filter((key) => !normalizedEnv[key]);
+    const missing = [
+      ...requiredLiveKeys.filter((key) => !normalizedEnv[key]),
+      ...missingMicrosoftCredentialAliases(normalizedEnv),
+    ];
 
     if (missing.length > 0) {
       throw new Error(
@@ -84,14 +84,31 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
       requestWebBaseUrl: normalizedEnv.MSP_CENTRAL_REQUEST_WEB_BASE_URL,
     },
     microsoft: {
-      tenantId: normalizedEnv.MICROSOFT_TENANT_ID,
-      clientId: normalizedEnv.MICROSOFT_CLIENT_ID,
-      clientSecret: normalizedEnv.MICROSOFT_CLIENT_SECRET,
+      tenantId:
+        normalizedEnv.MICROSOFT_TENANT_ID ?? normalizedEnv.GRAPH_TENANT_ID,
+      clientId:
+        normalizedEnv.MICROSOFT_CLIENT_ID ?? normalizedEnv.GRAPH_CLIENT_ID,
+      clientSecret:
+        normalizedEnv.MICROSOFT_CLIENT_SECRET ?? normalizedEnv.GRAPH_CLIENT_SECRET,
       timezone:
         normalizedEnv.GRAPH_CALENDAR_TIMEZONE ??
         "AUS Eastern Standard Time",
     },
   };
+}
+
+function missingMicrosoftCredentialAliases(env: DispatchEnv) {
+  return [
+    env.MICROSOFT_TENANT_ID ?? env.GRAPH_TENANT_ID
+      ? undefined
+      : "MICROSOFT_TENANT_ID or GRAPH_TENANT_ID",
+    env.MICROSOFT_CLIENT_ID ?? env.GRAPH_CLIENT_ID
+      ? undefined
+      : "MICROSOFT_CLIENT_ID or GRAPH_CLIENT_ID",
+    env.MICROSOFT_CLIENT_SECRET ?? env.GRAPH_CLIENT_SECRET
+      ? undefined
+      : "MICROSOFT_CLIENT_SECRET or GRAPH_CLIENT_SECRET",
+  ].filter(Boolean) as string[];
 }
 
 function normalizeDispatchEnv(env: DispatchEnv): DispatchEnv {
@@ -108,7 +125,16 @@ function cleanEnvironmentValue(value?: string) {
     /^[\s\u200B-\u200D\u2060]+|[\s\u200B-\u200D\u2060]+$/gu,
     "",
   );
-  return clean || undefined;
+  const unquoted =
+    clean &&
+    ((clean.startsWith('"') && clean.endsWith('"')) ||
+      (clean.startsWith("'") && clean.endsWith("'")))
+      ? clean.slice(1, -1).replace(
+          /^[\s\u200B-\u200D\u2060]+|[\s\u200B-\u200D\u2060]+$/gu,
+          "",
+        )
+      : clean;
+  return unquoted || undefined;
 }
 
 function readDispatchDataSource(value?: string): DispatchDataSource {

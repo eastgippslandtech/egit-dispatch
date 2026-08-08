@@ -74,6 +74,27 @@ export async function GET(request: Request) {
     const integrationRepository = createPostgresIntegrationRepository({
       databaseUrl: config.databaseUrl,
     });
+    if (isMspOAuthRefreshThrottle(error)) {
+      const message = error.message;
+      await withPollTimeout(
+        integrationRepository.recordConnectorRead({
+          connector: "msp_central",
+          error: message,
+          status: "degraded",
+          succeeded: false,
+        }),
+        CONNECTOR_HEALTH_TIMEOUT_MS,
+        "MSP Central health write timed out.",
+      ).catch(() => undefined);
+      console.warn("Technician notification poll skipped during MSP OAuth backoff", {
+        message,
+      });
+      return NextResponse.json({
+        ok: true,
+        reason: message,
+        skipped: true,
+      });
+    }
     await withPollTimeout(
       integrationRepository.recordConnectorRead({
         connector: "msp_central",
@@ -112,6 +133,13 @@ function withPollTimeout<T>(
       },
     );
   });
+}
+
+function isMspOAuthRefreshThrottle(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    /MSP Central OAuth refresh is temporarily throttled/i.test(error.message)
+  );
 }
 
 export async function POST(request: Request) {

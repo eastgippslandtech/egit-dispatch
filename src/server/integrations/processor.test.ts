@@ -46,6 +46,20 @@ describe("classifyIntegrationError", () => {
     ).toBeInstanceOf(AmbiguousIntegrationError);
   });
 
+  it("keeps preflight retryable failures retryable for non-idempotent writes", () => {
+    const oauthThrottle = new RetryableIntegrationError(
+      "MSP Central OAuth refresh is temporarily throttled.",
+      { safeToRetry: true },
+    );
+
+    const classified = classifyIntegrationError(oauthThrottle, {
+      writeSafety: "non_idempotent",
+    });
+
+    expect(classified).toBeInstanceOf(RetryableIntegrationError);
+    expect(classified.code).toBe("retryable");
+  });
+
   it("preserves explicit integration error classes", () => {
     expect(
       classifyIntegrationError(new RetryableIntegrationError("again"), {

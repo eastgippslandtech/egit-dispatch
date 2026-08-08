@@ -49,7 +49,7 @@ export async function registerCurrentDeviceNotifications({
     store: SecureStore,
   });
   const input = {
-    appVersion: Constants.expoConfig?.version ?? "0.1.0",
+    appVersion: Constants.expoConfig?.version ?? "0.1.1",
     installationId,
     platform,
     projectId:

@@ -14,7 +14,7 @@ describe("push registration", () => {
     expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
 
     await registration.enableJobNotifications({
-      appVersion: "0.1.0",
+      appVersion: "0.1.1",
       installationId: "inst-1",
       platform: "ios",
     });
@@ -39,7 +39,7 @@ describe("push registration", () => {
       };
 
     const result = await registration.ensureJobNotifications({
-      appVersion: "0.1.0",
+      appVersion: "0.1.1",
       installationId: "inst-1",
       platform: "ios",
       projectId: "expo-project-1",
@@ -52,7 +52,7 @@ describe("push registration", () => {
       projectId: "expo-project-1",
     });
     expect(registerToken).toHaveBeenCalledWith({
-      appVersion: "0.1.0",
+      appVersion: "0.1.1",
       installationId: "inst-1",
       platform: "ios",
       pushToken: "ExponentPushToken[first-load]",
@@ -76,7 +76,7 @@ describe("push registration", () => {
       };
 
     await registration.ensureJobNotifications({
-      appVersion: "0.1.0",
+      appVersion: "0.1.1",
       installationId: "inst-1",
       platform: "android",
     });
@@ -102,7 +102,7 @@ describe("push registration", () => {
       };
 
     const result = await registration.ensureJobNotifications({
-      appVersion: "0.1.0",
+      appVersion: "0.1.1",
       installationId: "inst-1",
       platform: "ios",
     });

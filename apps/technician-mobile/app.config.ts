@@ -5,7 +5,7 @@ const config: ExpoConfig = {
   owner: "eastgippslandtechs-team",
   slug: "egit-command-centre-technician",
   scheme: "egitcommand",
-  version: "0.1.0",
+  version: "0.1.1",
   orientation: "portrait",
   userInterfaceStyle: "dark",
   icon: "./assets/brand/app-icon.png",

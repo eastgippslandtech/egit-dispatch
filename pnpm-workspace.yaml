@@ -3,6 +3,9 @@ packages:
 
 nodeLinker: hoisted
 
+overrides:
+  react-dom: 19.2.3
+
 allowBuilds:
   '@shopify/react-native-skia': true
   esbuild: true

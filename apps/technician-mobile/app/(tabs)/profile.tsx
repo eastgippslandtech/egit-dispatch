@@ -128,7 +128,7 @@ export default function ProfileRoute() {
           <Text style={styles.value}>{staff.baseOffice}</Text>
           <Text style={styles.sectionTitle}>Settings</Text>
           <Text style={styles.label}>App version</Text>
-          <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.0"}</Text>
+          <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.1"}</Text>
           <Text style={styles.label}>Notifications</Text>
           <Text style={styles.value}>{notificationStatus}</Text>
           <Text style={styles.label}>Location</Text>

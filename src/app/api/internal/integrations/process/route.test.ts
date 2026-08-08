@@ -14,6 +14,7 @@ const authorized = vi.mocked(integrationCronAuthorized);
 const createWorker = vi.mocked(createConfiguredIntegrationWorker);
 const processDue = vi.fn();
 const countDueSteps = vi.fn();
+const requeueSafeRetryableReviewOperations = vi.fn();
 
 describe("integration process route", () => {
   beforeEach(() => {
@@ -27,9 +28,12 @@ describe("integration process route", () => {
       succeeded: 2,
     });
     countDueSteps.mockResolvedValue(3);
+    requeueSafeRetryableReviewOperations.mockResolvedValue([
+      { id: "operation-requeued" },
+    ]);
     createWorker.mockReturnValue({
       processor: { processDue },
-      repository: { countDueSteps },
+      repository: { countDueSteps, requeueSafeRetryableReviewOperations },
     } as never);
   });
 
@@ -47,11 +51,13 @@ describe("integration process route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(requeueSafeRetryableReviewOperations).toHaveBeenCalledTimes(1);
     expect(processDue).toHaveBeenCalledWith({ limit: 3 });
     await expect(response.json()).resolves.toEqual({
       claimed: 4,
       processingErrors: 0,
       remainingDue: 3,
+      requeuedSafeReviews: 1,
       retrying: 1,
       reviewRequired: 1,
       succeeded: 2,

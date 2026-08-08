@@ -15,12 +15,15 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const limit = boundedLimit(body);
     const { processor, repository } = createConfiguredIntegrationWorker();
+    const requeuedSafeReviews =
+      await repository.requeueSafeRetryableReviewOperations?.();
     const summary = await processor.processDue({ limit });
     const remainingDue = await repository.countDueSteps();
     return integrationJson({
       processingErrors: summary.processingErrors,
       claimed: summary.claimed,
       remainingDue,
+      requeuedSafeReviews: requeuedSafeReviews?.length ?? 0,
       retrying: summary.retrying,
       reviewRequired: summary.reviewRequired,
       succeeded: summary.succeeded,

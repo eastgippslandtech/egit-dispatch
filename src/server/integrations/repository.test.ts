@@ -249,6 +249,49 @@ function fakeSql() {
         }
         return [target];
       }
+      if (name === "requeueSafeRetryableReviewOperations") {
+        const [changedAt] = values as [string];
+        const affectedOperationIds = new Set<string>();
+        for (const step of steps) {
+          const parent = operations.find(
+            (operation) => operation.id === step.operationId,
+          );
+          if (
+            parent?.state === "review_required" &&
+            step.state === "review_required" &&
+            step.requiresReconciliation === false &&
+            !step.leaseToken &&
+            /MSP Central OAuth refresh is temporarily throttled/i.test(
+              step.lastError ?? "",
+            )
+          ) {
+            step.lastError = undefined;
+            step.nextAttemptAt = changedAt;
+            step.state = "retrying";
+            step.updatedAt = changedAt;
+            affectedOperationIds.add(step.operationId);
+          }
+        }
+
+        const retried: IntegrationOperation[] = [];
+        for (const operation of operations) {
+          if (
+            affectedOperationIds.has(operation.id) &&
+            operation.state === "review_required" &&
+            !steps.some(
+              (step) =>
+                step.operationId === operation.id &&
+                step.state === "review_required",
+            )
+          ) {
+            operation.lastError = undefined;
+            operation.state = "retrying";
+            operation.updatedAt = changedAt;
+            retried.push(operation);
+          }
+        }
+        return retried;
+      }
       if (name === "cancelOperation") {
         const [operationId, changedAt] = values as [string, string];
         const target = operations.find((operation) => operation.id === operationId);
@@ -646,6 +689,47 @@ describe("integration repository", () => {
     expect(fake.steps[0]).toMatchObject({
       requiresReconciliation: false,
       state: "retrying",
+    });
+  });
+
+  it("requeues only safe OAuth throttle review rows", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: throttle } = await repository.enqueue(operation());
+    const { operation: denied } = await repository.enqueue({
+      ...operation(),
+      idempotencyKey: "request-43-sync-v1",
+      requestId: "request-43",
+    });
+    throttle.state = "review_required";
+    throttle.lastError = "MSP Central OAuth refresh is temporarily throttled.";
+    fake.steps[0]!.state = "review_required";
+    fake.steps[0]!.lastError = "MSP Central OAuth refresh is temporarily throttled.";
+    fake.steps[0]!.requiresReconciliation = false;
+    denied.state = "review_required";
+    denied.lastError = "MSP Central API request failed with status 401.";
+    fake.steps[2]!.state = "review_required";
+    fake.steps[2]!.lastError = "MSP Central API request failed with status 401.";
+    fake.steps[2]!.requiresReconciliation = false;
+
+    await expect(
+      repository.requeueSafeRetryableReviewOperations(
+        new Date("2026-08-07T08:00:00.000Z"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: throttle.id })]);
+
+    expect(throttle).toMatchObject({
+      lastError: undefined,
+      state: "retrying",
+    });
+    expect(fake.steps[0]).toMatchObject({
+      lastError: undefined,
+      nextAttemptAt: "2026-08-07T08:00:00.000Z",
+      state: "retrying",
+    });
+    expect(denied).toMatchObject({
+      lastError: "MSP Central API request failed with status 401.",
+      state: "review_required",
     });
   });
 

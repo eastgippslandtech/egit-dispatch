@@ -35,6 +35,7 @@ type IntegrationQueryName =
   | "markStepSucceeded"
   | "recordConnectorRead"
   | "recordConnectorWrite"
+  | "requeueSafeRetryableReviewOperations"
   | "retryOperation";
 
 export type IntegrationSql = {
@@ -214,6 +215,12 @@ export function createIntegrationRepository(sql: IntegrationSql) {
 
     async listActionableOperations({ limit = 50 }: { limit?: number } = {}) {
       return (await sql.query("listActionableOperations", [limit])) as IntegrationOperation[];
+    },
+
+    async requeueSafeRetryableReviewOperations(now = new Date()) {
+      return (await sql.query("requeueSafeRetryableReviewOperations", [
+        now.toISOString(),
+      ])) as IntegrationOperation[];
     },
 
     async markStepFailed({
@@ -695,6 +702,56 @@ class PostgresIntegrationSql implements IntegrationSql {
               from retried
               where step.operation_id = retried.id
                 and step.state = 'review_required'
+            )
+            select ${this.sql.unsafe(operationColumnsFromRetried)}
+            from retried
+          `,
+        );
+      }
+      case "requeueSafeRetryableReviewOperations": {
+        const [changedAt] = values as [string];
+        return this.operations(
+          this.sql`
+            with safe_steps as materialized (
+              select step.id, step.operation_id
+              from public.integration_operation_steps step
+              join public.integration_operations operation
+                on operation.id = step.operation_id
+              where step.state = 'review_required'
+                and operation.state = 'review_required'
+                and step.requires_reconciliation = false
+                and step.lease_token is null
+                and step.last_error ilike '%MSP Central OAuth refresh is temporarily throttled%'
+              for update of step
+            ), reset_steps as (
+              update public.integration_operation_steps step
+              set
+                state = 'retrying',
+                next_attempt_at = ${changedAt},
+                last_error = null,
+                lease_token = null,
+                worker_id = null,
+                leased_at = null,
+                lease_expires_at = null,
+                updated_at = ${changedAt}
+              from safe_steps
+              where step.id = safe_steps.id
+              returning step.operation_id
+            ), retried as (
+              update public.integration_operations operation
+              set
+                state = 'retrying',
+                last_error = null,
+                updated_at = ${changedAt}
+              where operation.id in (select distinct operation_id from reset_steps)
+                and operation.state = 'review_required'
+                and not exists (
+                  select 1
+                  from public.integration_operation_steps remaining
+                  where remaining.operation_id = operation.id
+                    and remaining.state = 'review_required'
+                )
+              returning operation.*
             )
             select ${this.sql.unsafe(operationColumnsFromRetried)}
             from retried

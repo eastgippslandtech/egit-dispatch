@@ -234,6 +234,30 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("uses MSP Central account address fields when no site address is present", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: {
+          billing_city: "Bairnsdale",
+          billing_code: "3875",
+          billing_state: "VIC",
+          billing_street: "12 Service Street",
+          name: "Bairnsdale Tyre Service",
+        },
+        request_number: "REQ-MSP-ACCOUNT-ADDRESS",
+        site: { name: "Unknown site" },
+      },
+      { now },
+    );
+
+    expect(request).toMatchObject({
+      customer: "Bairnsdale Tyre Service",
+      siteAddress: "12 Service Street, Bairnsdale VIC 3875",
+      siteAddressSource: "msp-central",
+      siteTown: "Bairnsdale",
+    });
+  });
+
   it("does not auto-assign Advanced Works during office hours", () => {
     const request = mapMspCentralRequest(
       {

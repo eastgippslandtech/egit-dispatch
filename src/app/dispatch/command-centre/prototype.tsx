@@ -222,6 +222,7 @@ const BOOKING_PRIORITY_CARD_CLASSES: Record<DispatchRequest["priority"], string>
 
 const SUCCESS_TOAST_DURATION_MS = 3_500;
 const ATTENTION_TOAST_DURATION_MS = 8_000;
+const LIVE_SCHEDULE_REQUEST_TIMEOUT_MS = 15_000;
 const ATTENTION_TOAST_PATTERN =
   /\b(?:could not|did not|error|failed|requires?|unavailable)\b/i;
 
@@ -2884,13 +2885,18 @@ export async function publishLiveSchedule(event: {
   travel?: TravelEstimate;
   userPrincipalName: string;
 }): Promise<LiveScheduleResult> {
-  const response = await fetch("/api/internal/dispatch/live-schedule", {
-    body: JSON.stringify(event),
-    headers: {
-      "Content-Type": "application/json",
+  const response = await fetchWithTimeout(
+    "/api/internal/dispatch/live-schedule",
+    {
+      body: JSON.stringify(event),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "POST",
     },
-    method: "POST",
-  });
+    LIVE_SCHEDULE_REQUEST_TIMEOUT_MS,
+    "Live schedule confirmation timed out before Command Centre could confirm the local save. Refresh the board before retrying.",
+  );
   const body = (await response.json().catch(() => null)) as
     | {
         error?: string;
@@ -2910,6 +2916,30 @@ export async function publishLiveSchedule(event: {
     queued: body?.status === "queued" || body?.status === "syncing",
     status: body?.status,
   };
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(timeoutMessage);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export async function publishMspCentralRequestMerge(event: {

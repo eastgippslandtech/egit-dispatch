@@ -85,13 +85,16 @@ export function mapMspCentralRequest(
     notes,
     ...readUdfTextValues(raw.udf_fields),
   ]);
-  const siteAddress =
-    readString(raw.site?.address) ?? readString(raw.site_address) ?? undefined;
+  const siteAddressDetails = readMspCentralSiteAddress(raw);
+  const siteAddress = siteAddressDetails?.address;
   const siteArea = readString(raw.site?.area) ?? readString(raw.site_area) ?? undefined;
   const siteName =
     readString(raw.site?.name) ?? readString(raw.site_name) ?? inferredSiteTown;
   const siteTown =
-    readString(raw.site?.city) ?? readString(raw.site_town) ?? inferredSiteTown;
+    readString(raw.site?.city) ??
+    readString(raw.site_town) ??
+    siteAddressDetails?.city ??
+    inferredSiteTown;
   const site = siteName ?? siteAddress ?? siteTown ?? "Unknown site";
   const autoAssignment = match.profile
     ? undefined
@@ -151,6 +154,7 @@ export function mapMspCentralRequest(
     scheduledStart: scheduledStart ?? undefined,
     site,
     siteAddress,
+    siteAddressSource: siteAddress ? "msp-central" : undefined,
     siteArea,
     siteName,
     siteTown,
@@ -533,6 +537,93 @@ function findKnownSiteTown(values: Array<string | undefined>) {
     .find(([town]) => haystack.includes(` ${town} `));
 
   return match?.[0].replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readMspCentralSiteAddress(raw: MspCentralRawRequest) {
+  return firstUsableAddress(
+    { address: readString(raw.site?.address), city: readString(raw.site?.city) },
+    { address: readString(raw.site_address), city: readString(raw.site?.city) },
+    formatStructuredAddress({
+      city: raw.site?.city,
+      code: raw.site?.code ?? raw.site?.postal_code ?? raw.site?.zip,
+      country: raw.site?.country,
+      state: raw.site?.state,
+      street: raw.site?.street,
+    }),
+    formatStructuredAddress({
+      city: raw.account?.shipping_city,
+      code: raw.account?.shipping_code,
+      country: raw.account?.shipping_country,
+      state: raw.account?.shipping_state,
+      street: raw.account?.shipping_street,
+    }),
+    formatStructuredAddress({
+      city: raw.account?.billing_city,
+      code: raw.account?.billing_code,
+      country: raw.account?.billing_country,
+      state: raw.account?.billing_state,
+      street: raw.account?.billing_street,
+    }),
+    { address: readString(raw.account?.address), city: readString(raw.account?.city) },
+    formatStructuredAddress({
+      city: raw.account?.city,
+      code: raw.account?.postal_code ?? raw.account?.zip,
+      country: raw.account?.country,
+      state: raw.account?.state,
+      street: raw.account?.street,
+    }),
+  );
+}
+
+function firstUsableAddress(
+  ...candidates: Array<{ address?: string; city?: string } | undefined>
+) {
+  return candidates.find((candidate) =>
+    isUsableStreetAddress(candidate?.address),
+  );
+}
+
+function formatStructuredAddress(parts: {
+  city?: string | null;
+  code?: string | null;
+  country?: string | null;
+  state?: string | null;
+  street?: string | null;
+}) {
+  const street = readString(parts.street);
+  if (!street) return undefined;
+
+  const city = readString(parts.city);
+  const stateAndCode = [readString(parts.state), readString(parts.code)]
+    .filter(Boolean)
+    .join(" ");
+  const country = readString(parts.country);
+  const locality = [city, stateAndCode].filter(Boolean).join(" ");
+  const address = [street, locality, country].filter(Boolean).join(", ");
+
+  return { address, city };
+}
+
+function isUsableStreetAddress(address?: string) {
+  const value = address?.trim();
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  if (
+    [
+      "business",
+      "n/a",
+      "na",
+      "none",
+      "remote",
+      "remote / virtual",
+      "unknown",
+      "unknown site",
+    ].includes(normalized)
+  ) {
+    return false;
+  }
+
+  return /\d+\s+[a-z]/i.test(value) && /[a-z]{3,}/i.test(value);
 }
 
 function readUdfTextValues(fields?: Record<string, unknown> | null) {

@@ -17,7 +17,26 @@ export type MspCentralTimestamp =
     };
 
 export type MspCentralRawRequest = {
-  account?: { name?: string | null } | null;
+  account?: {
+    address?: string | null;
+    billing_city?: string | null;
+    billing_code?: string | null;
+    billing_country?: string | null;
+    billing_state?: string | null;
+    billing_street?: string | null;
+    city?: string | null;
+    country?: string | null;
+    name?: string | null;
+    postal_code?: string | null;
+    shipping_city?: string | null;
+    shipping_code?: string | null;
+    shipping_country?: string | null;
+    shipping_state?: string | null;
+    shipping_street?: string | null;
+    state?: string | null;
+    street?: string | null;
+    zip?: string | null;
+  } | null;
   assets?: Array<{ name?: string | null }> | null;
   billable?: boolean | null;
   category?: string | { name?: string | null } | null;
@@ -57,7 +76,13 @@ export type MspCentralRawRequest = {
     address?: string | null;
     area?: string | null;
     city?: string | null;
+    code?: string | null;
+    country?: string | null;
     name?: string | null;
+    postal_code?: string | null;
+    state?: string | null;
+    street?: string | null;
+    zip?: string | null;
   } | null;
   site_address?: string | null;
   site_area?: string | null;

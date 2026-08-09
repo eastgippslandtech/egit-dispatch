@@ -25,11 +25,20 @@ export function enrichRequestsWithZohoCrmAddresses(
   accounts: readonly ZohoCrmAccountRecord[],
 ): DispatchRequest[] {
   const accountsByName = new Map<string, ZohoCrmAccountRecord[]>();
+  const accountsByCanonicalName = new Map<string, ZohoCrmAccountRecord[]>();
 
   for (const account of accounts) {
     const key = normalizeAccountName(account.Account_Name);
-    if (!key) continue;
-    accountsByName.set(key, [...(accountsByName.get(key) ?? []), account]);
+    const canonicalKey = normalizeHighConfidenceAccountName(account.Account_Name);
+    if (key) {
+      accountsByName.set(key, [...(accountsByName.get(key) ?? []), account]);
+    }
+    if (canonicalKey) {
+      accountsByCanonicalName.set(canonicalKey, [
+        ...(accountsByCanonicalName.get(canonicalKey) ?? []),
+        account,
+      ]);
+    }
   }
 
   return requests.map((request) => {
@@ -40,7 +49,11 @@ export function enrichRequestsWithZohoCrmAddresses(
       };
     }
 
-    const matches = accountsByName.get(normalizeAccountName(request.customer)) ?? [];
+    const matches = findHighConfidenceAccountMatches({
+      accountsByCanonicalName,
+      accountsByName,
+      customer: request.customer,
+    });
     if (matches.length > 1) {
       return withAddressWarning(request, AMBIGUOUS_MATCH_WARNING);
     }
@@ -124,6 +137,45 @@ function normalizeAccountName(value?: string) {
     .replace(/\s+/g, " ")
     .toLowerCase();
 }
+
+function normalizeHighConfidenceAccountName(value?: string) {
+  return normalizeAccountName(value)
+    .split(" ")
+    .filter((token) => !LEGAL_SUFFIX_TOKENS.has(token))
+    .join(" ");
+}
+
+function findHighConfidenceAccountMatches({
+  accountsByCanonicalName,
+  accountsByName,
+  customer,
+}: {
+  accountsByCanonicalName: Map<string, ZohoCrmAccountRecord[]>;
+  accountsByName: Map<string, ZohoCrmAccountRecord[]>;
+  customer: string;
+}) {
+  const exactKey = normalizeAccountName(customer);
+  const exactMatches = accountsByName.get(exactKey);
+  if (exactMatches?.length) {
+    return exactMatches;
+  }
+
+  const canonicalKey = normalizeHighConfidenceAccountName(customer);
+  if (!canonicalKey) {
+    return [];
+  }
+
+  return accountsByCanonicalName.get(canonicalKey) ?? [];
+}
+
+const LEGAL_SUFFIX_TOKENS = new Set([
+  "inc",
+  "limited",
+  "llc",
+  "ltd",
+  "proprietary",
+  "pty",
+]);
 
 function formatAddress(parts: {
   city?: string;

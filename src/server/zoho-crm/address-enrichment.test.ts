@@ -59,6 +59,29 @@ describe("Zoho CRM site address enrichment", () => {
     });
   });
 
+  it("uses a unique high-confidence CRM account match after legal suffix cleanup", () => {
+    const [enriched] = enrichRequestsWithZohoCrmAddresses(
+      [request({ customer: "Bairnsdale Tyre Service" })],
+      [
+        account({
+          Account_Name: "Bairnsdale Tyre Service Pty Ltd",
+          Shipping_City: "Bairnsdale",
+          Shipping_Code: "3875",
+          Shipping_State: "VIC",
+          Shipping_Street: "18 Bosworth Road",
+          id: "crm-bairnsdale-tyre",
+        }),
+      ],
+    );
+
+    expect(enriched).toMatchObject({
+      crmAccountId: "crm-bairnsdale-tyre",
+      siteAddress: "18 Bosworth Road, Bairnsdale VIC 3875",
+      siteAddressSource: "zoho-crm",
+      siteTown: "Bairnsdale",
+    });
+  });
+
   it("falls back to the billing address when shipping is incomplete", () => {
     const [enriched] = enrichRequestsWithZohoCrmAddresses(
       [request()],

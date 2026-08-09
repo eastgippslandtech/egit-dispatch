@@ -21,6 +21,7 @@ import {
   integrationReceiptDisposition,
   MergeRequestModal,
   pendingLiveAppointmentId,
+  publishLiveSchedule,
   reconcileDashboardWithPendingWritebacks,
   resolveWorkLogAppointment,
   requestNotesSummary,
@@ -408,6 +409,52 @@ test("shows immediate proof that schedule confirmation was accepted", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Scheduling..." }));
   expect(onConfirm).toHaveBeenCalledOnce();
+});
+
+test("live schedule publishing times out instead of leaving the modal spinning", async () => {
+  const fetchMock = vi.fn(
+    (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  let outcome: string | undefined;
+
+  void publishLiveSchedule({
+    appointmentId: "pending-live-timeout",
+    customer: "Example Co",
+    date: "2026-08-04",
+    end: "11:00",
+    idempotencyKey: "schedule-timeout-test",
+    location: "137 Main Street, Bairnsdale VIC 3875",
+    requestId: "request-timeout",
+    requestNumber: "REQ-TIMEOUT",
+    start: "10:00",
+    subject: "Timeout test",
+    technicianId: "tech-jervy",
+    technicianName: "Jervy",
+    userPrincipalName: "jervy@egit.com.au",
+  }).then(
+    () => {
+      outcome = "resolved";
+    },
+    (error: unknown) => {
+      outcome = error instanceof Error ? error.message : "rejected";
+    },
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_001);
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/internal/dispatch/live-schedule",
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  expect(outcome).toMatch(/timed out/i);
 });
 
 test("shows clear pending feedback while creating a request", () => {

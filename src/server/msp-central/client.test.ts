@@ -555,32 +555,30 @@ describe("MSP Central live client", () => {
     ]);
   });
 
-  it("invalidates a rejected access token and retries once when an endpoint returns unauthorized", async () => {
+  it("does not churn Zoho OAuth refreshes when the MSP product API returns unauthorized", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          access_token: "rejected-access-token",
+          access_token: "cached-access-token",
           expires_in: 3600,
         }),
       })
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
+        text: async () =>
+          JSON.stringify({
+            response_status: {
+              messages: [{ message: "Invalid OAuth scope for this API." }],
+            },
+          }),
       })
       .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          access_token: "fresh-access-token",
-          expires_in: 3600,
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          technicians: [],
-        }),
+        ok: false,
+        status: 401,
+        text: async () => "",
       });
     vi.stubGlobal("fetch", fetchMock);
     const client = createMspCentralClient(
@@ -595,17 +593,23 @@ describe("MSP Central live client", () => {
       }),
     );
 
-    await expect(client.listTechnicians()).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ displayName: "Simeon" }),
-      ]),
+    await expect(client.listTechnicians()).rejects.toThrow(
+      "MSP Central API request failed with status 401: Invalid OAuth scope for this API.",
     );
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await expect(client.listRequests()).rejects.toThrow(
+      "MSP Central API request failed with status 401.",
+    );
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/oauth/v2/token"),
+      ),
+    ).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({
-      Authorization: "Zoho-oauthtoken rejected-access-token",
+      Authorization: "Zoho-oauthtoken cached-access-token",
     });
-    expect(fetchMock.mock.calls[3]?.[1]?.headers).toMatchObject({
-      Authorization: "Zoho-oauthtoken fresh-access-token",
+    expect(fetchMock.mock.calls[2]?.[1]?.headers).toMatchObject({
+      Authorization: "Zoho-oauthtoken cached-access-token",
     });
   });
 

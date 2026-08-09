@@ -771,14 +771,8 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     url: string,
     init: { body?: URLSearchParams; method: "GET" | "POST" | "PUT" },
   ): Promise<T> {
-    let token = await getAccessToken();
-    let response = await sendMspRequest(url, init, token);
-
-    if (response.status === 401) {
-      await invalidateCachedAccessToken(config, token);
-      token = await getAccessToken();
-      response = await sendMspRequest(url, init, token);
-    }
+    const token = await getAccessToken();
+    const response = await sendMspRequest(url, init, token);
 
     if (!response.ok) {
       const detail = await readMspCentralErrorDetail(response);
@@ -1058,18 +1052,6 @@ async function getCachedAccessToken(config: DispatchConfig) {
   });
 
   return accessTokenCoordinator.getToken(key, () => refreshAccessToken(config));
-}
-
-async function invalidateCachedAccessToken(
-  config: DispatchConfig,
-  rejectedAccessToken: string,
-) {
-  const key = accessTokenCacheKey(config);
-  accessTokenCoordinator ??= new MspOAuthAccessTokenCoordinator({
-    store: getConfiguredMspOAuthTokenStore(),
-  });
-
-  await accessTokenCoordinator.invalidate(key, rejectedAccessToken);
 }
 
 function accessTokenCacheKey(config: DispatchConfig) {

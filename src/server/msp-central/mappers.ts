@@ -34,6 +34,8 @@ type MapRequestOptions = {
 const ADVANCED_WORKS_AUTO_ASSIGNMENT_WARNING =
   "Auto-assigned by Advanced Works/Viridian IT site proximity.";
 
+const MIN_VALID_DATE_TIME = Date.UTC(2000, 0, 1);
+
 const OFFICE_COORDINATES = {
   bairnsdale: { latitude: -37.8251, longitude: 147.6305 },
   sale: { latitude: -38.106, longitude: 147.067 },
@@ -70,7 +72,7 @@ export function mapMspCentralRequest(
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
-  const dueAt = readDateTime(raw.due_by_time) ?? new Date(0).toISOString();
+  const dueAt = readDateTime(raw.due_by_time) ?? "";
   const scheduledStart = readDateTime(raw.scheduled_start_time);
   const scheduledEnd = readDateTime(raw.scheduled_end_time);
   const customer =
@@ -684,13 +686,18 @@ function parseDateTimeCandidate(value: unknown) {
   if (!text) return undefined;
 
   const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric <= 0) {
+    return undefined;
+  }
   const timestamp =
     Number.isFinite(numeric) && /^\d+(?:\.\d+)?$/.test(text)
       ? numeric < 100_000_000_000
         ? numeric * 1000
         : numeric
       : Date.parse(text);
-  if (!Number.isFinite(timestamp)) return undefined;
+  if (!Number.isFinite(timestamp) || timestamp < MIN_VALID_DATE_TIME) {
+    return undefined;
+  }
 
   const date = new Date(timestamp);
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;

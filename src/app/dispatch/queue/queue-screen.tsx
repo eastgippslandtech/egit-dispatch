@@ -769,7 +769,13 @@ function readDashboardCacheSnapshot(): CachedDashboard | null {
 
 function compareRequests(first: DispatchRequest, second: DispatchRequest) {
   const priorityDifference = priorityOrder.indexOf(first.priority) - priorityOrder.indexOf(second.priority);
-  return priorityDifference || new Date(first.dueAt).getTime() - new Date(second.dueAt).getTime();
+  return priorityDifference || dueTimeForSort(first.dueAt) - dueTimeForSort(second.dueAt);
+}
+
+function dueTimeForSort(value?: string | null) {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Number.POSITIVE_INFINITY;
 }
 
 function technicianName(data: DispatchDashboardData, technicianId?: string) {

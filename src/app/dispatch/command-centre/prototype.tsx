@@ -5074,7 +5074,7 @@ export function WorkLogModal({
             <DetailInline label="Scheduled time" value={scheduledTime} />
             <DetailInline
               label="Due time"
-              value={formatDateTime(latestRequest.dueAt)}
+              value={formatDueDateTime(latestRequest.dueAt)}
             />
             <DetailInline label="Booking type" value={bookingType} />
             {chargeableTime.travelMinutes > 0 ? (
@@ -5911,7 +5911,7 @@ function RequestQueueCard({
         <div className="mt-2 grid grid-cols-3 gap-x-2 text-[11px] text-slate-400">
           <span>Age {request.ageHours}h</span>
           <span className="truncate text-center">{technician}</span>
-          <span className="text-right">Due {formatTime(request.dueAt)}</span>
+          <span className="text-right">Due {formatDueTime(request.dueAt)}</span>
         </div>
       </button>
       <div className="flex justify-end gap-1 border-t border-white/[0.07] px-2 py-1">
@@ -7292,7 +7292,7 @@ function DetailDrawer({
               <DetailRow label="Contact" value={`${request.requester} / ${request.contact}`} />
               <DetailRow label="Source" value={requestSourceLabel(request)} />
               <DetailRow label="Status" value={request.status} />
-              <DetailRow label="Due time" value={formatDateTime(request.dueAt)} />
+              <DetailRow label="Due time" value={formatDueDateTime(request.dueAt)} />
               {request.sentiment ? (
                 <DetailRow
                   label="Sentiment"
@@ -8364,7 +8364,10 @@ function timelineWidth(
   );
 }
 
-function formatTime(value: string) {
+function formatTime(value?: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return "Unknown";
@@ -8376,7 +8379,10 @@ function formatTime(value: string) {
   }).format(date);
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value?: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return "Unknown";
@@ -8386,6 +8392,14 @@ function formatDateTime(value: string) {
     timeStyle: "short",
     timeZone: "Australia/Melbourne",
   }).format(date);
+}
+
+function formatDueTime(value?: string | null) {
+  return value ? formatTime(value) : "SLA not set";
+}
+
+function formatDueDateTime(value?: string | null) {
+  return value ? formatDateTime(value) : "SLA not set";
 }
 
 function formatActiveTimerElapsed(startedAt: string, now: Date) {

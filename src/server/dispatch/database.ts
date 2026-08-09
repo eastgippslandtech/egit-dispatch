@@ -303,10 +303,7 @@ function mapRequest(
   const summaries = payloadSummaries(row);
   const scheduledStart = toOptionalIso(row.scheduledStart);
   const scheduledEnd = toOptionalIso(row.scheduledEnd);
-  const dueAt =
-    pickString(summaries, ["slaDueAt", "dueAt", "dueBy"]) ??
-    scheduledEnd ??
-    toIsoString(row.updatedAt);
+  const dueAt = pickSlaDueAt(summaries) ?? "";
 
   return {
     id: row.sdpRequestId,
@@ -503,6 +500,16 @@ function pickString(records: Array<Record<string, unknown>>, keys: string[]) {
     }
   }
   return null;
+}
+
+function pickSlaDueAt(records: Array<Record<string, unknown>>) {
+  const value = pickString(records, ["slaDueAt", "dueAt", "dueBy"]);
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp) || timestamp < Date.UTC(2000, 0, 1)) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
 }
 
 function pickNestedString(record: Record<string, unknown>, path: string[]) {

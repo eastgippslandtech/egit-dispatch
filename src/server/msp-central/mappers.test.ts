@@ -168,9 +168,34 @@ describe("MSP Central request mappers", () => {
       updatedAt: new Date("2026-07-09T10:00:00+10:00").toISOString(),
     });
     expect(malformed).toMatchObject({
-      dueAt: new Date(0).toISOString(),
+      dueAt: "",
       scheduledStart: undefined,
     });
+  });
+
+  it("does not invent a 1970 SLA due time when MSP Central sends zero or unknown values", () => {
+    const zeroDue = mapMspCentralRequest(
+      {
+        due_by_time: {
+          display_value: "",
+          value: "0",
+        },
+        request_number: "REQ-MSP-ZERO-DUE",
+      },
+      { now },
+    );
+    const numericZeroDue = mapMspCentralRequest(
+      {
+        due_by_time: 0,
+        request_number: "REQ-MSP-NUMERIC-ZERO-DUE",
+      },
+      { now },
+    );
+
+    expect(zeroDue.dueAt).toBe("");
+    expect(zeroDue.slaState).toBe("normal");
+    expect(numericZeroDue.dueAt).toBe("");
+    expect(numericZeroDue.slaState).toBe("normal");
   });
 
   it("keeps the MSP Central identifier out of the request title", () => {

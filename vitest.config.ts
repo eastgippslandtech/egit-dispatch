@@ -4,6 +4,7 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "jsdom",
+    exclude: ["apps/technician-mobile/**", "node_modules/**"],
     setupFiles: ["./src/test/setup.ts"],
     globals: true,
     testTimeout: 15_000,

@@ -367,6 +367,25 @@ describe("integration processor", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("passes a targeted operation id to the repository claim", async () => {
+    const harness = createHarness([]);
+    const processor = createIntegrationProcessor({
+      clock: () => now,
+      registry: createIntegrationAdapterRegistry({}),
+      repository: harness.repository,
+      workerId: "worker-a",
+    });
+
+    await processor.processDue({ limit: 1, operationId: "operation-clicked" });
+
+    expect(harness.repository.claimDueSteps).toHaveBeenCalledWith({
+      limit: 1,
+      now,
+      operationId: "operation-clicked",
+      workerId: "worker-a",
+    });
+  });
+
   it("continues the batch if persistence for one claimed step fails", async () => {
     const first = makeStep({ action: "outlook.first" });
     const second = makeStep({

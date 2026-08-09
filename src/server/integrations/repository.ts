@@ -121,11 +121,13 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       leaseDurationMs = 60_000,
       limit = 10,
       now = new Date(),
+      operationId,
       workerId,
     }: {
       leaseDurationMs?: number;
       limit?: number;
       now?: Date;
+      operationId?: string;
       workerId: string;
     }): Promise<IntegrationOperationStep[]> {
       const claimedAt = now.toISOString();
@@ -136,6 +138,7 @@ export function createIntegrationRepository(sql: IntegrationSql) {
           boundedWorkerId(workerId),
           new Date(now.getTime() + leaseDurationMs).toISOString(),
           limit,
+          operationId,
         ])) as IntegrationOperationStep[];
       });
     },
@@ -458,11 +461,12 @@ class PostgresIntegrationSql implements IntegrationSql {
         );
       }
       case "claimDueSteps": {
-        const [now, workerId, leaseExpiresAt, limit] = values as [
+        const [now, workerId, leaseExpiresAt, limit, operationId] = values as [
           string,
           string,
           string,
           number,
+          string | undefined,
         ];
         return this.steps(
           this.sql`
@@ -472,6 +476,7 @@ class PostgresIntegrationSql implements IntegrationSql {
               join public.integration_operations operation
                 on operation.id = step.operation_id
               where step.state in ('queued', 'retrying')
+                and (${operationId ?? null}::text is null or operation.id::text = ${operationId ?? null})
                 and operation.state not in ('review_required', 'cancelled', 'synced')
                 and (step.next_attempt_at is null or step.next_attempt_at <= ${now})
                 and not exists (

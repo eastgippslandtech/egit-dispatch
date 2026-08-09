@@ -51,16 +51,35 @@ describe("integration process route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(requeueSafeRetryableReviewOperations).toHaveBeenCalledTimes(1);
+    expect(requeueSafeRetryableReviewOperations).not.toHaveBeenCalled();
     expect(processDue).toHaveBeenCalledWith({ limit: 3 });
     await expect(response.json()).resolves.toEqual({
       claimed: 4,
       processingErrors: 0,
       remainingDue: 3,
-      requeuedSafeReviews: 1,
       retrying: 1,
       reviewRequired: 1,
       succeeded: 2,
+    });
+  });
+
+  it("does not bulk-requeue safe throttle reviews during ordinary processing", async () => {
+    const response = await POST(request());
+
+    expect(response.status).toBe(200);
+    expect(requeueSafeRetryableReviewOperations).not.toHaveBeenCalled();
+    expect(processDue).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes an operation wake-up id through to the processor", async () => {
+    const response = await POST(
+      request({ limit: 2, operationId: "operation-clicked" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(processDue).toHaveBeenCalledWith({
+      limit: 2,
+      operationId: "operation-clicked",
     });
   });
 

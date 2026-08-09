@@ -35,10 +35,17 @@ export function createIntegrationProcessor({
   workerId: string;
 }) {
   return {
-    async processDue({ limit = 10 }: { limit?: number } = {}) {
+    async processDue({
+      limit = 10,
+      operationId,
+    }: {
+      limit?: number;
+      operationId?: string;
+    } = {}) {
       const claimed = await repository.claimDueSteps({
         limit,
         now: clock(),
+        ...(operationId ? { operationId } : {}),
         workerId,
       });
       const summary = {

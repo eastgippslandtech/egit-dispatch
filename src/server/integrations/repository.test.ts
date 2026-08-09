@@ -123,16 +123,18 @@ function fakeSql() {
         return [];
       }
       if (name === "claimDueSteps") {
-        const [claimNow, workerId, leaseExpiresAt, limit] = values as [
+        const [claimNow, workerId, leaseExpiresAt, limit, operationId] = values as [
           string,
           string,
           string,
           number,
+          string | undefined,
         ];
         const claimed = steps
           .filter(
             (step) =>
               (step.state === "queued" || step.state === "retrying") &&
+              (!operationId || step.operationId === operationId) &&
               (!step.nextAttemptAt || step.nextAttemptAt <= claimNow) &&
               !["review_required", "cancelled", "synced"].includes(
                 operations.find((operation) => operation.id === step.operationId)
@@ -509,6 +511,27 @@ describe("integration repository", () => {
       workerId: "worker-a",
     });
     expect(fake.operations[0]).toMatchObject({ state: "syncing" });
+  });
+
+  it("claims only the targeted operation when an operation id is supplied", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+    const { operation: first } = await repository.enqueue(operation());
+    const { operation: second } = await repository.enqueue({
+      ...operation(),
+      idempotencyKey: "request-43-sync-v1",
+      requestId: "request-43",
+    });
+
+    const claimed = await repository.claimDueSteps({
+      limit: 2,
+      operationId: second.id,
+      workerId: "worker-a",
+    });
+
+    expect(claimed.map((step) => step.operationId)).toEqual([second.id]);
+    expect(first.state).toBe("queued");
+    expect(second.state).toBe("syncing");
   });
 
   it("marks a leased step as succeeded", async () => {

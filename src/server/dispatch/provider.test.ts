@@ -471,4 +471,93 @@ describe("dispatch dashboard provider", () => {
       technicianId: "tech-riley",
     });
   });
+
+  it("enriches cached Command Centre database requests with Zoho CRM addresses", async () => {
+    const database: DispatchDashboardDatabase = {
+      async getDashboardData() {
+        return {
+          appointments: [
+            {
+              customer: "Bairnsdale Tyre Service",
+              date: "2026-08-06",
+              end: "11:00",
+              id: "appointment-db-1",
+              requestId: "6768000001520772",
+              source: "linked",
+              start: "10:00",
+              status: "confirmed",
+              technicianId: "tech-jervy",
+              title: "NBN box relocation",
+            },
+          ],
+          requests: [
+            {
+              ageHours: 1,
+              billable: true,
+              contact: "Daniel",
+              customer: "Bairnsdale Tyre Service",
+              dueAt: "2026-08-06T07:00:00.000Z",
+              id: "6768000001520772",
+              notes: "Relocate NBN box near reception.",
+              priority: "Medium",
+              readyToBook: false,
+              requester: "Daniel",
+              requestNumber: "22572612",
+              scheduledEnd: "2026-08-06T01:00:00.000Z",
+              scheduledStart: "2026-08-06T00:00:00.000Z",
+              site: "Unknown site",
+              slaState: "normal",
+              sourceSystem: "command-centre-db",
+              status: "Scheduled",
+              subject: "NBN box relocation",
+              technicianId: "tech-jervy",
+              warnings: ["No usable Helpdesk or Zoho CRM site address was found."],
+            },
+          ],
+          technicians: [
+            {
+              active: true,
+              displayName: "Jervy",
+              id: "tech-jervy",
+              mappingStatus: "mapped",
+              outlookEmail: "jervy@egit.com.au",
+              storeLocation: "Bairnsdale",
+            },
+          ],
+        };
+      },
+    };
+    const crmClient = {
+      listAccounts: async () => [
+        {
+          Account_Name: "Bairnsdale Tyre Service",
+          Shipping_City: "Bairnsdale",
+          Shipping_Code: "3875",
+          Shipping_State: "VIC",
+          Shipping_Street: "18 Bosworth Road",
+          id: "crm-bairnsdale-tyre",
+        },
+      ],
+    };
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        DATABASE_URL: "postgresql://command-centre-db",
+        DISPATCH_DATA_SOURCE: "command-centre-db",
+      }),
+      { crmClient, database },
+    );
+
+    expect(data.requests[0]).toMatchObject({
+      crmAccountId: "crm-bairnsdale-tyre",
+      site: "18 Bosworth Road, Bairnsdale VIC 3875",
+      siteAddress: "18 Bosworth Road, Bairnsdale VIC 3875",
+      siteAddressSource: "zoho-crm",
+      siteTown: "Bairnsdale",
+    });
+    expect(data.appointments[0]).toMatchObject({
+      siteAddress: "18 Bosworth Road, Bairnsdale VIC 3875",
+      siteTown: "Bairnsdale",
+    });
+  });
 });

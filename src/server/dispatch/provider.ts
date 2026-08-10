@@ -9,7 +9,7 @@ import {
   getConfiguredDispatchDashboardDatabase,
   type DispatchDashboardDatabase,
 } from "./database";
-import type { DispatchDashboardData } from "./types";
+import type { Appointment, DispatchDashboardData, DispatchRequest } from "./types";
 import { buildGraphPlanningRange } from "@/server/graph/range";
 import { buildOutlookCalendarDashboardData } from "@/server/graph/technician-calendars";
 import { createMspCentralClient } from "@/server/msp-central/client";
@@ -28,7 +28,7 @@ type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 
 const OUTLOOK_DASHBOARD_TIMEOUT_MS = 12_000;
-const CRM_ENRICHMENT_TIMEOUT_MS = 2_500;
+const CRM_ENRICHMENT_TIMEOUT_MS = 8_000;
 const MSP_REQUESTS_TIMEOUT_MS = 7_000;
 const MSP_TECHNICIANS_TIMEOUT_MS = 2_500;
 
@@ -58,8 +58,17 @@ export async function getDispatchDashboardData(
       throw new Error("DATABASE_URL is required for Command Centre database dispatch data.");
     }
 
+    const configuredCrmClient =
+      crmClient === undefined ? createConfiguredZohoCrmClient() : crmClient;
+    const databaseDashboard = buildDatabaseDispatchDashboardData(
+      await database.getDashboardData(),
+    );
+
     return addTrainingSamples(
-      buildDatabaseDispatchDashboardData(await database.getDashboardData()),
+      await enrichDashboardWithZohoCrmAddresses(databaseDashboard, {
+        bypassCache: crmClient !== undefined,
+        crmClient: configuredCrmClient,
+      }),
       config,
     );
   }
@@ -119,10 +128,7 @@ export async function getDispatchDashboardData(
       requestsResult.status === "fulfilled" ? requestsResult.value : [];
     const requests =
       crmAccountsResult.status === "fulfilled"
-        ? enrichRequestsWithZohoCrmAddresses(
-            rawRequests,
-            crmAccountsResult.value,
-          )
+        ? enrichRequestsWithZohoCrmAddresses(rawRequests, crmAccountsResult.value)
         : rawRequests;
     const technicians =
       techniciansResult.status === "fulfilled"
@@ -224,6 +230,77 @@ export async function getDispatchDashboardData(
     selectedRequestId: "",
     dispatchDataSource: "mock",
   }, config);
+}
+
+async function enrichDashboardWithZohoCrmAddresses(
+  dashboard: DispatchDashboardData,
+  {
+    bypassCache,
+    crmClient,
+  }: {
+    bypassCache: boolean;
+    crmClient: ZohoCrmAccountsClient | null;
+  },
+): Promise<DispatchDashboardData> {
+  if (!crmClient || dashboard.requests.length === 0) {
+    return dashboard;
+  }
+
+  try {
+    const accounts = await withProviderTimeout(
+      loadZohoCrmAccounts(crmClient, bypassCache),
+      CRM_ENRICHMENT_TIMEOUT_MS,
+      "Zoho CRM address enrichment timed out.",
+    );
+    const requests = enrichRequestsWithZohoCrmAddresses(dashboard.requests, accounts);
+    const appointments = applyRequestAddressesToAppointments(
+      dashboard.appointments,
+      requests,
+    );
+    const enrichedDashboard = {
+      ...dashboard,
+      appointments,
+      requests,
+    };
+
+    return {
+      ...enrichedDashboard,
+      healthItems: buildDispatchHealthItems(enrichedDashboard),
+      selectedRequestId:
+        enrichedDashboard.selectedRequestId || enrichedDashboard.requests[0]?.id || "",
+    };
+  } catch (error) {
+    console.error("Zoho CRM site address enrichment failed", safeError(error));
+    return dashboard;
+  }
+}
+
+function applyRequestAddressesToAppointments(
+  appointments: readonly Appointment[],
+  requests: readonly DispatchRequest[],
+) {
+  const requestsById = new Map(requests.map((request) => [request.id, request]));
+
+  return appointments.map((appointment) => {
+    const request = appointment.requestId
+      ? requestsById.get(appointment.requestId)
+      : undefined;
+    if (!request) {
+      return appointment;
+    }
+
+    return {
+      ...appointment,
+      customer:
+        request.customer === "Unknown customer"
+          ? appointment.customer
+          : request.customer,
+      helpdeskUrl: request.helpdeskUrl ?? appointment.helpdeskUrl,
+      siteAddress: request.siteAddress ?? appointment.siteAddress,
+      siteArea: request.siteArea ?? appointment.siteArea,
+      siteTown: request.siteTown ?? appointment.siteTown,
+    };
+  });
 }
 
 function addTrainingSamples(

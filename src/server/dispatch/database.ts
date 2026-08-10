@@ -307,6 +307,7 @@ function mapRequest(
   const scheduledStart = toOptionalIso(row.scheduledStart);
   const scheduledEnd = toOptionalIso(row.scheduledEnd);
   const dueAt = pickSlaDueAt(summaries) ?? "";
+  const siteAddress = pickString(summaries, ["siteAddress", "address"]) ?? undefined;
 
   return {
     id: row.sdpRequestId,
@@ -342,7 +343,8 @@ function mapRequest(
     scheduledEnd: scheduledEnd ?? undefined,
     scheduledStart: scheduledStart ?? undefined,
     site: pickString(summaries, ["siteName", "site"]) ?? "Unknown site",
-    siteAddress: pickString(summaries, ["siteAddress", "address"]) ?? undefined,
+    siteAddress,
+    siteAddressSource: pickSiteAddressSource(summaries) ?? (siteAddress ? "msp-central" : "unknown"),
     siteArea: pickString(summaries, ["siteArea", "area", "siteTown", "town"]) ?? undefined,
     siteName: pickString(summaries, ["siteName", "site"]) ?? undefined,
     siteTown: pickString(summaries, ["siteTown", "town", "city"]) ?? undefined,
@@ -507,6 +509,18 @@ function pickString(records: Array<Record<string, unknown>>, keys: string[]) {
       if (sdp) return sdp;
     }
   }
+  return null;
+}
+
+function pickSiteAddressSource(records: Array<Record<string, unknown>>) {
+  const source = pickString(records, ["siteAddressSource", "addressSource"]);
+  if (source === "msp-central" || source === "zoho-crm" || source === "unknown") {
+    return source;
+  }
+
+  const normalized = source?.toLowerCase();
+  if (normalized?.includes("crm")) return "zoho-crm";
+  if (normalized?.includes("msp") || normalized?.includes("helpdesk")) return "msp-central";
   return null;
 }
 

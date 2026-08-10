@@ -49,6 +49,31 @@ describe("push registration", () => {
     expect(openSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("opens app settings when iOS reports a denied notification without retry metadata", async () => {
+    const notifications = {
+      getExpoPushTokenAsync: vi.fn(async () => ({ data: "should-not-be-used" })),
+      getPermissionsAsync: vi.fn(async () => ({
+        status: "denied" as const,
+      })),
+      requestPermissionsAsync: vi.fn(async () => ({
+        status: "denied" as const,
+      })),
+    };
+    const openSettings = vi.fn(async () => undefined);
+    const registration = createPushRegistration({ notifications, openSettings });
+
+    const result = await registration.enableJobNotifications({
+      appVersion: "0.1.2",
+      installationId: "inst-1",
+      platform: "ios",
+    });
+
+    expect(result.status).toBe("settings-required");
+    expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(openSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("requests permission and registers the device during first-load setup", async () => {
     const notifications = {
       getExpoPushTokenAsync: vi.fn(async () => ({ data: "ExponentPushToken[first-load]" })),
@@ -112,6 +137,51 @@ describe("push registration", () => {
     expect(registerToken).toHaveBeenCalledTimes(1);
   });
 
+  it("registers an existing notification permission without prompting", async () => {
+    const notifications = {
+      getExpoPushTokenAsync: vi.fn(async () => ({ data: "ExponentPushToken[existing]" })),
+      getPermissionsAsync: vi.fn(async () => ({ status: "granted" as const })),
+      requestPermissionsAsync: vi.fn(async () => ({ status: "granted" as const })),
+    };
+    const registerToken = vi.fn(async () => undefined);
+    const registration = createPushRegistration({ notifications, registerToken });
+
+    const result = await registration.registerExistingJobNotifications({
+      appVersion: "0.1.2",
+      installationId: "inst-1",
+      platform: "ios",
+      projectId: "expo-project-1",
+    });
+
+    expect(result.status).toBe("registered");
+    expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({
+      projectId: "expo-project-1",
+    });
+    expect(registerToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not prompt while checking for an existing notification permission", async () => {
+    const notifications = {
+      getExpoPushTokenAsync: vi.fn(async () => ({ data: "should-not-be-used" })),
+      getPermissionsAsync: vi.fn(async () => ({ status: "undetermined" as const })),
+      requestPermissionsAsync: vi.fn(async () => ({ status: "granted" as const })),
+    };
+    const registerToken = vi.fn(async () => undefined);
+    const registration = createPushRegistration({ notifications, registerToken });
+
+    const result = await registration.registerExistingJobNotifications({
+      appVersion: "0.1.2",
+      installationId: "inst-1",
+      platform: "ios",
+    });
+
+    expect(result.status).toBe("not-granted");
+    expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(registerToken).not.toHaveBeenCalled();
+  });
+
   it("does not request a token after notification permission is denied", async () => {
     const notifications = {
       getExpoPushTokenAsync: vi.fn(async () => ({ data: "should-not-be-used" })),
@@ -134,7 +204,7 @@ describe("push registration", () => {
       platform: "ios",
     });
 
-    expect(result.status).toBe("not-granted");
+    expect(result.status).toBe("settings-required");
     expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
     expect(notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
     expect(registerToken).not.toHaveBeenCalled();

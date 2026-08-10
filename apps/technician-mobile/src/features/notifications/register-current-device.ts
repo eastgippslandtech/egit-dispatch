@@ -10,7 +10,7 @@ import { getMobileRuntimeConfig } from "../../config/runtime";
 import { getOrCreateNotificationInstallationId } from "./installation-id";
 import { createPushRegistration } from "./register-device";
 
-type RegistrationMode = "automatic" | "manual";
+type RegistrationMode = "automatic" | "existing-permission" | "manual";
 
 export async function registerCurrentDeviceNotifications({
   mobileSession,
@@ -58,7 +58,11 @@ export async function registerCurrentDeviceNotifications({
       (Constants.expoConfig?.extra?.eas?.projectId as string | undefined),
   } as const;
 
-  return mode === "automatic"
-    ? registration.ensureJobNotifications(input)
-    : registration.enableJobNotifications(input);
+  if (mode === "automatic") {
+    return registration.ensureJobNotifications(input);
+  }
+  if (mode === "existing-permission") {
+    return registration.registerExistingJobNotifications(input);
+  }
+  return registration.enableJobNotifications(input);
 }

@@ -51,4 +51,25 @@ describe("foreground location setup", () => {
     expect(location.requestForegroundPermissionsAsync).not.toHaveBeenCalled();
     expect(openSettings).toHaveBeenCalledTimes(1);
   });
+
+  it("opens app settings when iOS reports a denied location without retry metadata", async () => {
+    const location = {
+      getForegroundPermissionsAsync: vi.fn(async () => ({
+        granted: false,
+        status: "denied",
+      })),
+      requestForegroundPermissionsAsync: vi.fn(async () => ({
+        granted: false,
+        status: "denied",
+      })),
+    };
+    const openSettings = vi.fn(async () => undefined);
+
+    await expect(
+      enableWhileUsingLocation(location, { openSettings }),
+    ).resolves.toBe("Open phone settings to enable location while using");
+
+    expect(location.requestForegroundPermissionsAsync).not.toHaveBeenCalled();
+    expect(openSettings).toHaveBeenCalledTimes(1);
+  });
 });

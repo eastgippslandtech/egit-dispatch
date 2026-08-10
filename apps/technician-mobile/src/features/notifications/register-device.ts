@@ -35,6 +35,24 @@ export interface PushDeviceRegistration {
   pushToken: string;
 }
 
+export type JobNotificationPermissionStatus =
+  | "enabled"
+  | "not-enabled"
+  | "settings-required";
+
+export async function getJobNotificationPermissionStatus(
+  notifications: Pick<PushRegistrationNotifications, "getPermissionsAsync">,
+): Promise<JobNotificationPermissionStatus> {
+  const permission = await notifications.getPermissionsAsync();
+  if (isGranted(permission)) {
+    return "enabled";
+  }
+  if (cannotAskAgain(permission)) {
+    return "settings-required";
+  }
+  return "not-enabled";
+}
+
 export function createPushRegistration({
   notifications,
   openSettings,
@@ -64,6 +82,18 @@ export function createPushRegistration({
   };
 
   return {
+    async registerExistingJobNotifications(input: EnableJobNotificationsInput) {
+      const permission = await notifications.getPermissionsAsync();
+      if (cannotAskAgain(permission)) {
+        return { status: "settings-required" as const };
+      }
+      if (!isGranted(permission)) {
+        return { status: "not-granted" as const };
+      }
+
+      return registerApprovedDevice(input);
+    },
+
     async ensureJobNotifications(input: EnableJobNotificationsInput) {
       let permission = await notifications.getPermissionsAsync();
       if (permission.status === "undetermined") {
@@ -120,7 +150,7 @@ function isGranted(permission: NotificationPermissionResult): boolean {
 }
 
 function cannotAskAgain(permission: NotificationPermissionResult): boolean {
-  return permission.status === "denied" && permission.canAskAgain === false;
+  return permission.status === "denied" && permission.canAskAgain !== true;
 }
 
 export function redactPushToken(token: string): string {

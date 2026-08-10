@@ -13,6 +13,8 @@ import TestRenderer, {
 } from "react-test-renderer";
 import { Pressable } from "react-native";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
 
 import { RootNavigator } from "../../app/_layout";
 import TabsLayout from "../../app/(tabs)/_layout";
@@ -41,6 +43,12 @@ const navigationHarness = vi.hoisted(() => ({
 }));
 
 let latestRepository: TechnicianRepository | undefined;
+type NotificationPermissionStatus = Awaited<
+  ReturnType<typeof Notifications.getPermissionsAsync>
+>["status"];
+type ForegroundPermissionStatus = Awaited<
+  ReturnType<typeof Location.getForegroundPermissionsAsync>
+>["status"];
 
 const sessionStoreMock = vi.hoisted(() => ({
   clearMobileSession: vi.fn(),
@@ -76,7 +84,13 @@ vi.mock(
 );
 
 vi.mock("react-native", () => ({
+  AppState: {
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+  },
   Image: "Image",
+  Linking: {
+    openSettings: vi.fn(async () => undefined),
+  },
   Pressable: "Pressable",
   ScrollView: "ScrollView",
   StatusBar: "StatusBar",
@@ -109,6 +123,7 @@ vi.mock("expo-device", () => ({
 }));
 
 vi.mock("expo-location", () => ({
+  getForegroundPermissionsAsync: vi.fn(),
   requestForegroundPermissionsAsync: vi.fn(),
 }));
 
@@ -477,6 +492,22 @@ describe("technician navigation", () => {
     notificationRegistrationMock.registerCurrentDeviceNotifications.mockResolvedValue({
       status: "registered",
     });
+    vi.mocked(Notifications.getPermissionsAsync).mockReset();
+    vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
+      canAskAgain: true,
+      expires: "never",
+      granted: false,
+      status: "undetermined" as NotificationPermissionStatus,
+    });
+    vi.mocked(Notifications.requestPermissionsAsync).mockReset();
+    vi.mocked(Location.getForegroundPermissionsAsync).mockReset();
+    vi.mocked(Location.getForegroundPermissionsAsync).mockResolvedValue({
+      canAskAgain: true,
+      expires: "never",
+      granted: false,
+      status: "undetermined" as ForegroundPermissionStatus,
+    });
+    vi.mocked(Location.requestForegroundPermissionsAsync).mockReset();
   });
 
   it("shows the native Zoho sign-in command when signed out", () => {
@@ -550,13 +581,22 @@ describe("technician navigation", () => {
 
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
-    ).not.toHaveBeenCalled();
+    ).toHaveBeenCalledWith({
+      mode: "existing-permission",
+      mobileSession: liveSession,
+    });
+    expect(
+      notificationRegistrationMock.registerCurrentDeviceNotifications,
+    ).not.toHaveBeenCalledWith({
+      mode: "manual",
+      mobileSession: liveSession,
+    });
 
     await pressButtonAsync(rendered, "Enable notifications");
 
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
-    ).toHaveBeenCalledTimes(1);
+    ).toHaveBeenCalledTimes(2);
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).toHaveBeenCalledWith({
@@ -613,6 +653,27 @@ describe("technician navigation", () => {
       paddingBottom: expect.any(Number),
     });
     expect(actionGroup.props.style).toMatchObject({ gap: 12 });
+  });
+
+  it("loads current phone permission statuses when profile settings opens", async () => {
+    vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
+      canAskAgain: false,
+      expires: "never",
+      granted: true,
+      status: "granted" as NotificationPermissionStatus,
+    });
+    vi.mocked(Location.getForegroundPermissionsAsync).mockResolvedValue({
+      canAskAgain: false,
+      expires: "never",
+      granted: true,
+      status: "granted" as ForegroundPermissionStatus,
+    });
+
+    const profile = await renderProfileSettingsAsync(approvedRileySession);
+
+    expect(textValues(profile.root)).toEqual(
+      expect.arrayContaining(["Enabled on this phone", "Enabled while using"]),
+    );
   });
 
   it("starts a 30 minute lunch from profile settings", async () => {

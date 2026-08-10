@@ -1,12 +1,23 @@
 import Constants from "expo-constants";
 import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import {
+  AppState,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppButton } from "../../src/components/app-button";
-import { enableWhileUsingLocation } from "../../src/features/location/foreground-location";
+import {
+  enableWhileUsingLocation,
+  getWhileUsingLocationStatus,
+} from "../../src/features/location/foreground-location";
 import { createApiClient } from "../../src/api/client";
 import { getMobileRuntimeConfig } from "../../src/config/runtime";
 import {
@@ -14,6 +25,7 @@ import {
   markLunchUsedToday,
 } from "../../src/features/lunch/lunch-usage";
 import { registerCurrentDeviceNotifications } from "../../src/features/notifications/register-current-device";
+import { getJobNotificationPermissionStatus } from "../../src/features/notifications/register-device";
 import { useSession } from "../../src/providers/app-providers";
 import { colours } from "../../src/theme/tokens";
 
@@ -38,6 +50,54 @@ export default function ProfileRoute() {
   );
   const [lunchBusy, setLunchBusy] = useState(false);
   const [lunchTakenToday, setLunchTakenToday] = useState(false);
+
+  const refreshPermissionStatuses = useCallback(async () => {
+    const [notificationPermission, locationPermission] = await Promise.all([
+      getJobNotificationPermissionStatus(Notifications),
+      getWhileUsingLocationStatus(Location),
+    ]);
+
+    setNotificationStatus(
+      notificationPermission === "enabled"
+        ? "Enabled on this phone"
+        : notificationPermission === "settings-required"
+          ? "Open phone settings to enable notifications"
+          : "Not enabled",
+    );
+    setLocationStatus(
+      locationPermission === "enabled"
+        ? "Enabled while using"
+        : locationPermission === "settings-required"
+          ? "Open phone settings to enable location while using"
+          : "Not enabled",
+    );
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        await refreshPermissionStatuses();
+      } catch {
+        if (!cancelled) {
+          setNotificationStatus("Unable to check notification permission");
+          setLocationStatus("Unable to check location permission");
+        }
+      }
+    };
+
+    void refresh();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void refresh();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.remove();
+    };
+  }, [refreshPermissionStatuses]);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +136,7 @@ export default function ProfileRoute() {
           ? "Use a physical phone to enable notifications"
           : "Permission not granted. Enable it in phone settings.",
     );
+    await refreshPermissionStatuses();
   };
   const enableLocation = async () => {
     setLocationStatus(
@@ -83,6 +144,7 @@ export default function ProfileRoute() {
         openSettings: () => Linking.openSettings(),
       }),
     );
+    await refreshPermissionStatuses();
   };
   const startLunch = async () => {
     if (!mobileSession) {

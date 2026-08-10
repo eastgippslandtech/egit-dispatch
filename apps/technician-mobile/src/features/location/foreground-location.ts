@@ -9,6 +9,19 @@ export interface LocationPermissionResult {
   status: string;
 }
 
+export async function getWhileUsingLocationStatus(
+  location: Pick<ForegroundLocationPermissions, "getForegroundPermissionsAsync">,
+): Promise<"enabled" | "not-enabled" | "settings-required"> {
+  const permission = await location.getForegroundPermissionsAsync?.();
+  if (isGranted(permission)) {
+    return "enabled";
+  }
+  if (cannotAskAgain(permission)) {
+    return "settings-required";
+  }
+  return "not-enabled";
+}
+
 export async function enableWhileUsingLocation(
   location: ForegroundLocationPermissions,
   options: { openSettings?: () => Promise<void> } = {},
@@ -43,5 +56,5 @@ function isGranted(permission: LocationPermissionResult | undefined): boolean {
 function cannotAskAgain(
   permission: LocationPermissionResult | undefined,
 ): boolean {
-  return permission?.status === "denied" && permission.canAskAgain === false;
+  return permission?.status === "denied" && permission.canAskAgain !== true;
 }

@@ -1,6 +1,6 @@
 import * as Notifications from "expo-notifications";
 import { Stack } from "expo-router";
-import { type PropsWithChildren } from "react";
+import { type PropsWithChildren, useEffect } from "react";
 import { Linking, StatusBar, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -30,6 +30,21 @@ Notifications.setNotificationHandler({
 export function RootNavigator() {
   const { session } = useSession();
   const isApproved = session.status === "approved";
+
+  useEffect(() => {
+    const mobileSession =
+      session.status === "approved" ? session.mobileSession : undefined;
+    if (!mobileSession) {
+      return;
+    }
+
+    void registerCurrentDeviceNotifications({
+      mode: "existing-permission",
+      mobileSession,
+    }).catch(() => {
+      // The Profile button remains available for manual retry and user-facing status.
+    });
+  }, [session]);
 
   return (
     <View style={styles.shell}>

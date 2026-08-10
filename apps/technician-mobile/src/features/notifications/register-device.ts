@@ -1,4 +1,6 @@
 export interface NotificationPermissionResult {
+  canAskAgain?: boolean;
+  granted?: boolean;
   status: "granted" | "denied" | "undetermined";
 }
 
@@ -9,7 +11,14 @@ export interface ExpoPushTokenResult {
 export interface PushRegistrationNotifications {
   getExpoPushTokenAsync(options?: { projectId?: string }): Promise<ExpoPushTokenResult>;
   getPermissionsAsync(): Promise<NotificationPermissionResult>;
-  requestPermissionsAsync(): Promise<NotificationPermissionResult>;
+  requestPermissionsAsync(options?: {
+    android?: object;
+    ios?: {
+      allowAlert?: boolean;
+      allowBadge?: boolean;
+      allowSound?: boolean;
+    };
+  }): Promise<NotificationPermissionResult>;
 }
 
 export interface EnableJobNotificationsInput {
@@ -28,9 +37,11 @@ export interface PushDeviceRegistration {
 
 export function createPushRegistration({
   notifications,
+  openSettings,
   registerToken,
 }: {
   notifications: PushRegistrationNotifications;
+  openSettings?: () => Promise<void>;
   registerToken?: (registration: PushDeviceRegistration) => Promise<void>;
 }) {
   const registerApprovedDevice = async (input: EnableJobNotificationsInput) => {
@@ -56,9 +67,11 @@ export function createPushRegistration({
     async ensureJobNotifications(input: EnableJobNotificationsInput) {
       let permission = await notifications.getPermissionsAsync();
       if (permission.status === "undetermined") {
-        permission = await notifications.requestPermissionsAsync();
+        permission = await requestNotificationPermission(notifications);
+      } else if (cannotAskAgain(permission)) {
+        return { status: "settings-required" as const };
       }
-      if (permission.status !== "granted") {
+      if (!isGranted(permission)) {
         return { status: "not-granted" as const };
       }
 
@@ -66,14 +79,48 @@ export function createPushRegistration({
     },
 
     async enableJobNotifications(input: EnableJobNotificationsInput) {
-      const permission = await notifications.requestPermissionsAsync();
-      if (permission.status !== "granted") {
+      const existing = await notifications.getPermissionsAsync();
+      if (isGranted(existing)) {
+        return registerApprovedDevice(input);
+      }
+      if (cannotAskAgain(existing)) {
+        await openSettings?.();
+        return { status: "settings-required" as const };
+      }
+
+      const permission = await requestNotificationPermission(notifications);
+      if (cannotAskAgain(permission)) {
+        await openSettings?.();
+        return { status: "settings-required" as const };
+      }
+      if (!isGranted(permission)) {
         return { status: "not-granted" as const };
       }
 
       return registerApprovedDevice(input);
     },
   };
+}
+
+function requestNotificationPermission(
+  notifications: PushRegistrationNotifications,
+) {
+  return notifications.requestPermissionsAsync({
+    android: {},
+    ios: {
+      allowAlert: true,
+      allowBadge: true,
+      allowSound: true,
+    },
+  });
+}
+
+function isGranted(permission: NotificationPermissionResult): boolean {
+  return Boolean(permission.granted) || permission.status === "granted";
+}
+
+function cannotAskAgain(permission: NotificationPermissionResult): boolean {
+  return permission.status === "denied" && permission.canAskAgain === false;
 }
 
 export function redactPushToken(token: string): string {

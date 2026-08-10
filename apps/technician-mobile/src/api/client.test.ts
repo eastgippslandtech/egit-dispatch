@@ -19,7 +19,7 @@ describe("mobile API client", () => {
       requestId: () => "request-1",
     });
 
-    const response = await api.request<{ data: { jobs: Array<{ id: string }> } }>(
+    const response = await api.request<{ data: { jobs: { id: string }[] } }>(
       "/jobs?from=2026-08-10&to=2026-08-10",
     );
 

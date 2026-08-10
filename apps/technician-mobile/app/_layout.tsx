@@ -1,7 +1,7 @@
 import * as Notifications from "expo-notifications";
 import { Stack } from "expo-router";
 import { type PropsWithChildren } from "react";
-import { StatusBar, StyleSheet, View } from "react-native";
+import { Linking, StatusBar, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import {
@@ -83,6 +83,8 @@ async function enableJobNotifications(
 
   return result.status === "registered"
     ? `Notifications enabled (${result.tokenPreview})`
+    : result.status === "settings-required"
+      ? "Open phone settings to enable notifications"
     : result.status === "not-device"
       ? "Use a physical phone to enable notifications"
       : "Notification permission not granted";
@@ -90,7 +92,9 @@ async function enableJobNotifications(
 
 async function enableWhileUsingLocation(): Promise<string> {
   const location = await import("expo-location");
-  return requestWhileUsingLocation(location);
+  return requestWhileUsingLocation(location, {
+    openSettings: () => Linking.openSettings(),
+  });
 }
 
 function ActiveTimerProviderBridge({ children }: PropsWithChildren) {

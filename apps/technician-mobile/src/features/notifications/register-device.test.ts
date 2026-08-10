@@ -14,12 +14,39 @@ describe("push registration", () => {
     expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
 
     await registration.enableJobNotifications({
-      appVersion: "0.1.1",
+      appVersion: "0.1.2",
       installationId: "inst-1",
       platform: "ios",
     });
 
     expect(notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens app settings when notification permission cannot be requested again", async () => {
+    const notifications = {
+      getExpoPushTokenAsync: vi.fn(async () => ({ data: "should-not-be-used" })),
+      getPermissionsAsync: vi.fn(async () => ({
+        canAskAgain: false,
+        status: "denied" as const,
+      })),
+      requestPermissionsAsync: vi.fn(async () => ({
+        canAskAgain: false,
+        status: "denied" as const,
+      })),
+    };
+    const openSettings = vi.fn(async () => undefined);
+    const registration = createPushRegistration({ notifications, openSettings });
+
+    const result = await registration.enableJobNotifications({
+      appVersion: "0.1.2",
+      installationId: "inst-1",
+      platform: "android",
+    });
+
+    expect(result.status).toBe("settings-required");
+    expect(notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(openSettings).toHaveBeenCalledTimes(1);
   });
 
   it("requests permission and registers the device during first-load setup", async () => {
@@ -39,7 +66,7 @@ describe("push registration", () => {
       };
 
     const result = await registration.ensureJobNotifications({
-      appVersion: "0.1.1",
+      appVersion: "0.1.2",
       installationId: "inst-1",
       platform: "ios",
       projectId: "expo-project-1",
@@ -52,7 +79,7 @@ describe("push registration", () => {
       projectId: "expo-project-1",
     });
     expect(registerToken).toHaveBeenCalledWith({
-      appVersion: "0.1.1",
+      appVersion: "0.1.2",
       installationId: "inst-1",
       platform: "ios",
       pushToken: "ExponentPushToken[first-load]",
@@ -76,7 +103,7 @@ describe("push registration", () => {
       };
 
     await registration.ensureJobNotifications({
-      appVersion: "0.1.1",
+      appVersion: "0.1.2",
       installationId: "inst-1",
       platform: "android",
     });
@@ -102,7 +129,7 @@ describe("push registration", () => {
       };
 
     const result = await registration.ensureJobNotifications({
-      appVersion: "0.1.1",
+      appVersion: "0.1.2",
       installationId: "inst-1",
       platform: "ios",
     });

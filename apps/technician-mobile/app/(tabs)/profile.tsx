@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppButton } from "../../src/components/app-button";
@@ -70,13 +70,19 @@ export default function ProfileRoute() {
     setNotificationStatus(
       result.status === "registered"
         ? `Enabled (${result.tokenPreview})`
+        : result.status === "settings-required"
+          ? "Open phone settings to enable notifications"
         : result.status === "not-device"
           ? "Use a physical phone to enable notifications"
           : "Permission not granted. Enable it in phone settings.",
     );
   };
   const enableLocation = async () => {
-    setLocationStatus(await enableWhileUsingLocation(Location));
+    setLocationStatus(
+      await enableWhileUsingLocation(Location, {
+        openSettings: () => Linking.openSettings(),
+      }),
+    );
   };
   const startLunch = async () => {
     if (!mobileSession) {
@@ -128,7 +134,7 @@ export default function ProfileRoute() {
           <Text style={styles.value}>{staff.baseOffice}</Text>
           <Text style={styles.sectionTitle}>Settings</Text>
           <Text style={styles.label}>App version</Text>
-          <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.1"}</Text>
+          <Text style={styles.value}>{Constants.expoConfig?.version ?? "0.1.2"}</Text>
           <Text style={styles.label}>Notifications</Text>
           <Text style={styles.value}>{notificationStatus}</Text>
           <Text style={styles.label}>Location</Text>

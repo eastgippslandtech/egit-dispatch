@@ -101,7 +101,7 @@ vi.mock("@expo/vector-icons/MaterialCommunityIcons", () => ({
 }));
 
 vi.mock("expo-constants", () => ({
-  default: { expoConfig: { version: "0.1.1" } },
+  default: { expoConfig: { version: "0.1.2" } },
 }));
 
 vi.mock("expo-device", () => ({

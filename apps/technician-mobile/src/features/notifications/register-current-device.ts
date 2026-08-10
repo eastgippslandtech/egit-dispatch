@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
-import { Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 
 import { createApiClient } from "../../api/client";
 import type { MobileSession } from "../../auth/session-store";
@@ -38,6 +38,7 @@ export async function registerCurrentDeviceNotifications({
   });
   const registration = createPushRegistration({
     notifications: Notifications,
+    openSettings: () => Linking.openSettings(),
     registerToken: (payload) =>
       api.request("/devices/push-token", {
         body: payload,
@@ -49,7 +50,7 @@ export async function registerCurrentDeviceNotifications({
     store: SecureStore,
   });
   const input = {
-    appVersion: Constants.expoConfig?.version ?? "0.1.1",
+    appVersion: Constants.expoConfig?.version ?? "0.1.2",
     installationId,
     platform,
     projectId:

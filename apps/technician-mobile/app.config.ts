@@ -5,7 +5,7 @@ const config: ExpoConfig = {
   owner: "eastgippslandtechs-team",
   slug: "egit-command-centre-technician",
   scheme: "egitcommand",
-  version: "0.1.1",
+  version: "0.1.2",
   orientation: "portrait",
   userInterfaceStyle: "dark",
   icon: "./assets/brand/app-icon.png",
@@ -28,7 +28,12 @@ const config: ExpoConfig = {
       backgroundColor: "#071526",
       foregroundImage: "./assets/brand/app-icon.png",
     },
-    permissions: ["CAMERA", "ACCESS_FINE_LOCATION", "POST_NOTIFICATIONS"],
+    permissions: [
+      "CAMERA",
+      "ACCESS_COARSE_LOCATION",
+      "ACCESS_FINE_LOCATION",
+      "POST_NOTIFICATIONS",
+    ],
     package: "au.com.egit.commandcentre",
   },
   plugins: [

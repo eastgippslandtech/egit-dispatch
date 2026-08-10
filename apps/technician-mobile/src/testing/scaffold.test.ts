@@ -23,7 +23,7 @@ describe("technician mobile scaffold", () => {
       name: "EGIT Command Centre",
       slug: "egit-command-centre-technician",
       scheme: "egitcommand",
-      version: "0.1.1",
+      version: "0.1.2",
       orientation: "portrait",
       userInterfaceStyle: "dark",
       ios: {

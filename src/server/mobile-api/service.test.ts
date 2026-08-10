@@ -237,7 +237,7 @@ describe("mobile API service", () => {
     expect(response.jobs[0].technician.email).toBe("riley@egit.com.au");
   });
 
-  it("starts loading assigned jobs without waiting for the staff profile lookup", async () => {
+  it("loads assigned jobs with the resolved database staff profile id", async () => {
     let resolveStaff: ((staff: DatabaseStaffRow) => void) | undefined;
     const listJobsForStaff = vi.fn().mockResolvedValue([dbJob]);
     const responsePromise = listMobileJobs({
@@ -258,16 +258,67 @@ describe("mobile API service", () => {
 
     await Promise.resolve();
 
-    expect(listJobsForStaff).toHaveBeenCalledWith({
-      from: "2026-07-14",
-      staffId: rileyMobileAuth.staffId,
-      to: "2026-07-14",
-    });
+    expect(listJobsForStaff).not.toHaveBeenCalled();
 
     resolveStaff?.(dbStaff);
+
     await expect(responsePromise).resolves.toMatchObject({
       jobs: [expect.objectContaining({ id: dbJobId })],
     });
+    expect(listJobsForStaff).toHaveBeenCalledWith({
+      from: "2026-07-14",
+      staffId: dbStaff.id,
+      to: "2026-07-14",
+    });
+  });
+
+  it("keeps database jobs available when the mobile Outlook read fails", async () => {
+    const response = await listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      from: "2026-07-14",
+      outlookCalendar: {
+        async findAppointment() {
+          return null;
+        },
+        async listAppointments() {
+          throw new Error("Graph calendar read failed");
+        },
+      },
+      to: "2026-07-14",
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: dbJobId,
+      source: "msp_central",
+      title: "VPN outage follow-up",
+    });
+  });
+
+  it("does not let a slow mobile Outlook read delay assigned Helpdesk jobs", async () => {
+    vi.useFakeTimers();
+    const responsePromise = listMobileJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase(),
+      from: "2026-07-14",
+      outlookCalendar: {
+        async findAppointment() {
+          return null;
+        },
+        async listAppointments() {
+          return new Promise<Appointment[]>(() => undefined);
+        },
+      },
+      to: "2026-07-14",
+    });
+
+    await vi.advanceTimersByTimeAsync(3_001);
+
+    await expect(responsePromise).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ id: dbJobId })],
+    });
+    vi.useRealTimers();
   });
 
   it("adds Outlook-only calendar bookings to the technician schedule", async () => {

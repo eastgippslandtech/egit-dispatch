@@ -76,6 +76,8 @@ type ResolvedTimerJob = {
   mobileJob: MobileJob;
 };
 
+const MOBILE_OUTLOOK_READ_TIMEOUT_MS = 3_000;
+
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
   staffId: "staff-riley",
@@ -120,13 +122,13 @@ export async function listMobileJobs({
 }): Promise<{ jobs: MobileJob[] }> {
   if (database) {
     const staffPromise = requireDatabaseStaff(database, auth.email);
-    const [staff, jobs, testJobs, outlookJobs] = await Promise.all([
+    const [staff, testJobs] = await Promise.all([
       staffPromise,
-      database.listJobsForStaff({ from, staffId: auth.staffId, to }),
       listTestSyncedMobileJobs({ auth, from, to }),
-      staffPromise.then((staff) =>
-        listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
-      ),
+    ]);
+    const [jobs, outlookJobs] = await Promise.all([
+      database.listJobsForStaff({ from, staffId: staff.id, to }),
+      listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
     ]);
     const mappedJobs = jobs.map(mapDatabaseJob);
 
@@ -1107,11 +1109,15 @@ async function listOutlookMobileJobs({
   }
 
   try {
-    const appointments = await outlookCalendar.listAppointments({
-      from,
-      staff,
-      to,
-    });
+    const appointments = await withMobileProviderTimeout(
+      outlookCalendar.listAppointments({
+        from,
+        staff,
+        to,
+      }),
+      MOBILE_OUTLOOK_READ_TIMEOUT_MS,
+      "Mobile Outlook calendar read timed out.",
+    );
     return appointments
       .map((appointment) => mapOutlookAppointment(staff, appointment))
       .filter((job): job is MobileJob => Boolean(job));
@@ -1135,12 +1141,36 @@ async function findOutlookMobileJob({
   }
 
   try {
-    const appointment = await outlookCalendar.findAppointment({ jobId, staff });
+    const appointment = await withMobileProviderTimeout(
+      outlookCalendar.findAppointment({ jobId, staff }),
+      MOBILE_OUTLOOK_READ_TIMEOUT_MS,
+      "Mobile Outlook calendar event read timed out.",
+    );
     return appointment ? mapOutlookAppointment(staff, appointment) : null;
   } catch (error) {
     console.error("Mobile Outlook calendar event read failed", safeError(error));
     return null;
   }
+}
+
+function withMobileProviderTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function mapOutlookAppointment(

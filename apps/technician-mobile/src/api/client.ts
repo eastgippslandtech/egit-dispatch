@@ -5,6 +5,7 @@ export interface ApiClientOptions {
   baseUrl: string;
   fetcher?: typeof fetch;
   requestId?: () => string;
+  refreshAccessToken?: () => Promise<string | null>;
 }
 
 export interface ApiRequestOptions {
@@ -28,24 +29,43 @@ export function createApiClient({
   baseUrl,
   fetcher = fetch,
   requestId = createRequestId,
+  refreshAccessToken,
 }: ApiClientOptions): ApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  let currentAccessToken = accessToken;
 
   return {
     async request<TResponse = unknown>(
       path: string,
       options: ApiRequestOptions = {},
     ): Promise<TResponse> {
-      const response = await fetcher(`${normalizedBaseUrl}${normalizePath(path)}`, {
-        body:
-          options.body === undefined ? undefined : JSON.stringify(options.body),
-        headers: createHeaders({
-          accessToken,
-          idempotencyKey: options.idempotencyKey,
-          requestId: requestId(),
-        }),
-        method: options.method ?? (options.body === undefined ? "GET" : "POST"),
-      });
+      const url = `${normalizedBaseUrl}${normalizePath(path)}`;
+      const response = await fetcher(url, buildRequestInit({
+        accessToken: currentAccessToken,
+        options,
+        requestId: requestId(),
+      }));
+
+      if (response.status === 401 && refreshAccessToken) {
+        const refreshedAccessToken = await refreshAccessToken();
+        if (refreshedAccessToken) {
+          currentAccessToken = refreshedAccessToken;
+          const retryResponse = await fetcher(url, buildRequestInit({
+            accessToken: currentAccessToken,
+            options,
+            requestId: requestId(),
+          }));
+
+          if (retryResponse.ok) {
+            return (await retryResponse.json()) as TResponse;
+          }
+
+          throw new MobileApiError(
+            `Mobile API request failed with ${retryResponse.status}.`,
+            retryResponse.status,
+          );
+        }
+      }
 
       if (!response.ok) {
         throw new MobileApiError(
@@ -71,6 +91,26 @@ export function createApiClient({
         },
       );
     },
+  };
+}
+
+function buildRequestInit({
+  accessToken,
+  options,
+  requestId,
+}: {
+  accessToken: string;
+  options: ApiRequestOptions;
+  requestId: string;
+}): RequestInit {
+  return {
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    headers: createHeaders({
+      accessToken,
+      idempotencyKey: options.idempotencyKey,
+      requestId,
+    }),
+    method: options.method ?? (options.body === undefined ? "GET" : "POST"),
   };
 }
 

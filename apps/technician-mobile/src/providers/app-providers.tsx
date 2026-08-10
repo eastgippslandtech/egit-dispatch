@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -132,6 +133,30 @@ export function AppProviders({
     session.status === "approved"
       ? session.staff.email
       : approvedMockStaff.email;
+  const refreshApprovedSession = useCallback(
+    async (sessionToRefresh: MobileSession) => {
+      const currentSession = await refreshMobileSession(sessionToRefresh);
+      if (!currentSession) {
+        void clearMobileSession();
+        setSession({ status: "signed-out" });
+        return null;
+      }
+
+      if (currentSession !== sessionToRefresh) {
+        void saveMobileSession(currentSession);
+        setSession((current) =>
+          current.status === "approved" &&
+          current.mobileSession?.accessToken === sessionToRefresh.accessToken
+            ? { ...current, mobileSession: currentSession }
+            : current,
+        );
+      }
+
+      return currentSession.accessToken;
+    },
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -147,7 +172,9 @@ export function AppProviders({
     }
 
     const mobileSession = session.mobileSession;
-    createLiveRepository(mobileSession, session.staff)
+    createLiveRepository(mobileSession, session.staff, () =>
+      refreshApprovedSession(mobileSession),
+    )
       .then((nextRepository) => {
         if (!cancelled) {
           setLiveRepository({
@@ -168,7 +195,7 @@ export function AppProviders({
     return () => {
       cancelled = true;
     };
-  }, [injectedRepository, session]);
+  }, [injectedRepository, refreshApprovedSession, session]);
 
   const repositoryValue = useMemo<TechnicianRepository>(() => {
     if (injectedRepository) {
@@ -182,12 +209,21 @@ export function AppProviders({
       if (liveRepository?.accessToken === session.mobileSession.accessToken) {
         return liveRepository.repository;
       }
+      const mobileSession = session.mobileSession;
       return (
-        createSessionRemoteRepository(session.mobileSession, session.staff)
+        createSessionRemoteRepository(mobileSession, session.staff, () =>
+          refreshApprovedSession(mobileSession),
+        )
       );
     }
     return new MockTechnicianRepository({ staffEmail: effectiveStaffEmail });
-  }, [effectiveStaffEmail, injectedRepository, liveRepository, session]);
+  }, [
+    effectiveStaffEmail,
+    injectedRepository,
+    liveRepository,
+    refreshApprovedSession,
+    session,
+  ]);
   const sessionValue = useMemo<SessionContextValue>(
     () => ({
       isSigningIn,
@@ -241,12 +277,13 @@ export function AppProviders({
 async function createLiveRepository(
   session: MobileSession,
   staff: MobileStaff,
+  refreshAccessToken: () => Promise<string | null>,
 ): Promise<TechnicianRepository> {
   const database = await openCommandCentreDatabase().catch(() =>
     createInMemoryCommandCentreDatabase(),
   );
-  const remote = createSessionRemoteRepository(session, staff);
-  const api = createSessionApiClient(session);
+  const remote = createSessionRemoteRepository(session, staff, refreshAccessToken);
+  const api = createSessionApiClient(session, refreshAccessToken);
   return createOfflineTechnicianRepository({
     api,
     database,
@@ -258,8 +295,9 @@ async function createLiveRepository(
 function createSessionRemoteRepository(
   session: MobileSession,
   staff: MobileStaff,
+  refreshAccessToken: () => Promise<string | null>,
 ): TechnicianRepository {
-  const api = createSessionApiClient(session);
+  const api = createSessionApiClient(session, refreshAccessToken);
   const remote = createApiTechnicianRepository(api);
   return {
     ...remote,
@@ -267,11 +305,15 @@ function createSessionRemoteRepository(
   };
 }
 
-function createSessionApiClient(session: MobileSession) {
+function createSessionApiClient(
+  session: MobileSession,
+  refreshAccessToken: () => Promise<string | null>,
+) {
   const config = getMobileRuntimeConfig();
   return createApiClient({
     accessToken: session.accessToken,
     baseUrl: config.mobileApiBaseUrl,
+    refreshAccessToken,
   });
 }
 

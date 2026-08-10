@@ -213,6 +213,21 @@ function appointmentCandidates({
 
   if (
     activeJob &&
+    appointment.isAllDay &&
+    looksLikeLeave(appointment.title)
+  ) {
+    return [
+      appointmentCandidate({
+        appointment,
+        context: safeLeaveLabel(appointment.title),
+        source: "outlook",
+        status: "leave",
+      }),
+    ];
+  }
+
+  if (
+    activeJob &&
     showAs === "oof" &&
     (appointment.isAllDay || looksLikeLeave(appointment.title))
   ) {

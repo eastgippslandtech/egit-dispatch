@@ -342,6 +342,29 @@ describe("technician presence derivation", () => {
     });
   });
 
+  it("treats all-day Outlook leave titles as Leave even when Outlook reports Busy", () => {
+    expect(
+      derive({
+        appointments: [
+          appointment({
+            isAllDay: true,
+            outlookShowAs: "busy",
+            requestId: undefined,
+            source: "outlook",
+            start: "09:00",
+            end: "17:00",
+            title: "Annual leave",
+          }),
+        ],
+        requests: [],
+      }),
+    ).toMatchObject({
+      context: "Annual leave",
+      source: "outlook",
+      status: "leave",
+    });
+  });
+
   it("reports lower-priority overlapping activities without leaking Personal details", () => {
     const result = derive({
       appointments: [

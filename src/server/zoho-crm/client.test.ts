@@ -39,6 +39,7 @@ describe("ZohoCrmClient Accounts", () => {
     const firstAccountsUrl = new URL(String(fetchImpl.mock.calls[1][0]));
     const secondAccountsUrl = new URL(String(fetchImpl.mock.calls[2][0]));
     expect(firstAccountsUrl.pathname).toBe("/crm/v8/Accounts");
+    expect(firstAccountsUrl.searchParams.get("fields")).toContain("id");
     expect(firstAccountsUrl.searchParams.get("fields")).toContain("Shipping_Street");
     expect(firstAccountsUrl.searchParams.get("per_page")).toBe("200");
     expect(firstAccountsUrl.searchParams.get("page")).toBe("1");

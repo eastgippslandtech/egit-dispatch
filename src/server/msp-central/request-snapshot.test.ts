@@ -180,6 +180,37 @@ describe("MSP Central request snapshots", () => {
     expect(compacted[0]?.udf_fields?.ready_to_book).toBe(true);
   });
 
+  it("keeps display ids and account ids needed for CRM address matching", () => {
+    const compacted = compactRequestsForSnapshot([
+      {
+        ...cachedRequest,
+        account: {
+          id: "crm-account-144",
+          name: "Bairnsdale Tyre Service",
+        },
+        display_id: "22242",
+        display_number: "22242",
+        id: "6768000001482447",
+        number: "22242",
+        request_id: "6768000001482447",
+        request_number: "6768000001482447",
+      },
+    ]);
+
+    expect(compacted[0]).toMatchObject({
+      account: {
+        id: "crm-account-144",
+        name: "Bairnsdale Tyre Service",
+      },
+      display_id: "22242",
+      display_number: "22242",
+      id: "6768000001482447",
+      number: "22242",
+      request_id: "6768000001482447",
+      request_number: "6768000001482447",
+    });
+  });
+
   it("serves cached snapshots without starting a provider refresh", async () => {
     const store = createStore({
       fetchedAt: 1_000,

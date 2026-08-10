@@ -26,6 +26,7 @@ export type MspCentralRawRequest = {
     billing_street?: string | null;
     city?: string | null;
     country?: string | null;
+    id?: string | number | null;
     name?: string | null;
     postal_code?: string | null;
     shipping_city?: string | null;

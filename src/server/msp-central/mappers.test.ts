@@ -278,6 +278,21 @@ describe("MSP Central request mappers", () => {
     });
   });
 
+  it("maps the MSP Central account id for exact CRM account address matching", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: {
+          id: "crm-account-144",
+          name: "Bairnsdale Tyre Service",
+        },
+        request_number: "REQ-MSP-CRM-ID",
+      },
+      { now },
+    );
+
+    expect(request.crmAccountId).toBe("crm-account-144");
+  });
+
   it("does not auto-assign Advanced Works during office hours", () => {
     const request = mapMspCentralRequest(
       {

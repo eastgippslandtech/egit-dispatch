@@ -82,6 +82,56 @@ describe("Zoho CRM site address enrichment", () => {
     });
   });
 
+  it("uses the exact CRM account id before falling back to customer name matching", () => {
+    const [enriched] = enrichRequestsWithZohoCrmAddresses(
+      [
+        request({
+          crmAccountId: "crm-bairnsdale-tyre",
+          customer: "Short trading name",
+        }),
+      ],
+      [
+        account({
+          Account_Name: "Different Customer",
+          id: "crm-different-customer",
+        }),
+        account({
+          Account_Name: "Bairnsdale Tyre Service Pty Ltd",
+          Shipping_City: "Bairnsdale",
+          Shipping_Code: "3875",
+          Shipping_State: "VIC",
+          Shipping_Street: "18 Bosworth Road",
+          id: "crm-bairnsdale-tyre",
+        }),
+      ],
+    );
+
+    expect(enriched).toMatchObject({
+      crmAccountId: "crm-bairnsdale-tyre",
+      siteAddress: "18 Bosworth Road, Bairnsdale VIC 3875",
+      siteAddressSource: "zoho-crm",
+      siteTown: "Bairnsdale",
+    });
+  });
+
+  it("clears stale missing-address warnings after a CRM address is found", () => {
+    const [enriched] = enrichRequestsWithZohoCrmAddresses(
+      [
+        request({
+          warnings: [
+            "Missing site address",
+            "No usable Helpdesk or Zoho CRM site address was found.",
+            "Assets unavailable",
+          ],
+        }),
+      ],
+      [account()],
+    );
+
+    expect(enriched.siteAddressSource).toBe("zoho-crm");
+    expect(enriched.warnings).toEqual(["Assets unavailable"]);
+  });
+
   it("falls back to the billing address when shipping is incomplete", () => {
     const [enriched] = enrichRequestsWithZohoCrmAddresses(
       [request()],

@@ -24,12 +24,17 @@ export function enrichRequestsWithZohoCrmAddresses(
   requests: readonly DispatchRequest[],
   accounts: readonly ZohoCrmAccountRecord[],
 ): DispatchRequest[] {
+  const accountsById = new Map<string, ZohoCrmAccountRecord[]>();
   const accountsByName = new Map<string, ZohoCrmAccountRecord[]>();
   const accountsByCanonicalName = new Map<string, ZohoCrmAccountRecord[]>();
 
   for (const account of accounts) {
+    const idKey = normalizeAccountId(account.id);
     const key = normalizeAccountName(account.Account_Name);
     const canonicalKey = normalizeHighConfidenceAccountName(account.Account_Name);
+    if (idKey) {
+      accountsById.set(idKey, [...(accountsById.get(idKey) ?? []), account]);
+    }
     if (key) {
       accountsByName.set(key, [...(accountsByName.get(key) ?? []), account]);
     }
@@ -50,8 +55,10 @@ export function enrichRequestsWithZohoCrmAddresses(
     }
 
     const matches = findHighConfidenceAccountMatches({
+      accountsById,
       accountsByCanonicalName,
       accountsByName,
+      crmAccountId: request.crmAccountId,
       customer: request.customer,
     });
     if (matches.length > 1) {
@@ -71,9 +78,7 @@ export function enrichRequestsWithZohoCrmAddresses(
       siteAddress: crmAddress.address,
       siteAddressSource: "zoho-crm",
       siteTown: crmAddress.city ?? request.siteTown,
-      warnings: request.warnings.filter(
-        (warning) => warning.toLowerCase() !== "missing site address",
-      ),
+      warnings: removeResolvedAddressWarnings(request.warnings),
     };
   });
 }
@@ -138,6 +143,10 @@ function normalizeAccountName(value?: string) {
     .toLowerCase();
 }
 
+function normalizeAccountId(value?: string) {
+  return value?.trim() || undefined;
+}
+
 function normalizeHighConfidenceAccountName(value?: string) {
   return normalizeAccountName(value)
     .split(" ")
@@ -146,14 +155,24 @@ function normalizeHighConfidenceAccountName(value?: string) {
 }
 
 function findHighConfidenceAccountMatches({
+  accountsById,
   accountsByCanonicalName,
   accountsByName,
+  crmAccountId,
   customer,
 }: {
+  accountsById: Map<string, ZohoCrmAccountRecord[]>;
   accountsByCanonicalName: Map<string, ZohoCrmAccountRecord[]>;
   accountsByName: Map<string, ZohoCrmAccountRecord[]>;
+  crmAccountId?: string;
   customer: string;
 }) {
+  const idKey = normalizeAccountId(crmAccountId);
+  const idMatches = idKey ? accountsById.get(idKey) : undefined;
+  if (idMatches?.length) {
+    return idMatches;
+  }
+
   const exactKey = normalizeAccountName(customer);
   const exactMatches = accountsByName.get(exactKey);
   if (exactMatches?.length) {
@@ -200,6 +219,16 @@ function formatAddress(parts: {
 function clean(value?: string) {
   const cleaned = value?.trim().replace(/\s+/g, " ");
   return cleaned || undefined;
+}
+
+function removeResolvedAddressWarnings(warnings: readonly string[]) {
+  return warnings.filter((warning) => {
+    const normalized = warning.toLowerCase();
+    return (
+      normalized !== "missing site address" &&
+      normalized !== MISSING_ADDRESS_WARNING.toLowerCase()
+    );
+  });
 }
 
 function withAddressWarning(request: DispatchRequest, warning: string) {

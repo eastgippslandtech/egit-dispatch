@@ -131,6 +131,7 @@ export function mapMspCentralRequest(
       readString(raw.requester_email) ??
       "Unknown contact",
     customer,
+    crmAccountId: readString(raw.account?.id),
     dueAt,
     helpdeskUrl: buildMspCentralRequestUrl(
       requestLinkId,

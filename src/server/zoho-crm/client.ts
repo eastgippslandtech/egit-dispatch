@@ -29,6 +29,7 @@ export class ZohoCrmClient {
     const token = await this.getToken();
     const accounts: ZohoCrmAccountRecord[] = [];
     const fields = [
+      "id",
       "Account_Name",
       "Shipping_Street",
       "Shipping_City",

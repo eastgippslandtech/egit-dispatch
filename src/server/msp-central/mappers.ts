@@ -71,7 +71,7 @@ export function mapMspCentralRequest(
     technicianIdentity,
     profiles,
   );
-  const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
+  const requestNumber = readMspCentralDisplayRequestNumber(raw);
   const requestLinkId = readMspCentralInternalRequestId(raw.id) ?? requestNumber;
   const dueAt = readDateTime(raw.due_by_time) ?? "";
   const scheduledStart = readDateTime(raw.scheduled_start_time);
@@ -729,6 +729,18 @@ function readString(value: unknown) {
 
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+function readMspCentralDisplayRequestNumber(raw: MspCentralRawRequest) {
+  return (
+    readString(raw.display_id) ??
+    readString(raw.display_number) ??
+    readString(raw.number) ??
+    readString(raw.request_id) ??
+    readString(raw.request_number) ??
+    readString(raw.id) ??
+    "REQ-UNKNOWN"
+  );
 }
 
 function readMspCentralInternalRequestId(value: unknown) {

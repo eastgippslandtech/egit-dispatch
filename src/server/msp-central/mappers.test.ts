@@ -212,6 +212,26 @@ describe("MSP Central request mappers", () => {
     expect(request.subject).toBe("Printer offline");
   });
 
+  it("uses the short Helpdesk request number instead of the long MSP Central object id", () => {
+    const request = mapMspCentralRequest(
+      {
+        display_id: "22242",
+        id: "6768000001482447",
+        subject: "Allocated to you ANZ client onboarding",
+      },
+      {
+        now,
+        requestWebBaseUrl: "https://helpdesk.example/requests/{request}",
+      },
+    );
+
+    expect(request.id).toBe("6768000001482447");
+    expect(request.requestNumber).toBe("22242");
+    expect(request.helpdeskUrl).toBe(
+      "https://helpdesk.example/requests/6768000001482447",
+    );
+  });
+
   it("maps nested MSP customer details and cleans HTML descriptions", () => {
     const request = mapMspCentralRequest(
       {

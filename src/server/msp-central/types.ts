@@ -44,13 +44,17 @@ export type MspCentralRawRequest = {
   customer?: string | { name?: string | null } | null;
   description?: string | null;
   due_by_time?: MspCentralTimestamp | null;
+  display_id?: string | number | null;
+  display_number?: string | number | null;
   id?: string | number | null;
   is_billable?: boolean | null;
   is_onsite?: boolean | null;
   item?: string | { name?: string | null } | null;
   onsite?: boolean | null;
   priority?: string | { name?: string | null } | null;
+  number?: string | number | null;
   request_number?: string | null;
+  request_id?: string | number | null;
   requester?: {
     email?: string | null;
     email_id?: string | null;

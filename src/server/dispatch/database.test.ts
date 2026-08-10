@@ -62,9 +62,72 @@ describe("dispatch dashboard crew assignments", () => {
       'assignments.assignment_role as "assignmentRole"',
     );
   });
+
+  it("normalizes cached legacy MSP Central request links", async () => {
+    const sql = vi.fn(async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes("from public.staff_profiles sp")) {
+        return [staffRow("staff-matt", "tech-matt", "Matt", "mattd@egit.com.au")];
+      }
+      if (query.includes("with assignments as")) {
+        return [
+          assignmentRow("parent-link-1", "parent-link-1", "lead", {
+            payloadSummary: {
+              helpdeskUrl:
+                "https://mspcentral.manageengine.com.au/mainlayout#msp/helpdesk/app/memsp1783593801295/Requests/view/6768000001410416",
+              subject: "Printer offline",
+            },
+            sdpRequestId: "6768000001410416",
+          }),
+        ];
+      }
+      return [];
+    }) as unknown as (
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => Promise<unknown[]>;
+    const database = createPostgresDispatchDashboardDatabase({ sql: sql as never });
+
+    const result = await database.getDashboardData();
+
+    expect(result.requests[0]?.helpdeskUrl).toBe(
+      "https://sdpod.mspcentral.manageengine.com.au/app/memsp1783593801295/ui/requests/6768000001410416/details",
+    );
+    expect(result.appointments[0]?.helpdeskUrl).toBe(
+      "https://sdpod.mspcentral.manageengine.com.au/app/memsp1783593801295/ui/requests/6768000001410416/details",
+    );
+  });
 });
 
 function assignmentRow(
+  id: string,
+  dispatchLinkId: string,
+  assignmentRole: "crew" | "lead",
+  overrides: Partial<ReturnType<typeof baseAssignmentRow>> & {
+    payloadSummary?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    ...baseAssignmentRow(id, dispatchLinkId, assignmentRole),
+    ...overrides,
+    notes: overrides.notes ?? [
+      {
+        action: "live_schedule",
+        createdAt: "2026-08-04T00:00:00.000Z",
+        message: "Scheduled",
+        payloadSummary: {
+          bookingType: "Onsite",
+          customerName: "Example Co",
+          subject: "Printer offline",
+          ...(overrides.payloadSummary as Record<string, unknown> | undefined),
+        },
+        status: "success",
+      },
+    ],
+  };
+}
+
+function baseAssignmentRow(
   id: string,
   dispatchLinkId: string,
   assignmentRole: "crew" | "lead",

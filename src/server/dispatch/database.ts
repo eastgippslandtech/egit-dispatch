@@ -1,7 +1,10 @@
 import type postgres from "postgres";
 
 import { getSharedPostgresClient } from "@/server/database/client";
-import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
+import {
+  buildMspCentralRequestUrl,
+  normalizeMspCentralRequestUrl,
+} from "@/server/msp-central/url";
 
 import { buildDispatchHealthItems } from "./health";
 import { todayDateKey } from "./date-scope";
@@ -317,7 +320,10 @@ function mapRequest(
       pickString(summaries, ["customerName", "customer", "accountName", "account"]) ??
       "Unknown customer",
     dueAt,
-    helpdeskUrl: pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ?? undefined,
+    helpdeskUrl: normalizeMspCentralRequestUrl(
+      pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ?? undefined,
+      row.sdpRequestId,
+    ),
     notes:
       pickString(summaries, [
         "description",
@@ -429,8 +435,10 @@ function mapAppointment(
     date: formatMelbourneDate(start),
     end: formatMelbourneTime(end),
     helpdeskUrl:
-      pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ??
-      buildMspCentralRequestUrl(row.sdpRequestNumber),
+      normalizeMspCentralRequestUrl(
+        pickString(summaries, ["helpdeskUrl", "requestUrl", "url"]) ?? undefined,
+        row.sdpRequestId,
+      ) ?? buildMspCentralRequestUrl(row.sdpRequestId),
     outlookEventId: row.outlookEventId ?? undefined,
     readOnly: true,
     requestId: row.sdpRequestId,

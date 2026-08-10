@@ -72,6 +72,7 @@ export function mapMspCentralRequest(
     profiles,
   );
   const requestNumber = readString(raw.request_number) ?? readString(raw.id) ?? "REQ-UNKNOWN";
+  const requestLinkId = readMspCentralInternalRequestId(raw.id) ?? requestNumber;
   const dueAt = readDateTime(raw.due_by_time) ?? "";
   const scheduledStart = readDateTime(raw.scheduled_start_time);
   const scheduledEnd = readDateTime(raw.scheduled_end_time);
@@ -132,7 +133,7 @@ export function mapMspCentralRequest(
     customer,
     dueAt,
     helpdeskUrl: buildMspCentralRequestUrl(
-      requestNumber,
+      requestLinkId,
       options.requestWebBaseUrl,
     ),
     item: readPriorityStatusName(raw.item),
@@ -728,6 +729,11 @@ function readString(value: unknown) {
 
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+function readMspCentralInternalRequestId(value: unknown) {
+  const id = readString(value);
+  return id && /^\d{10,}$/.test(id) ? id : undefined;
 }
 
 export function htmlToPlainText(value?: string | null) {

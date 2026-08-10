@@ -365,6 +365,41 @@ describe("technician presence derivation", () => {
     });
   });
 
+  it("treats all-day Outlook availability blocks as Leave ahead of same-day meetings", () => {
+    expect(
+      derive({
+        appointments: [
+          appointment({
+            bookingType: undefined,
+            isAllDay: true,
+            outlookIssue: "all-day",
+            outlookShowAs: "busy",
+            requestId: undefined,
+            source: "outlook",
+            start: "09:00",
+            end: "17:00",
+            title: "Away",
+          }),
+          appointment({
+            bookingType: undefined,
+            id: "meeting-event",
+            outlookShowAs: "busy",
+            requestId: undefined,
+            source: "outlook",
+            start: "12:00",
+            end: "12:30",
+            title: "Operations meeting",
+          }),
+        ],
+        requests: [],
+      }),
+    ).toMatchObject({
+      context: "Leave",
+      source: "outlook",
+      status: "leave",
+    });
+  });
+
   it("reports lower-priority overlapping activities without leaking Personal details", () => {
     const result = derive({
       appointments: [

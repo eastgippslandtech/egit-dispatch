@@ -262,6 +262,25 @@ function appointmentCandidates({
   if (
     activeJob &&
     appointment.source === "outlook" &&
+    appointment.isAllDay &&
+    appointment.outlookIssue === "all-day" &&
+    !appointment.requestId &&
+    !bookingType &&
+    !isPersonalAppointment(appointment)
+  ) {
+    return [
+      appointmentCandidate({
+        appointment,
+        context: safeLeaveLabel(appointment.title),
+        source: "outlook",
+        status: "leave",
+      }),
+    ];
+  }
+
+  if (
+    activeJob &&
+    appointment.source === "outlook" &&
     !bookingType &&
     !appointment.isAllDay
   ) {

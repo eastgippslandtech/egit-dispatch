@@ -197,6 +197,10 @@ export type MspCentralCreateCustomerInput = {
   state?: string;
 };
 
+export type MspCentralCreateCustomerGroupInput = {
+  name: string;
+};
+
 export type MspCentralContactLookup = {
   email?: string;
   id: string;
@@ -206,6 +210,7 @@ export type MspCentralContactLookup = {
 
 export type MspCentralRequestFormOptions = {
   categories: string[];
+  customerGroups: string[];
   impacts: string[];
   priorities: Array<"Critical" | "High" | "Medium" | "Low">;
   requestTypes: string[];
@@ -348,6 +353,7 @@ export type MspCentralNamedOption = {
 
 export type MspCentralNamedOptionListResponse = {
   categories?: MspCentralNamedOption[];
+  customer_groups?: MspCentralNamedOption[];
   impacts?: MspCentralNamedOption[];
   list_info?: MspCentralListInfo | null;
   options?: MspCentralNamedOption[];
@@ -432,6 +438,9 @@ export type MspCentralClient = {
   createCustomer?(
     input: MspCentralCreateCustomerInput,
   ): Promise<MspCentralCustomerLookup>;
+  createCustomerGroup?(
+    input: MspCentralCreateCustomerGroupInput,
+  ): Promise<{ id?: string; name: string }>;
   listCustomers(query?: string): Promise<MspCentralCustomerLookup[]>;
   listRequestNotes?(
     requestId: string,

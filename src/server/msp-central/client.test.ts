@@ -2058,6 +2058,19 @@ describe("MSP Central live client", () => {
         };
       }
 
+      if (url.includes("/api/v3/customer_groups")) {
+        return {
+          ok: true,
+          json: async () => ({
+            customer_groups: [
+              { name: "Sale" },
+              { name: "Bairnsdale" },
+            ],
+            list_info: { has_more_rows: false },
+          }),
+        };
+      }
+
       return {
         ok: true,
         json: async () => ({ list_info: { has_more_rows: false } }),
@@ -2078,11 +2091,63 @@ describe("MSP Central live client", () => {
 
     await expect(client.listRequestFormOptions?.()).resolves.toMatchObject({
       categories: ["Backup", "Cloud Services", "Network", "Security"],
+      customerGroups: ["Bairnsdale", "Sale"],
     });
     const categoryCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url).includes("/api/v3/categories"),
     );
     expect(categoryCalls).toHaveLength(2);
+  });
+
+  it("creates an MSP Central customer group for request creation lookup", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customer_group: {
+            id: "customer-group-orbost",
+            name: "Orbost",
+          },
+          response_status: { status: "success" },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "lookup-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "lookup-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.createCustomerGroup?.({ name: "Orbost" }),
+    ).resolves.toEqual({
+      id: "customer-group-orbost",
+      name: "Orbost",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/v3/customer_groups"),
+      expect.objectContaining({
+        body: expect.any(URLSearchParams),
+        method: "POST",
+      }),
+    );
+    const body = fetchMock.mock.calls[1]?.[1]?.body as URLSearchParams;
+    expect(JSON.parse(String(body.get("input_data")))).toEqual({
+      customer_group: { name: "Orbost" },
+    });
   });
 
   it("searches customers beyond the first two MSP Central catalogue pages", async () => {

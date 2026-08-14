@@ -588,6 +588,14 @@ test("loads customer contacts and autofills requester email for a new request", 
 test("offers to create a customer when customer search has no matches", async () => {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const textUrl = String(url);
+    if (textUrl.includes("type=request-options")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ options: { customerGroups: ["Bairnsdale", "Sale"] } }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        ),
+      );
+    }
     if (textUrl.includes("type=customers")) {
       return Promise.resolve(
         new Response(JSON.stringify({ customers: [] }), {
@@ -672,6 +680,108 @@ test("offers to create a customer when customer search has no matches", async ()
   expect(screen.getByLabelText("Site")).toHaveValue(
     "10 Main Street, Bairnsdale, VIC, 3875",
   );
+});
+
+test("creates a customer group from the create customer prompt", async () => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    const textUrl = String(url);
+    if (textUrl.includes("type=request-options")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ options: { customerGroups: [] } }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    }
+    if (textUrl.includes("type=customers")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ customers: [] }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    }
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      if (body.type === "customer-group") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              customerGroup: { id: "group-orbost", name: "Orbost" },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 201 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            customer: {
+              address: "12 Nicholson Street, Orbost, VIC, 3888",
+              customerGroup: "Orbost",
+              id: "customer-new-2",
+              name: "Orbost Wildlife",
+            },
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 201 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<CreateRequestModal onCancel={vi.fn()} onCreated={vi.fn()} />);
+
+  fireEvent.change(screen.getByLabelText("Customer"), {
+    target: { value: "Orbost Wildlife" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: 'Create customer "Orbost Wildlife"' }),
+  );
+
+  const customerDialog = screen.getByRole("dialog", { name: "Create customer" });
+  expect(within(customerDialog).getByLabelText("Customer group")).toHaveValue("");
+  fireEvent.click(within(customerDialog).getByRole("button", {
+    name: "Create group",
+  }));
+  const groupDialog = screen.getByRole("dialog", {
+    name: "Create customer group",
+  });
+  fireEvent.change(within(groupDialog).getByLabelText("Group name"), {
+    target: { value: "Orbost" },
+  });
+  await act(async () => {
+    fireEvent.click(
+      within(groupDialog).getByRole("button", { name: "Create group" }),
+    );
+    await Promise.resolve();
+  });
+
+  expect(within(customerDialog).getByLabelText("Customer group")).toHaveValue(
+    "Orbost",
+  );
+  await act(async () => {
+    fireEvent.click(
+      within(customerDialog).getByRole("button", { name: "Create customer" }),
+    );
+    await Promise.resolve();
+  });
+
+  const customerCreateCall = fetchMock.mock.calls.find(([url, init]) => {
+    if (url !== "/api/internal/msp-central/lookups" || init?.method !== "POST") {
+      return false;
+    }
+    return JSON.parse(String(init.body)).type === "customer";
+  });
+  expect(JSON.parse(String(customerCreateCall?.[1]?.body))).toMatchObject({
+    customerGroup: "Orbost",
+    name: "Orbost Wildlife",
+    type: "customer",
+  });
 });
 
 test("submits Helpdesk request classification fields from the create request form", async () => {

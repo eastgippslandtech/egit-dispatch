@@ -85,6 +85,21 @@ export async function POST(request: Request) {
         }
       | null;
 
+    if (body?.type === "customer-group") {
+      const name = body.name?.trim();
+      if (!name) {
+        return json({ error: "Customer group name is required." }, 400);
+      }
+
+      const client = createMspCentralClient(readDispatchConfig());
+      if (!client.createCustomerGroup) {
+        return json({ error: "Customer group creation is not available." }, 501);
+      }
+
+      const customerGroup = await client.createCustomerGroup({ name });
+      return json({ customerGroup }, 201);
+    }
+
     if (body?.type !== "customer") {
       return json({ error: "Lookup type is required." }, 400);
     }

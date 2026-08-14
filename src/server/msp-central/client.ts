@@ -27,6 +27,7 @@ import {
 import { getConfiguredMspOAuthTokenStore } from "./token-store";
 import type {
   MspCentralClient,
+  MspCentralCreateCustomerGroupInput,
   MspCentralCreateCustomerInput,
   MspCentralContactListResponse,
   MspCentralRequestDetailResponse,
@@ -60,6 +61,7 @@ const MSP_CUSTOMER_DETAIL_TIMEOUT_MS = 5_000;
 
 type MspCentralActionResponse = {
   account?: MspCentralRawCustomer;
+  customer_group?: MspCentralNamedOption;
   customer?: MspCentralRawCustomer;
   request?: {
     id?: string | number | null;
@@ -160,6 +162,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
     },
     async listRequestFormOptions() {
       return defaultRequestFormOptions();
+    },
+    async createCustomerGroup(input: MspCentralCreateCustomerGroupInput) {
+      return { name: input.name };
     },
     async listRequestWorklogs() {
       return [];
@@ -671,6 +676,39 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       assertConfigured();
       return fetchRequestFormOptions();
     },
+    async createCustomerGroup(input: MspCentralCreateCustomerGroupInput) {
+      assertConfigured();
+      const name = cleanText(input.name);
+      if (!name) {
+        throw new MspCentralConfigurationError(
+          "Customer group name is required.",
+        );
+      }
+
+      const payload = await requestJson<MspCentralActionResponse>(
+        `${apiRoot}/customer_groups`,
+        {
+          body: new URLSearchParams({
+            input_data: JSON.stringify({ customer_group: { name } }),
+          }),
+          method: "POST",
+        },
+      );
+
+      if (!mspCentralActionSucceeded(payload) && !payload.customer_group) {
+        throw new MspCentralConfigurationError(
+          "MSP Central customer group creation failed.",
+        );
+      }
+
+      requestFormOptionsCache.delete(`${apiRoot}:request-form-options`);
+      return {
+        ...(cleanId(payload.customer_group?.id)
+          ? { id: cleanId(payload.customer_group?.id) }
+          : {}),
+        name: cleanText(payload.customer_group?.name) ?? name,
+      };
+    },
     async listRequests(params) {
       assertConfigured();
       const snapshotStore = params?.status ? null : requestSnapshotStore;
@@ -1032,6 +1070,7 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       categories,
       subcategories,
       technicians,
+      customerGroups,
     ] = await Promise.all([
       fetchNamedOptions("request_types", "request_types"),
       fetchNamedOptions("statuses", "statuses"),
@@ -1041,9 +1080,11 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
       fetchNamedOptions("categories", "categories"),
       fetchNamedOptions("subcategories", "subcategories"),
       fetchNamedOptions("technicians", "technicians"),
+      fetchCustomerGroups(),
     ]);
     const options = {
       categories: sortStrings(categories.length ? categories : fallback.categories),
+      customerGroups: sortStrings(customerGroups),
       impacts: impacts.length ? impacts : fallback.impacts,
       priorities: normalizePriorities(priorities, fallback.priorities),
       requestTypes: requestTypes.length ? requestTypes : fallback.requestTypes,
@@ -1120,6 +1161,19 @@ function createMspCentralLiveClient(config: DispatchConfig): MspCentralClient {
     } catch {
       return [];
     }
+  }
+
+  async function fetchCustomerGroups() {
+    const groupOptions = await fetchNamedOptions(
+      "customer_groups",
+      "customer_groups",
+    );
+    if (groupOptions.length > 0) {
+      return groupOptions;
+    }
+
+    const customers = await fetchCustomers().catch(() => []);
+    return uniqueStrings(customers.map(customerGroupName));
   }
 
   async function fetchCustomerPages(path: "accounts" | "customers") {
@@ -1676,6 +1730,7 @@ function defaultRequestFormOptions(): MspCentralRequestFormOptions {
       "Software",
       "User Administration",
     ],
+    customerGroups: [],
     impacts: ["Affects Business", "Affects Department", "Affects Group", "Affects User"],
     priorities: ["Low", "Medium", "High", "Critical"],
     requestTypes: [

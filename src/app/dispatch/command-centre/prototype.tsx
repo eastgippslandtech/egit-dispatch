@@ -3259,6 +3259,7 @@ type RequestLookupContact = {
 
 type RequestFormOptions = {
   categories: string[];
+  customerGroups: string[];
   impacts: string[];
   priorities: DispatchRequest["priority"][];
   requestTypes: string[];
@@ -3290,6 +3291,7 @@ const fallbackRequestFormOptions: RequestFormOptions = {
     "Software",
     "User Administration",
   ],
+  customerGroups: [],
   impacts: ["Affects Business", "Affects Department", "Affects Group", "Affects User"],
   priorities: ["Low", "Medium", "High", "Critical"],
   requestTypes: [
@@ -3324,6 +3326,21 @@ async function createMspCentralLookupCustomer(input: CreateCustomerInput) {
     throw new Error(body?.error ?? "Customer could not be created.");
   }
   return body.customer;
+}
+
+async function createMspCentralLookupCustomerGroup(name: string) {
+  const response = await fetch("/api/internal/msp-central/lookups", {
+    body: JSON.stringify({ name, type: "customer-group" }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { customerGroup?: { id?: string; name: string }; error?: string }
+    | null;
+  if (!response.ok || !body?.customerGroup?.name) {
+    throw new Error(body?.error ?? "Customer group could not be created.");
+  }
+  return body.customerGroup;
 }
 
 export function pendingLiveAppointmentId(
@@ -4086,6 +4103,9 @@ export function CreateRequestModal({
         if (!response.ok || !body?.options) return;
         setFormOptions({
           categories: body.options.categories ?? fallbackRequestFormOptions.categories,
+          customerGroups:
+            body.options.customerGroups ??
+            fallbackRequestFormOptions.customerGroups,
           impacts: body.options.impacts ?? fallbackRequestFormOptions.impacts,
           priorities:
             body.options.priorities ?? fallbackRequestFormOptions.priorities,
@@ -4553,6 +4573,7 @@ export function CreateRequestModal({
       </section>
       {createCustomerOpen ? (
         <CreateCustomerDialog
+          customerGroups={formOptions.customerGroups}
           initialName={trimmedCustomerQuery}
           onCancel={() => setCreateCustomerOpen(false)}
           onCreated={(customer) => {
@@ -4575,10 +4596,12 @@ export function CreateRequestModal({
 }
 
 function CreateCustomerDialog({
+  customerGroups,
   initialName,
   onCancel,
   onCreated,
 }: {
+  customerGroups: string[];
   initialName: string;
   onCancel: () => void;
   onCreated: (customer: RequestLookupCustomer) => void;
@@ -4592,6 +4615,8 @@ function CreateCustomerDialog({
   const [state, setState] = useState("VIC");
   const [postalCode, setPostalCode] = useState("");
   const [country, setCountry] = useState("Australia");
+  const [groupOptions, setGroupOptions] = useState(customerGroups);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const canSave = Boolean(name.trim() && !saving);
@@ -4605,7 +4630,7 @@ function CreateCustomerDialog({
         address: address.trim() || undefined,
         city: city.trim() || undefined,
         country: country.trim() || undefined,
-        customerGroup: customerGroup.trim() || undefined,
+        customerGroup: customerGroup || undefined,
         email: email.trim() || undefined,
         name: name.trim(),
         phone: phone.trim() || undefined,
@@ -4658,21 +4683,36 @@ function CreateCustomerDialog({
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <label className="text-sm font-semibold">
-            Customer group
-            <input
-              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
-              list="create-customer-group-options"
-              placeholder="Bairnsdale, Sale..."
-              value={customerGroup}
-              onChange={(event) => setCustomerGroup(event.target.value)}
-            />
-            <datalist id="create-customer-group-options">
-              <option value="Bairnsdale" />
-              <option value="Bairnsdale 2" />
-              <option value="Sale" />
-            </datalist>
-          </label>
+          <div className="text-sm font-semibold">
+            <label htmlFor="create-customer-group">Customer group</label>
+            <div className="mt-2 flex gap-2">
+              <select
+                className="min-w-0 flex-1 rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+                id="create-customer-group"
+                value={customerGroup}
+                onChange={(event) => setCustomerGroup(event.target.value)}
+              >
+                <option value="">
+                  {groupOptions.length > 0
+                    ? "Select customer group"
+                    : "No groups available"}
+                </option>
+                {groupOptions.map((group) => (
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="rounded-md border border-cc-orange/30 bg-cc-orange/10 px-3 py-2 text-xs font-semibold text-orange-100"
+                disabled={saving}
+                type="button"
+                onClick={() => setCreateGroupOpen(true)}
+              >
+                Create group
+              </button>
+            </div>
+          </div>
           <label className="text-sm font-semibold">
             Email
             <input
@@ -4731,6 +4771,20 @@ function CreateCustomerDialog({
             />
           </label>
         </div>
+        {createGroupOpen ? (
+          <CreateCustomerGroupDialog
+            onCancel={() => setCreateGroupOpen(false)}
+            onCreated={(group) => {
+              setGroupOptions((current) =>
+                [...new Set([...current, group.name])].sort((left, right) =>
+                  left.localeCompare(right, undefined, { sensitivity: "base" }),
+                ),
+              );
+              setCustomerGroup(group.name);
+              setCreateGroupOpen(false);
+            }}
+          />
+        ) : null}
         {error ? (
           <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
             {error}
@@ -4753,6 +4807,97 @@ function CreateCustomerDialog({
             onClick={submit}
           >
             {saving ? "Creating customer..." : "Create customer"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CreateCustomerGroupDialog({
+  onCancel,
+  onCreated,
+}: {
+  onCancel: () => void;
+  onCreated: (group: { id?: string; name: string }) => void;
+}) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const canSave = Boolean(name.trim() && !saving);
+
+  async function submit() {
+    if (!canSave) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      onCreated(await createMspCentralLookupCustomerGroup(name.trim()));
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Customer group could not be created.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4">
+      <section
+        aria-label="Create customer group"
+        aria-modal="true"
+        className="w-full max-w-md rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">
+              MSP Central
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">Create customer group</h2>
+          </div>
+          <button
+            aria-label="Close create customer group"
+            className="rounded-md border border-white/10 bg-white/5 p-2"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <label className="mt-5 block text-sm font-semibold">
+          Group name
+          <input
+            className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            aria-busy={saving}
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+            disabled={!canSave}
+            type="button"
+            onClick={submit}
+          >
+            {saving ? "Creating group..." : "Create group"}
           </button>
         </div>
       </section>

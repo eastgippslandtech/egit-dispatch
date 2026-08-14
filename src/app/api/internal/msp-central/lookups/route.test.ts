@@ -20,6 +20,7 @@ const listCustomers = vi.fn();
 const listContacts = vi.fn();
 const listRequestFormOptions = vi.fn();
 const createCustomer = vi.fn();
+const createCustomerGroup = vi.fn();
 
 describe("MSP Central lookup route", () => {
   beforeEach(() => {
@@ -32,6 +33,7 @@ describe("MSP Central lookup route", () => {
     });
     createClientMock.mockReturnValue({
       createCustomer,
+      createCustomerGroup,
       listContacts,
       listCustomers,
       listRequestFormOptions,
@@ -116,6 +118,7 @@ describe("MSP Central lookup route", () => {
   it("returns request form options", async () => {
     listRequestFormOptions.mockResolvedValueOnce({
       categories: ["Hardware"],
+      customerGroups: ["Bairnsdale", "Sale"],
       impacts: ["Affects User"],
       priorities: ["Low", "Medium", "High", "Critical"],
       requestTypes: ["Incident"],
@@ -133,6 +136,7 @@ describe("MSP Central lookup route", () => {
     await expect(response.json()).resolves.toEqual({
       options: {
         categories: ["Hardware"],
+        customerGroups: ["Bairnsdale", "Sale"],
         impacts: ["Affects User"],
         priorities: ["Low", "Medium", "High", "Critical"],
         requestTypes: ["Incident"],
@@ -191,5 +195,32 @@ describe("MSP Central lookup route", () => {
       postalCode: "3875",
       state: "VIC",
     });
+  });
+
+  it("creates a customer group for request creation lookup", async () => {
+    createCustomerGroup.mockResolvedValueOnce({
+      id: "customer-group-1",
+      name: "Orbost",
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/msp-central/lookups", {
+        body: JSON.stringify({
+          name: "Orbost",
+          type: "customer-group",
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      customerGroup: {
+        id: "customer-group-1",
+        name: "Orbost",
+      },
+    });
+    expect(createCustomerGroup).toHaveBeenCalledWith({ name: "Orbost" });
   });
 });

@@ -49,3 +49,11 @@ export type GraphCalendarRange = {
   endDateTime: string;
   startDateTime: string;
 };
+
+export type MicrosoftGraphSendMailInput = {
+  fromUserPrincipalName: string;
+  html?: string;
+  plainText: string;
+  subject: string;
+  to: string;
+};

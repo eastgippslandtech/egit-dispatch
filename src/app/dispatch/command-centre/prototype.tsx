@@ -161,6 +161,18 @@ type IntegrationOperationReceipt = {
   status?: IntegrationReceiptStatus;
 };
 
+type CreateRequestReceipt = IntegrationOperationReceipt & {
+  createdRequestId?: string;
+  createdRequestNumber?: string;
+  pendingRequestId?: string;
+};
+
+type CreateRequestCompletion = {
+  request?: DispatchRequest;
+  schedule: boolean;
+  technicianName?: string;
+};
+
 export function integrationReceiptDisposition(
   status?: IntegrationReceiptStatus,
 ): {
@@ -240,12 +252,33 @@ export function bookingCardPriorityClass(
     : "border-slate-400/30 bg-slate-500/18 text-slate-100 shadow-slate-950/20";
 }
 
+function bookingCardClosedClass() {
+  return "border-slate-400/45 bg-slate-800/70 text-slate-200 shadow-black/18 grayscale";
+}
+
+function requestIsClosed(request?: DispatchRequest) {
+  return request?.status === "Resolved";
+}
+
 type QueueFilterKey = "priority" | "sla" | "status" | "technician";
 type QueueFilters = Partial<Record<QueueFilterKey, string>>;
 type QueueView = "assigned" | "unscheduled";
 type SearchState = "dimmed" | "match" | "normal";
 type SeenTicketUpdateIds = Set<string>;
+type TicketWorkspaceTab = "comms" | "details" | "tracks" | "worklog";
 type WorkLogTarget = { appointmentId?: string; requestId: string };
+type TicketWorkspaceTarget = WorkLogTarget & { initialTab?: TicketWorkspaceTab };
+type WorkLogSaveInput = {
+  billable: boolean;
+  booking?: WorklogForwardBooking;
+  disposition?: WorklogDisposition;
+  idempotencyKey: string;
+  minutes: string;
+  notes: string;
+  solution?: string;
+  transfer?: WorklogTransfer;
+  workType: WorklogType;
+};
 
 export function resolveWorkLogAppointment(
   appointments: Appointment[],
@@ -442,6 +475,44 @@ function sameScheduledBooking(candidate: Appointment, anchor: Appointment) {
   );
 }
 
+function appointmentBelongsToRequest(
+  appointment: Appointment,
+  request: DispatchRequest,
+) {
+  const requestKeys = new Set(
+    [request.id, request.requestNumber]
+      .map(scheduleLinkKey)
+      .filter((key): key is string => Boolean(key)),
+  );
+
+  return [
+    appointment.requestId,
+    appointment.outlookLinkedRequestNumber,
+  ].some((value) => {
+    const key = scheduleLinkKey(value);
+    return Boolean(key && requestKeys.has(key));
+  });
+}
+
+function requestForAppointment(
+  requests: DispatchRequest[],
+  appointment: Appointment | undefined,
+) {
+  if (!appointment) {
+    return undefined;
+  }
+
+  return requests.find((request) =>
+    appointmentBelongsToRequest(appointment, request),
+  );
+}
+
+function scheduleLinkKey(value?: string) {
+  const clean = value?.trim();
+  if (!clean) return undefined;
+  return clean.match(/\d{5,}/)?.[0] ?? clean.toUpperCase();
+}
+
 export function CommandCentrePrototype({
   authDisabled = false,
   data,
@@ -481,9 +552,8 @@ export function CommandCentrePrototype({
     PendingSchedule | undefined
   >();
   const [mergeRequestId, setMergeRequestId] = useState<string | undefined>();
-  const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
   const [ticketWorkspaceTarget, setTicketWorkspaceTarget] =
-    useState<WorkLogTarget>();
+    useState<TicketWorkspaceTarget>();
   const [createRequestOpen, setCreateRequestOpen] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
   const integrationTracker = useTrackedIntegrationOperations({
@@ -501,17 +571,6 @@ export function CommandCentrePrototype({
       requestId: target.requestId,
       state: receipt.status,
     });
-  }
-
-  function openWorkLog(requestId: string, appointmentId?: string) {
-    const requestBookings = dashboard.appointments.filter(
-      (appointment) => appointment.requestId === requestId,
-    );
-    if (!appointmentId && requestBookings.length > 0) {
-      setTicketWorkspaceTarget({ requestId });
-      return;
-    }
-    setWorkLogTarget({ appointmentId, requestId });
   }
 
   useEffect(() => {
@@ -650,21 +709,34 @@ export function CommandCentrePrototype({
   );
 
   const selectedRequest = useMemo(() => {
-    const requestId =
-      selection.kind === "request"
-        ? selection.requestId
-        : selectedAppointment?.requestId ?? selection.requestId;
+    if (selection.kind === "request") {
+      return dashboard.requests.find(
+        (request) => request.id === selection.requestId,
+      );
+    }
 
-    return dashboard.requests.find((request) => request.id === requestId);
+    return requestForAppointment(dashboard.requests, selectedAppointment);
   }, [dashboard.requests, selectedAppointment, selection]);
 
   const fallbackRequest = selectedRequest ?? dashboard.requests[0];
 
   const unscheduledRequests = dashboard.requests.filter(
-    (request) => !request.scheduledStart && request.status !== "Resolved",
+    (request) =>
+      !request.scheduledStart &&
+      !dashboard.appointments.some((appointment) =>
+        appointmentBelongsToRequest(appointment, request),
+      ) &&
+      request.status !== "Resolved" &&
+      request.status !== "Cancelled",
   );
   const assignedRequests = dashboard.requests.filter(
-    (request) => Boolean(request.technicianId) && request.status !== "Resolved",
+    (request) =>
+      (Boolean(request.technicianId) ||
+        dashboard.appointments.some((appointment) =>
+          appointmentBelongsToRequest(appointment, request),
+        )) &&
+      request.status !== "Resolved" &&
+      request.status !== "Cancelled",
   );
   const visibleQueueRequests =
     queueView === "assigned" ? assignedRequests : unscheduledRequests;
@@ -859,7 +931,9 @@ export function CommandCentrePrototype({
     setDropPreview(undefined);
   }
 
-  async function saveWorkLog({
+  async function saveWorkLogForTarget(
+    target: WorkLogTarget | undefined,
+    {
     billable,
     booking,
     disposition,
@@ -869,25 +943,16 @@ export function CommandCentrePrototype({
     solution,
     transfer,
     workType,
-  }: {
-    billable: boolean;
-    booking?: WorklogForwardBooking;
-    disposition?: WorklogDisposition;
-    idempotencyKey: string;
-    minutes: string;
-    notes: string;
-    solution?: string;
-    transfer?: WorklogTransfer;
-    workType: WorklogType;
-  }) {
-    const requestId = workLogTarget?.requestId;
+  }: WorkLogSaveInput,
+  ) {
+    const requestId = target?.requestId;
     if (!requestId) return;
     const selectedWorklogRequest = dashboard.requests.find(
       (candidate) => candidate.id === requestId,
     );
     const worklogAppointment = resolveWorkLogAppointment(
       dashboard.appointments,
-      workLogTarget?.appointmentId,
+      target?.appointmentId,
     );
     if (!selectedWorklogRequest) return;
 
@@ -1038,11 +1103,14 @@ export function CommandCentrePrototype({
         };
       });
 
+      const updatedRequest = requests.find((request) => request.id === requestId);
       let appointments = current.appointments;
       if (disposition) {
-        appointments = appointments.filter(
-          (appointment) => appointment.requestId !== requestId,
-        );
+        appointments = updatedRequest
+          ? appointments.filter(
+              (appointment) => !appointmentBelongsToRequest(appointment, updatedRequest),
+            )
+          : appointments.filter((appointment) => appointment.requestId !== requestId);
       }
       if (disposition === "book_forward" && booking) {
         const technician = current.technicians.find(
@@ -1089,7 +1157,6 @@ export function CommandCentrePrototype({
     });
 
     markTicketUpdateSeen(requestId);
-    setWorkLogTarget(undefined);
     setToast(
       liveWorklog
         ? worklogReceiptStatus === "review_required"
@@ -1208,42 +1275,7 @@ export function CommandCentrePrototype({
         return undefined;
       }
 
-      const bookingType = bookingTypeForRequest(request);
-      const durationMinutes = 60;
-      const slot = buildScheduleSlot(
-        start,
-        bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
-      );
-      const travel = buildTravel(request, technicianId, bookingType);
-      const travelAppointment = buildTravelCandidate({
-        date,
-        end: slot.end,
-        request,
-        start: slot.start,
-        technicianId,
-        travel,
-      });
-
-      return {
-        bookingType,
-        crewTechnicianIds: [],
-        durationMinutes,
-        idempotencyKey: createClientCommandId("schedule"),
-        kind: "request",
-        date,
-        requestId: request.id,
-        start: slot.start,
-        end: slot.end,
-        technicianId,
-        travel,
-        warnings: buildWarnings({
-          date,
-          end: slot.end,
-          start: slot.start,
-          technicianId,
-          travelAppointment,
-        }),
-      } satisfies PendingSchedule;
+      return createPendingScheduleForRequest(request, technicianId, start, date);
     }
 
     const appointment = dashboard.appointments.find(
@@ -1254,9 +1286,7 @@ export function CommandCentrePrototype({
       return undefined;
     }
 
-    const request = dashboard.requests.find(
-      (candidate) => candidate.id === appointment.requestId,
-    );
+    const request = requestForAppointment(dashboard.requests, appointment);
     const bookingType =
       appointment.bookingType ??
       (request ? bookingTypeForRequest(request) : "Remote");
@@ -1295,6 +1325,7 @@ export function CommandCentrePrototype({
             .filter(
               (candidate) =>
                 sameScheduledBooking(candidate, appointment) &&
+                candidate.id !== appointment.id &&
                 candidate.technicianId !== technicianId,
             )
             .map((candidate) => candidate.technicianId)
@@ -1313,6 +1344,50 @@ export function CommandCentrePrototype({
       travel,
       warnings: buildWarnings({
         appointmentId: appointment.id,
+        date,
+        end: slot.end,
+        start: slot.start,
+        technicianId,
+        travelAppointment,
+      }),
+    } satisfies PendingSchedule;
+  }
+
+  function createPendingScheduleForRequest(
+    request: DispatchRequest,
+    technicianId: string,
+    start: string,
+    date = selectedDateKey,
+  ) {
+    const bookingType = bookingTypeForRequest(request);
+    const durationMinutes = 60;
+    const slot = buildScheduleSlot(
+      start,
+      bookingTiming(durationMinutes, bookingType).totalDurationMinutes,
+    );
+    const travel = buildTravel(request, technicianId, bookingType);
+    const travelAppointment = buildTravelCandidate({
+      date,
+      end: slot.end,
+      request,
+      start: slot.start,
+      technicianId,
+      travel,
+    });
+
+    return {
+      bookingType,
+      crewTechnicianIds: [],
+      durationMinutes,
+      idempotencyKey: createClientCommandId("schedule"),
+      kind: "request",
+      date,
+      requestId: request.id,
+      start: slot.start,
+      end: slot.end,
+      technicianId,
+      travel,
+      warnings: buildWarnings({
         date,
         end: slot.end,
         start: slot.start,
@@ -1381,12 +1456,11 @@ export function CommandCentrePrototype({
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
-          : dashboard.requests.find(
-              (candidate) =>
-                candidate.id ===
-                dashboard.appointments.find(
-                  (appointment) => appointment.id === current.appointmentId,
-                )?.requestId,
+          : requestForAppointment(
+              dashboard.requests,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === current.appointmentId,
+              ),
             );
       const travelAppointment = buildTravelCandidate({
         appointmentId:
@@ -1432,12 +1506,11 @@ export function CommandCentrePrototype({
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
-          : dashboard.requests.find(
-              (candidate) =>
-                candidate.id ===
-                dashboard.appointments.find(
-                  (appointment) => appointment.id === current.appointmentId,
-                )?.requestId,
+          : requestForAppointment(
+              dashboard.requests,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === current.appointmentId,
+              ),
             );
       const travelAppointment = buildTravelCandidate({
         appointmentId:
@@ -1478,12 +1551,11 @@ export function CommandCentrePrototype({
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
-          : dashboard.requests.find(
-              (candidate) =>
-                candidate.id ===
-                dashboard.appointments.find(
-                  (appointment) => appointment.id === current.appointmentId,
-                )?.requestId,
+          : requestForAppointment(
+              dashboard.requests,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === current.appointmentId,
+              ),
             );
       const travelAppointment = buildTravelCandidate({
         appointmentId:
@@ -1522,12 +1594,11 @@ export function CommandCentrePrototype({
       const request =
         current.kind === "request"
           ? dashboard.requests.find((candidate) => candidate.id === current.requestId)
-          : dashboard.requests.find(
-              (candidate) =>
-                candidate.id ===
-                dashboard.appointments.find(
-                  (appointment) => appointment.id === current.appointmentId,
-                )?.requestId,
+          : requestForAppointment(
+              dashboard.requests,
+              dashboard.appointments.find(
+                (appointment) => appointment.id === current.appointmentId,
+              ),
             );
       const travel = buildTravel(request, technicianId, current.bookingType);
       const travelAppointment = buildTravelCandidate({
@@ -1553,15 +1624,8 @@ export function CommandCentrePrototype({
 
       return {
         ...current,
-        crewTechnicianIds: Array.from(
-          new Set([
-            ...(current.crewTechnicianIds ?? []).filter(
-              (candidate) => candidate !== technicianId,
-            ),
-            ...(current.technicianId !== technicianId
-              ? [current.technicianId]
-              : []),
-          ]),
+        crewTechnicianIds: (current.crewTechnicianIds ?? []).filter(
+          (candidate) => candidate !== technicianId,
         ),
         technicianId,
         travel,
@@ -1677,9 +1741,8 @@ export function CommandCentrePrototype({
       }
 
       const liveSchedule = canUseLiveSchedule(dashboard, request);
-      let liveEvent: LiveScheduleResult | undefined;
       const existingRequestAppointments = dashboard.appointments.filter(
-        (appointment) => appointment.requestId === request.id,
+        (appointment) => appointmentBelongsToRequest(appointment, request),
       );
       const previousAssignments = existingRequestAppointments
         .filter((appointment) => appointment.outlookEventId)
@@ -1722,51 +1785,8 @@ export function CommandCentrePrototype({
         }),
       );
 
-      try {
-        if (liveSchedule) {
-          liveEvent = await publishLiveSchedule({
-            appointmentId,
-            bookingType,
-            crew,
-            customer: request.customer,
-            date: pendingSchedule.date,
-            end: pendingSchedule.end,
-            eventId: existingRequestAppointments.find(
-              (appointment) =>
-                appointment.technicianId === pendingSchedule.technicianId,
-            )?.outlookEventId,
-            idempotencyKey,
-            location: request.siteAddress ?? request.site,
-            priority: request.priority,
-            previousAssignments,
-            requestId: request.id,
-            requestNumber: request.requestNumber,
-            scheduleAction:
-              existingRequestAppointments.length > 0
-                ? "rescheduled"
-                : "scheduled",
-            start: pendingSchedule.start,
-            subject: request.subject,
-            technicianId: pendingSchedule.technicianId,
-            technicianName: technicianLabel(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            technicianEmail: technicianMspCentralIdentity(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            technicianMspCentralId: technicianMspCentralId(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            travel: pendingSchedule.travel,
-            userPrincipalName: technicianOutlookIdentity(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-          });
-        } else {
+      if (!liveSchedule) {
+        try {
           await Promise.all(
             [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
               (technicianId, index) =>
@@ -1787,36 +1807,17 @@ export function CommandCentrePrototype({
                 }),
             ),
           );
+        } catch (error) {
+          setToast(testSyncErrorMessage(error));
+          return;
         }
-      } catch (error) {
-        setToast(
-          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
-        );
-        return;
-      }
-
-      if (liveSchedule && liveEvent) {
-        trackIntegrationReceipt(liveEvent, {
-          appointmentId,
-          requestId: request.id,
-        });
       }
 
       if (liveSchedule) {
         pendingWritebackRequestIds.current.add(request.id);
-        if (
-          integrationReceiptDisposition(liveEvent?.status).phase ===
-          "review_required"
-        ) {
-          setToast(
-            `${request.requestNumber} was saved locally, but provider sync needs review.`,
-          );
-        }
       }
 
-      const finalAppointmentId = liveEvent?.id
-        ? `outlook-${pendingSchedule.technicianId}-${liveEvent.id}`
-        : appointmentId;
+      const finalAppointmentId = appointmentId;
       let appointments = scheduleRequest({
         appointmentId: finalAppointmentId,
         appointments: dashboard.appointments.filter(
@@ -1850,8 +1851,6 @@ export function CommandCentrePrototype({
           appointment.id === finalAppointmentId
             ? {
                 ...appointment,
-                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
-                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
                 readOnly: false,
                 status: liveSchedule ? "confirmed" : appointment.status,
               }
@@ -1891,9 +1890,74 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? scheduleReceiptMessage(request.requestNumber, liveEvent?.status)
+          ? `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`
           : `${request.requestNumber} scheduled in mock mode.`,
       );
+      if (liveSchedule) {
+        void publishLiveSchedule({
+          appointmentId,
+          bookingType,
+          crew,
+          customer: request.customer,
+          date: pendingSchedule.date,
+          description: request.notes,
+          end: pendingSchedule.end,
+          eventId: existingRequestAppointments.find(
+            (appointment) =>
+              appointment.technicianId === pendingSchedule.technicianId,
+          )?.outlookEventId,
+          helpdeskUrl: request.helpdeskUrl,
+          idempotencyKey,
+          latestUpdate: latestRequestUpdateSummary(request),
+          location: request.siteAddress ?? request.site,
+          priority: request.priority,
+          previousAssignments,
+          requestId: request.id,
+          requestNumber: request.requestNumber,
+          scheduleAction:
+            existingRequestAppointments.length > 0
+              ? "rescheduled"
+              : "scheduled",
+          start: pendingSchedule.start,
+          subject: request.subject,
+          technicianId: pendingSchedule.technicianId,
+          technicianName: technicianLabel(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          technicianMspCentralId: technicianMspCentralId(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          travel: pendingSchedule.travel,
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+        }).then(
+          (receipt) => {
+            trackIntegrationReceipt(receipt, {
+              appointmentId,
+              requestId: request.id,
+            });
+            if (
+              integrationReceiptDisposition(receipt.status).phase ===
+              "review_required"
+            ) {
+              setToast(
+                `${request.requestNumber} was saved locally, but provider sync needs review.`,
+              );
+            }
+          },
+          (error) => {
+            setToast(liveScheduleSavedButSyncUnconfirmedMessage(error));
+          },
+        );
+      }
     } else {
       const currentAppointment = dashboard.appointments.find(
         (appointment) => appointment.id === pendingSchedule.appointmentId,
@@ -1907,7 +1971,6 @@ export function CommandCentrePrototype({
 
       const liveSchedule =
         Boolean(request) && canUseLiveSchedule(dashboard, request);
-      let liveEvent: LiveScheduleResult | undefined;
       const currentTeamAppointments = request
         ? dashboard.appointments.filter(
             (appointment) =>
@@ -1952,47 +2015,11 @@ export function CommandCentrePrototype({
         (appointment) =>
           appointment.technicianId === pendingSchedule.technicianId,
       );
+      const idempotencyKey =
+        pendingSchedule.idempotencyKey ?? createClientCommandId("schedule");
 
-      try {
-        if (liveSchedule && request) {
-          liveEvent = await publishLiveSchedule({
-            appointmentId: pendingSchedule.scheduleGroupId,
-            bookingType,
-            crew,
-            customer: request.customer,
-            date: pendingSchedule.date,
-            end: pendingSchedule.end,
-            idempotencyKey:
-              pendingSchedule.idempotencyKey ?? createClientCommandId("schedule"),
-            eventId: leadAppointment?.outlookEventId,
-            location: request.siteAddress ?? request.site,
-            priority: request.priority,
-            previousAssignments,
-            requestId: request.id,
-            requestNumber: request.requestNumber,
-            start: pendingSchedule.start,
-            subject: request.subject,
-            scheduleAction: "rescheduled",
-            technicianId: pendingSchedule.technicianId,
-            technicianName: technicianLabel(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            technicianEmail: technicianMspCentralIdentity(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            technicianMspCentralId: technicianMspCentralId(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-            travel: pendingSchedule.travel,
-            userPrincipalName: technicianOutlookIdentity(
-              dashboard.technicians,
-              pendingSchedule.technicianId,
-            ),
-          });
-        } else {
+      if (!liveSchedule) {
+        try {
           await Promise.all(
             [pendingSchedule.technicianId, ...crew.map((member) => member.technicianId)].map(
               (technicianId, index) =>
@@ -2015,31 +2042,14 @@ export function CommandCentrePrototype({
                 }),
             ),
           );
+        } catch (error) {
+          setToast(testSyncErrorMessage(error));
+          return;
         }
-      } catch (error) {
-        setToast(
-          liveSchedule ? liveScheduleErrorMessage(error) : testSyncErrorMessage(error),
-        );
-        return;
-      }
-
-      if (liveSchedule && request && liveEvent) {
-        trackIntegrationReceipt(liveEvent, {
-          appointmentId: pendingSchedule.appointmentId,
-          requestId: request.id,
-        });
       }
 
       if (liveSchedule && request) {
         pendingWritebackRequestIds.current.add(request.id);
-        if (
-          integrationReceiptDisposition(liveEvent?.status).phase ===
-          "review_required"
-        ) {
-          setToast(
-            "The move was saved locally, but provider sync needs review.",
-          );
-        }
       }
 
       let movedAppointments = request
@@ -2105,8 +2115,6 @@ export function CommandCentrePrototype({
           appointment.id === selectedLeadAppointmentId
             ? {
                 ...appointment,
-                outlookEventId: liveEvent?.id ?? appointment.outlookEventId,
-                outlookWebLink: liveEvent?.webLink ?? appointment.outlookWebLink,
                 readOnly: false,
               }
             : appointment,
@@ -2140,9 +2148,68 @@ export function CommandCentrePrototype({
       setSelectedDateKey(pendingSchedule.date);
       setToast(
         liveSchedule
-          ? moveReceiptMessage(liveEvent?.status)
+          ? "Move saved in Command Centre. Syncing with MSP Central and Outlook."
           : "Appointment moved in mock mode.",
       );
+      if (liveSchedule && request) {
+        void publishLiveSchedule({
+          appointmentId: pendingSchedule.scheduleGroupId,
+          bookingType,
+          crew,
+          customer: request.customer,
+          date: pendingSchedule.date,
+          description: request.notes,
+          end: pendingSchedule.end,
+          idempotencyKey,
+          eventId: leadAppointment?.outlookEventId,
+          helpdeskUrl: request.helpdeskUrl,
+          latestUpdate: latestRequestUpdateSummary(request),
+          location: request.siteAddress ?? request.site,
+          priority: request.priority,
+          previousAssignments,
+          requestId: request.id,
+          requestNumber: request.requestNumber,
+          start: pendingSchedule.start,
+          subject: request.subject,
+          scheduleAction: "rescheduled",
+          technicianId: pendingSchedule.technicianId,
+          technicianName: technicianLabel(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          technicianEmail: technicianMspCentralIdentity(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          technicianMspCentralId: technicianMspCentralId(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+          travel: pendingSchedule.travel,
+          userPrincipalName: technicianOutlookIdentity(
+            dashboard.technicians,
+            pendingSchedule.technicianId,
+          ),
+        }).then(
+          (receipt) => {
+            trackIntegrationReceipt(receipt, {
+              appointmentId: pendingSchedule.appointmentId,
+              requestId: request.id,
+            });
+            if (
+              integrationReceiptDisposition(receipt.status).phase ===
+              "review_required"
+            ) {
+              setToast(
+                "The move was saved locally, but provider sync needs review.",
+              );
+            }
+          },
+          (error) => {
+            setToast(liveScheduleSavedButSyncUnconfirmedMessage(error));
+          },
+        );
+      }
     }
 
     setPendingSchedule(undefined);
@@ -2202,9 +2269,12 @@ export function CommandCentrePrototype({
         })),
         customer: selectedRequest.customer,
         date: leadAppointment.date ?? selectedDateKey,
+        description: selectedRequest.notes,
         end: leadAppointment.end,
         idempotencyKey: createClientCommandId("schedule"),
         eventId: leadAppointment.outlookEventId,
+        helpdeskUrl: selectedRequest.helpdeskUrl,
+        latestUpdate: latestRequestUpdateSummary(selectedRequest),
         location: selectedRequest.siteAddress ?? selectedRequest.site,
         previousAssignments: teamAppointments.flatMap((appointment) =>
           appointment.outlookEventId
@@ -2675,9 +2745,12 @@ export function CommandCentrePrototype({
             integrationState={integrationTracker.stateForRequest(selectedRequest?.id)}
             now={now}
             showIntegrations={showIntegrations}
-            onOpenWorkLog={openWorkLog}
             onOpenWorkspace={(requestId, appointmentId) =>
-              setTicketWorkspaceTarget({ appointmentId, requestId })
+              setTicketWorkspaceTarget({
+                appointmentId,
+                initialTab: "comms",
+                requestId,
+              })
             }
             onReschedule={rescheduleAppointment}
             onSyncCalendar={syncSelectedCalendarEvent}
@@ -2707,36 +2780,6 @@ export function CommandCentrePrototype({
             onTechnicianChange={updatePendingTechnician}
           />
         ) : null}
-        {workLogTarget ? (
-          <WorkLogModal
-            appointment={resolveWorkLogAppointment(
-              dashboard.appointments,
-              workLogTarget.appointmentId,
-            )}
-            key={`${workLogTarget.requestId}:${workLogTarget.appointmentId ?? "request"}`}
-            liveWriteback={
-              dashboard.dispatchDataSource === "msp-central" &&
-              dashboard.requests.find(
-                (request) => request.id === workLogTarget.requestId,
-              )?.sourceSystem === "msp-central"
-            }
-            onCancel={() => setWorkLogTarget(undefined)}
-            onSave={saveWorkLog}
-            request={dashboard.requests.find(
-              (request) => request.id === workLogTarget.requestId,
-            )}
-            technicians={dashboard.technicians}
-            technician={technicianLabel(
-              dashboard.technicians,
-              dashboard.appointments.find(
-                (appointment) => appointment.id === workLogTarget.appointmentId,
-              )?.technicianId ??
-                dashboard.requests.find(
-                  (request) => request.id === workLogTarget.requestId,
-                )?.technicianId,
-            )}
-          />
-        ) : null}
         {ticketWorkspaceTarget ? (
           <TicketWorkspaceModal
             appointment={resolveWorkLogAppointment(
@@ -2747,20 +2790,22 @@ export function CommandCentrePrototype({
               (appointment) =>
                 appointment.requestId === ticketWorkspaceTarget.requestId,
             )}
+            key={`${ticketWorkspaceTarget.requestId}:${ticketWorkspaceTarget.appointmentId ?? "request"}:${ticketWorkspaceTarget.initialTab ?? "details"}`}
             liveWriteback={
               dashboard.dispatchDataSource === "msp-central" &&
               dashboard.requests.find(
                 (request) => request.id === ticketWorkspaceTarget.requestId,
               )?.sourceSystem === "msp-central"
             }
+            initialTab={ticketWorkspaceTarget.initialTab}
             request={dashboard.requests.find(
               (request) => request.id === ticketWorkspaceTarget.requestId,
             )}
+            technicians={dashboard.technicians}
             onClose={() => setTicketWorkspaceTarget(undefined)}
-            onOpenWorkLog={(requestId, appointmentId) => {
-              setTicketWorkspaceTarget(undefined);
-              openWorkLog(requestId, appointmentId);
-            }}
+            onSaveWorkLog={(input) =>
+              saveWorkLogForTarget(ticketWorkspaceTarget, input)
+            }
             onSaved={(result) => {
               setTicketWorkspaceTarget(undefined);
               trackIntegrationReceipt(result, {
@@ -2784,13 +2829,52 @@ export function CommandCentrePrototype({
         {createRequestOpen ? (
           <CreateRequestModal
             onCancel={() => setCreateRequestOpen(false)}
-            onCreated={(result) => {
+            onCreated={(result, completion) => {
               setCreateRequestOpen(false);
               setQueueView("unscheduled");
               trackIntegrationReceipt(result, {
-                requestId: result.pendingRequestId,
+                requestId: result.createdRequestId ?? result.pendingRequestId,
               });
               const receipt = integrationReceiptDisposition(result.status);
+              if (completion.schedule && completion.request) {
+                const technicianId =
+                  technicianIdFromName(
+                    dashboard.technicians,
+                    completion.technicianName,
+                  ) ?? dashboard.technicians[0]?.id;
+                if (technicianId) {
+                  setDashboard((current) => ({
+                    ...current,
+                    requests: [
+                      completion.request as DispatchRequest,
+                      ...current.requests.filter(
+                        (request) => request.id !== completion.request?.id,
+                      ),
+                    ],
+                  }));
+                  setSelection({
+                    kind: "request",
+                    requestId: completion.request.id,
+                  });
+                  setPendingSchedule(
+                    createPendingScheduleForRequest(
+                      completion.request,
+                      technicianId,
+                      "09:00",
+                      selectedDateKey,
+                    ),
+                  );
+                  setToast("Request created. Ready to schedule.");
+                  return;
+                }
+              }
+              if (completion.schedule && !completion.request) {
+                setToast(
+                  "Request creation is queued. Open it from the queue once MSP Central returns the request number.",
+                );
+                router.refresh();
+                return;
+              }
               setToast(
                 receipt.phase === "synced"
                   ? "Request created in MSP Central."
@@ -2863,9 +2947,12 @@ export async function publishLiveSchedule(event: {
   }>;
   customer: string;
   date: string;
+  description?: string;
   end: string;
   eventId?: string;
+  helpdeskUrl?: string;
   idempotencyKey: string;
+  latestUpdate?: string;
   location: string;
   priority?: DispatchRequest["priority"];
   previousAssignments?: Array<{
@@ -3101,13 +3188,24 @@ async function publishMspCentralCommunication(input: {
 }
 
 async function publishMspCentralRequest(input: {
+  category?: string;
   customer: string;
+  customerId?: string;
+  contactId?: string;
   description: string;
   idempotencyKey: string;
+  impact?: string;
+  impactDetails?: string;
   priority: DispatchRequest["priority"];
+  requestType?: string;
   requesterEmail: string;
   site: string;
+  status?: string;
+  subcategory?: string;
   subject: string;
+  technicianName?: string;
+  urgency?: string;
+  waitForProvider?: boolean;
 }) {
   const response = await fetch("/api/internal/msp-central/requests", {
     body: JSON.stringify(input),
@@ -3117,6 +3215,8 @@ async function publishMspCentralRequest(input: {
   const body = (await response.json().catch(() => null)) as
     | {
         error?: string;
+        createdRequestId?: string;
+        createdRequestNumber?: string;
         operationId?: string;
         pendingRequestId?: string;
         status?: "queued" | "syncing" | "retrying" | "synced" | "review_required";
@@ -3128,10 +3228,100 @@ async function publishMspCentralRequest(input: {
   return body;
 }
 
+type RequestLookupCustomer = {
+  address?: string;
+  city?: string;
+  email?: string;
+  id: string;
+  name: string;
+  phone?: string;
+};
+
+type CreateCustomerInput = {
+  address?: string;
+  city?: string;
+  country?: string;
+  email?: string;
+  name: string;
+  phone?: string;
+  postalCode?: string;
+  state?: string;
+};
+
+type RequestLookupContact = {
+  email?: string;
+  id: string;
+  name: string;
+  phone?: string;
+};
+
+type RequestFormOptions = {
+  categories: string[];
+  impacts: string[];
+  priorities: DispatchRequest["priority"][];
+  requestTypes: string[];
+  statuses: string[];
+  subcategories: string[];
+  technicians: string[];
+  urgencies: string[];
+};
+
+const fallbackRequestFormOptions: RequestFormOptions = {
+  categories: [
+    "Backup",
+    "Cloud Services",
+    "Desktop Hardware",
+    "General",
+    "General Query",
+    "Internet",
+    "Line of Business Apps",
+    "Microsoft 365",
+    "Network",
+    "Operating System",
+    "Phone System",
+    "Printers",
+    "Procurement",
+    "Remote Access",
+    "Security",
+    "Servers",
+    "Services",
+    "Software",
+    "User Administration",
+  ],
+  impacts: ["Affects Business", "Affects Department", "Affects Group", "Affects User"],
+  priorities: ["Low", "Medium", "High", "Critical"],
+  requestTypes: [
+    "General",
+    "Incident",
+    "Procurement Request",
+    "Request For Information",
+    "Service Request",
+  ],
+  statuses: ["Open"],
+  subcategories: [],
+  technicians: [],
+  urgencies: ["Low", "Normal", "High", "Urgent"],
+};
+
 function createClientCommandId(prefix: string) {
   const id = globalThis.crypto?.randomUUID?.() ??
     `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${prefix}:${id}`;
+}
+
+async function createMspCentralLookupCustomer(input: CreateCustomerInput) {
+  const response = await fetch("/api/internal/msp-central/lookups", {
+    body: JSON.stringify({ ...input, type: "customer" }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | { customer?: RequestLookupCustomer; error?: string }
+    | null;
+  if (!response.ok || !body?.customer) {
+    throw new Error(body?.error ?? "Customer could not be created.");
+  }
+  return body.customer;
 }
 
 export function pendingLiveAppointmentId(
@@ -3146,37 +3336,6 @@ function testSyncErrorMessage(error: unknown) {
     error instanceof Error ? error.message : "Dispatcher test sync failed.";
 
   return `Mock schedule did not save: ${message}`;
-}
-
-function scheduleReceiptMessage(
-  requestNumber: string,
-  status?: IntegrationReceiptStatus,
-) {
-  const receipt = integrationReceiptDisposition(status);
-  if (receipt.phase === "synced") {
-    return `${requestNumber} scheduled in MSP Central and Outlook.`;
-  }
-  if (receipt.phase === "retrying") {
-    return `${requestNumber} scheduled locally. Provider sync is retrying.`;
-  }
-  if (receipt.phase === "review_required") {
-    return `${requestNumber} scheduled locally. Provider sync needs review.`;
-  }
-  return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
-}
-
-function moveReceiptMessage(status?: IntegrationReceiptStatus) {
-  const receipt = integrationReceiptDisposition(status);
-  if (receipt.phase === "synced") {
-    return "Appointment moved in MSP Central and Outlook.";
-  }
-  if (receipt.phase === "retrying") {
-    return "Appointment moved locally. Provider sync is retrying.";
-  }
-  if (receipt.phase === "review_required") {
-    return "Appointment moved locally. Provider sync needs review.";
-  }
-  return "Appointment moved. Syncing with MSP Central and Outlook.";
 }
 
 function manualSyncReceiptMessage(
@@ -3203,6 +3362,13 @@ function liveScheduleErrorMessage(error: unknown) {
   return `Live schedule did not save: ${message}`;
 }
 
+function liveScheduleSavedButSyncUnconfirmedMessage(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Live schedule write failed.";
+
+  return `Saved in Command Centre. MSP Central and Outlook sync could not be confirmed: ${message}`;
+}
+
 function canUseLiveSchedule(
   dashboard: DispatchDashboardData,
   request?: DispatchRequest,
@@ -3213,6 +3379,13 @@ function canUseLiveSchedule(
     dashboard.calendarDataSource === "outlook" &&
     dashboard.calendarReadOnly === false
   );
+}
+
+function latestRequestUpdateSummary(request: DispatchRequest) {
+  if (!request.updateInfo) return undefined;
+  return [request.updateInfo.summary, request.updateInfo.detail]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(": ");
 }
 
 function technicianOutlookIdentity(technicians: Technician[], technicianId: string) {
@@ -3853,34 +4026,210 @@ export function CreateRequestModal({
   onCreated,
 }: {
   onCancel: () => void;
-  onCreated: (result: IntegrationOperationReceipt & { pendingRequestId?: string }) => void;
+  onCreated: (result: CreateRequestReceipt, completion: CreateRequestCompletion) => void;
 }) {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [requesterEmail, setRequesterEmail] = useState("");
-  const [customer, setCustomer] = useState("");
   const [site, setSite] = useState("");
   const [priority, setPriority] = useState<DispatchRequest["priority"]>("Medium");
-  const [saving, setSaving] = useState(false);
+  const [requestType, setRequestType] = useState("Incident");
+  const [status, setStatus] = useState("Open");
+  const [impact, setImpact] = useState("");
+  const [impactDetails, setImpactDetails] = useState("");
+  const [urgency, setUrgency] = useState("Normal");
+  const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [technicianName, setTechnicianName] = useState("");
+  const [formOptions, setFormOptions] = useState<RequestFormOptions>(
+    fallbackRequestFormOptions,
+  );
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerOptions, setCustomerOptions] = useState<RequestLookupCustomer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] =
+    useState<RequestLookupCustomer>();
+  const [customerLookupState, setCustomerLookupState] = useState<
+    "idle" | "loading" | "loaded" | "error"
+  >("idle");
+  const [createCustomerOpen, setCreateCustomerOpen] = useState(false);
+  const [contactQuery, setContactQuery] = useState("");
+  const [contactOptions, setContactOptions] = useState<RequestLookupContact[]>([]);
+  const [selectedContact, setSelectedContact] = useState<RequestLookupContact>();
+  const [contactLookupState, setContactLookupState] = useState<
+    "idle" | "loading" | "loaded" | "error"
+  >("idle");
+  const [savingAction, setSavingAction] = useState<
+    "create" | "create-and-schedule" | undefined
+  >();
   const [error, setError] = useState<string>();
   const [idempotencyKey] = useState(() => createClientCommandId("request"));
+  const canCreate = Boolean(subject.trim() && selectedCustomer && !savingAction);
+  const trimmedCustomerQuery = customerQuery.trim();
+  const canOfferCustomerCreate =
+    customerLookupState === "loaded" &&
+    customerOptions.length === 0 &&
+    trimmedCustomerQuery.length >= 2;
 
-  async function submit() {
-    if (!subject.trim() || saving) return;
-    setSaving(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(
+          "/api/internal/msp-central/lookups?type=request-options",
+          { signal: controller.signal },
+        );
+        const body = (await response.json().catch(() => null)) as
+          | { options?: Partial<RequestFormOptions> | null }
+          | null;
+        if (!response.ok || !body?.options) return;
+        setFormOptions({
+          categories: body.options.categories ?? fallbackRequestFormOptions.categories,
+          impacts: body.options.impacts ?? fallbackRequestFormOptions.impacts,
+          priorities:
+            body.options.priorities ?? fallbackRequestFormOptions.priorities,
+          requestTypes:
+            body.options.requestTypes ?? fallbackRequestFormOptions.requestTypes,
+          statuses: body.options.statuses ?? fallbackRequestFormOptions.statuses,
+          subcategories:
+            body.options.subcategories ?? fallbackRequestFormOptions.subcategories,
+          technicians:
+            body.options.technicians ?? fallbackRequestFormOptions.technicians,
+          urgencies: body.options.urgencies ?? fallbackRequestFormOptions.urgencies,
+        });
+      } catch {
+        return;
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const query = customerQuery.trim();
+    if (query.length < 2) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setCustomerLookupState("loading");
+      try {
+        const response = await fetch(
+          `/api/internal/msp-central/lookups?type=customers&q=${encodeURIComponent(query)}`,
+          { signal: controller.signal },
+        );
+        const body = (await response.json().catch(() => null)) as
+          | { customers?: RequestLookupCustomer[]; error?: string }
+          | null;
+        if (!response.ok) {
+          throw new Error(body?.error ?? "Customer lookup failed.");
+        }
+        setCustomerOptions(body?.customers ?? []);
+        setCustomerLookupState("loaded");
+      } catch {
+        if (controller.signal.aborted) return;
+        setCustomerOptions([]);
+        setCustomerLookupState("error");
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [customerQuery]);
+
+  useEffect(() => {
+    if (!selectedCustomer) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setContactLookupState("loading");
+      try {
+        const params = new URLSearchParams({
+          customerId: selectedCustomer.id,
+          q: contactQuery.trim(),
+          type: "contacts",
+        });
+        const response = await fetch(`/api/internal/msp-central/lookups?${params}`, {
+          signal: controller.signal,
+        });
+        const body = (await response.json().catch(() => null)) as
+          | { contacts?: RequestLookupContact[]; error?: string }
+          | null;
+        if (!response.ok) {
+          throw new Error(body?.error ?? "Requester lookup failed.");
+        }
+        const nextContacts = body?.contacts ?? [];
+        setContactOptions(nextContacts);
+        if (
+          !contactQuery.trim() &&
+          nextContacts.length === 1 &&
+          nextContacts[0]?.email
+        ) {
+          setSelectedContact(nextContacts[0]);
+          setContactQuery(nextContacts[0].name);
+          setRequesterEmail(nextContacts[0].email);
+        }
+        setContactLookupState("loaded");
+      } catch {
+        if (controller.signal.aborted) return;
+        setContactOptions([]);
+        setContactLookupState("error");
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [contactQuery, selectedCustomer]);
+
+  async function submit(schedule: boolean) {
+    if (!canCreate || !selectedCustomer) return;
+    setSavingAction(schedule ? "create-and-schedule" : "create");
     setError(undefined);
     try {
       const created = await publishMspCentralRequest({
-        customer: customer.trim(),
+        category: category.trim() || undefined,
+        customer: selectedCustomer.name,
+        customerId: selectedCustomer.id,
+        contactId: selectedContact?.id,
         description: description.trim(),
+        impact: impact.trim() || undefined,
+        impactDetails: impactDetails.trim() || undefined,
         idempotencyKey,
         priority,
+        requestType: requestType.trim() || undefined,
         requesterEmail: requesterEmail.trim(),
         site: site.trim(),
+        status: status.trim() || "Open",
+        subcategory: subcategory.trim() || undefined,
         subject: subject.trim(),
+        technicianName: technicianName.trim() || undefined,
+        urgency: urgency.trim() || undefined,
+        waitForProvider: schedule,
       });
       if (!created.operationId) throw new Error("Request was not queued.");
-      onCreated(created);
+      onCreated(created, {
+        request:
+          schedule && created.createdRequestId && created.createdRequestNumber
+            ? buildCreatedDispatchRequest({
+                created,
+                customer: selectedCustomer,
+                description,
+                priority,
+                requesterEmail,
+                selectedContact,
+                site,
+                status,
+                subject,
+              })
+            : undefined,
+        schedule,
+        technicianName: technicianName.trim() || undefined,
+      });
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -3888,7 +4237,7 @@ export function CreateRequestModal({
           : "Request could not be created.",
       );
     } finally {
-      setSaving(false);
+      setSavingAction(undefined);
     }
   }
 
@@ -3915,13 +4264,194 @@ export function CreateRequestModal({
           </button>
         </div>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <label className="sm:col-span-2 text-sm font-semibold">
-            Subject
+          <div className="text-sm font-semibold">
+            <label htmlFor="create-request-customer">Customer</label>
+            <input
+              autoComplete="off"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              id="create-request-customer"
+              placeholder="Search customers"
+              value={customerQuery}
+              onChange={(event) => {
+                const nextQuery = event.target.value;
+                setCustomerQuery(nextQuery);
+                setSelectedCustomer(undefined);
+                setSelectedContact(undefined);
+                setContactQuery("");
+                setContactOptions([]);
+                setContactLookupState("idle");
+                setRequesterEmail("");
+                if (nextQuery.trim().length < 2) {
+                  setCustomerOptions([]);
+                  setCustomerLookupState("idle");
+                }
+              }}
+            />
+            <div className="mt-2 max-h-40 overflow-auto rounded-md border border-white/10 bg-[#071323]">
+              {customerLookupState === "loading" ? (
+                <div className="px-3 py-2 text-xs text-slate-400">
+                  Searching customers...
+                </div>
+              ) : null}
+              {customerLookupState === "error" ? (
+                <div className="px-3 py-2 text-xs text-amber-200">
+                  Customer lookup is unavailable.
+                </div>
+              ) : null}
+              {customerLookupState === "loaded" && customerOptions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-slate-400">
+                  No matching customers
+                </div>
+              ) : null}
+              {canOfferCustomerCreate ? (
+                <button
+                  className="block w-full border-t border-white/10 px-3 py-2 text-left text-xs font-semibold text-cc-orange transition hover:bg-cc-orange/10"
+                  type="button"
+                  onClick={() => setCreateCustomerOpen(true)}
+                >
+                  Create customer &quot;{trimmedCustomerQuery}&quot;
+                </button>
+              ) : null}
+              {customerOptions.map((option) => (
+                <button
+                  key={option.id}
+                  className={`block w-full px-3 py-2 text-left text-xs transition ${
+                    selectedCustomer?.id === option.id
+                      ? "bg-cc-orange/20 text-orange-100"
+                      : "text-slate-200 hover:bg-white/5"
+                  }`}
+                  type="button"
+              onClick={() => {
+                setSelectedCustomer(option);
+                setCustomerQuery(option.name);
+                setSite(option.address ?? option.city ?? "");
+                setContactOptions([]);
+                setContactLookupState("idle");
+              }}
+                >
+                  <span className="block font-semibold">{option.name}</span>
+                  {option.address ? (
+                    <span className="mt-0.5 block text-slate-400">
+                      {option.address}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-sm font-semibold">
+            <label htmlFor="create-request-contact">Requester</label>
+            <input
+              autoComplete="off"
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal disabled:opacity-50"
+              disabled={!selectedCustomer}
+              id="create-request-contact"
+              placeholder={
+                selectedCustomer ? "Search requesters" : "Select a customer first"
+              }
+              value={contactQuery}
+              onChange={(event) => {
+                const nextQuery = event.target.value;
+                setContactQuery(nextQuery);
+                setSelectedContact(undefined);
+                if (nextQuery.trim().length < 2) {
+                  setContactOptions([]);
+                  setContactLookupState("idle");
+                }
+              }}
+            />
+            <div className="mt-2 max-h-40 overflow-auto rounded-md border border-white/10 bg-[#071323]">
+              {selectedCustomer && contactLookupState === "loading" ? (
+                <div className="px-3 py-2 text-xs text-slate-400">
+                  Searching requesters...
+                </div>
+              ) : null}
+              {selectedCustomer && contactLookupState === "error" ? (
+                <div className="px-3 py-2 text-xs text-amber-200">
+                  Requester lookup is unavailable. Enter requester email manually.
+                </div>
+              ) : null}
+              {selectedCustomer &&
+              contactLookupState === "loaded" &&
+              contactOptions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-slate-400">
+                  No matching requesters
+                </div>
+              ) : null}
+              {contactOptions.map((option) => (
+                <button
+                  key={option.id}
+                  className={`block w-full px-3 py-2 text-left text-xs transition ${
+                    selectedContact?.id === option.id
+                      ? "bg-cc-orange/20 text-orange-100"
+                      : "text-slate-200 hover:bg-white/5"
+                  }`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedContact(option);
+                    setContactQuery(option.name);
+                    setRequesterEmail(option.email ?? "");
+                  }}
+                >
+                  <span className="block font-semibold">{option.name}</span>
+                  {[option.email, option.phone].filter(Boolean).join(" / ") ? (
+                    <span className="mt-0.5 block text-slate-400">
+                      {[option.email, option.phone].filter(Boolean).join(" / ")}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
+          <SelectField
+            label="Request type"
+            options={formOptions.requestTypes}
+            placeholder="Select request type"
+            value={requestType}
+            onChange={setRequestType}
+          />
+          <SelectField
+            label="Status"
+            options={formOptions.statuses}
+            placeholder="Select status"
+            value={status}
+            onChange={setStatus}
+          />
+          <SelectField
+            label="Impact"
+            options={formOptions.impacts}
+            placeholder="Select impact"
+            value={impact}
+            onChange={setImpact}
+          />
+          <label className="text-sm font-semibold">
+            Impact details
             <input
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
-              value={subject}
-              onChange={(event) => setSubject(event.target.value)}
+              value={impactDetails}
+              onChange={(event) => setImpactDetails(event.target.value)}
             />
+          </label>
+          <SelectField
+            label="Urgency"
+            options={formOptions.urgencies}
+            placeholder="Select urgency"
+            value={urgency}
+            onChange={setUrgency}
+          />
+          <label className="text-sm font-semibold">
+            Priority
+            <select
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={priority}
+              onChange={(event) =>
+                setPriority(event.target.value as DispatchRequest["priority"])
+              }
+            >
+              {formOptions.priorities.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label className="text-sm font-semibold">
             Requester email
@@ -3933,33 +4463,40 @@ export function CreateRequestModal({
             />
           </label>
           <label className="text-sm font-semibold">
-            Priority
-            <select
-              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
-              value={priority}
-              onChange={(event) =>
-                setPriority(event.target.value as DispatchRequest["priority"])
-              }
-            >
-              {(["Low", "Medium", "High", "Critical"] as const).map((value) => (
-                <option key={value} value={value}>{value}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-semibold">
-            Customer
-            <input
-              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
-              value={customer}
-              onChange={(event) => setCustomer(event.target.value)}
-            />
-          </label>
-          <label className="text-sm font-semibold">
             Site
             <input
               className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
               value={site}
               onChange={(event) => setSite(event.target.value)}
+            />
+          </label>
+          <SelectField
+            label="Technician"
+            options={formOptions.technicians}
+            placeholder="Select technician"
+            value={technicianName}
+            onChange={setTechnicianName}
+          />
+          <SelectField
+            label="Category"
+            options={formOptions.categories}
+            placeholder="Select category"
+            value={category}
+            onChange={setCategory}
+          />
+          <SelectField
+            label="Subcategory"
+            options={formOptions.subcategories}
+            placeholder="Select subcategory"
+            value={subcategory}
+            onChange={setSubcategory}
+          />
+          <label className="text-sm font-semibold">
+            Subject
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
             />
           </label>
           <label className="sm:col-span-2 text-sm font-semibold">
@@ -3968,6 +4505,205 @@ export function CreateRequestModal({
               className="mt-2 min-h-36 w-full rounded-md border border-white/10 bg-[#111d30] p-3 font-normal"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+        </div>
+        {error ? (
+          <p className="mt-4 rounded-md border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold"
+            disabled={Boolean(savingAction)}
+            type="button"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            aria-busy={savingAction === "create"}
+            className="rounded-md border border-cc-orange/40 bg-cc-orange/15 px-4 py-2 text-sm font-semibold text-orange-100 disabled:opacity-40"
+            disabled={!canCreate}
+            type="button"
+            onClick={() => submit(false)}
+          >
+            {savingAction === "create" ? "Creating request..." : "Create request"}
+          </button>
+          <button
+            aria-busy={savingAction === "create-and-schedule"}
+            className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
+            disabled={!canCreate}
+            type="button"
+            onClick={() => submit(true)}
+          >
+            {savingAction === "create-and-schedule"
+              ? "Creating ticket..."
+              : "Create and schedule"}
+          </button>
+        </div>
+      </section>
+      {createCustomerOpen ? (
+        <CreateCustomerDialog
+          initialName={trimmedCustomerQuery}
+          onCancel={() => setCreateCustomerOpen(false)}
+          onCreated={(customer) => {
+            setSelectedCustomer(customer);
+            setCustomerQuery(customer.name);
+            setCustomerOptions([customer]);
+            setCustomerLookupState("loaded");
+            setSite(customer.address ?? customer.city ?? "");
+            setSelectedContact(undefined);
+            setContactQuery("");
+            setContactOptions([]);
+            setContactLookupState("idle");
+            setRequesterEmail(customer.email ?? "");
+            setCreateCustomerOpen(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CreateCustomerDialog({
+  initialName,
+  onCancel,
+  onCreated,
+}: {
+  initialName: string;
+  onCancel: () => void;
+  onCreated: (customer: RequestLookupCustomer) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("VIC");
+  const [postalCode, setPostalCode] = useState("");
+  const [country, setCountry] = useState("Australia");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const canSave = Boolean(name.trim() && !saving);
+
+  async function submit() {
+    if (!canSave) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const customer = await createMspCentralLookupCustomer({
+        address: address.trim() || undefined,
+        city: city.trim() || undefined,
+        country: country.trim() || undefined,
+        email: email.trim() || undefined,
+        name: name.trim(),
+        phone: phone.trim() || undefined,
+        postalCode: postalCode.trim() || undefined,
+        state: state.trim() || undefined,
+      });
+      onCreated(customer);
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Customer could not be created.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+      <section
+        aria-label="Create customer"
+        aria-modal="true"
+        className="w-full max-w-xl rounded-lg border border-cc-orange/25 bg-cc-surface-1 p-5 text-slate-100 shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase text-cc-orange">
+              MSP Central
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">Create customer</h2>
+          </div>
+          <button
+            aria-label="Close create customer"
+            className="rounded-md border border-white/10 bg-white/5 p-2"
+            disabled={saving}
+            type="button"
+            onClick={onCancel}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Customer name
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Email
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Phone
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+            />
+          </label>
+          <label className="sm:col-span-2 text-sm font-semibold">
+            Address
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            City
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={city}
+              onChange={(event) => setCity(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            State
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={state}
+              onChange={(event) => setState(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Postcode
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={postalCode}
+              onChange={(event) => setPostalCode(event.target.value)}
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            Country
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              value={country}
+              onChange={(event) => setCountry(event.target.value)}
             />
           </label>
         </div>
@@ -3988,11 +4724,11 @@ export function CreateRequestModal({
           <button
             aria-busy={saving}
             className="rounded-md bg-cc-orange px-4 py-2 text-sm font-semibold text-cc-surface-1 disabled:opacity-40"
-            disabled={!subject.trim() || saving}
+            disabled={!canSave}
             type="button"
             onClick={submit}
           >
-            {saving ? "Creating request..." : "Create request"}
+            {saving ? "Creating customer..." : "Create customer"}
           </button>
         </div>
       </section>
@@ -4000,26 +4736,120 @@ export function CreateRequestModal({
   );
 }
 
+function buildCreatedDispatchRequest({
+  created,
+  customer,
+  description,
+  priority,
+  requesterEmail,
+  selectedContact,
+  site,
+  status,
+  subject,
+}: {
+  created: CreateRequestReceipt;
+  customer: RequestLookupCustomer;
+  description: string;
+  priority: DispatchRequest["priority"];
+  requesterEmail: string;
+  selectedContact?: RequestLookupContact;
+  site: string;
+  status: string;
+  subject: string;
+}): DispatchRequest {
+  const cleanRequesterEmail = requesterEmail.trim();
+  const siteValue = site.trim() || customer.address || customer.city || customer.name;
+  return {
+    ageHours: 0,
+    billable: false,
+    contact: selectedContact?.name ?? cleanRequesterEmail ?? "Unknown requester",
+    contactEmail: cleanRequesterEmail || selectedContact?.email,
+    contactPhone: selectedContact?.phone,
+    customer: customer.name,
+    dueAt: new Date().toISOString(),
+    id: created.createdRequestId as string,
+    notes: description.trim(),
+    priority,
+    readyToBook: true,
+    requester: selectedContact?.name ?? cleanRequesterEmail ?? "Unknown requester",
+    requestNumber: created.createdRequestNumber as string,
+    site: siteValue,
+    siteAddress: siteValue,
+    siteAddressSource: siteValue ? "msp-central" : "unknown",
+    slaState: "normal",
+    sourceSystem: "msp-central",
+    status: normalizeCreatedRequestStatus(status),
+    subject: subject.trim(),
+    warnings: ["New request"],
+  };
+}
+
+function normalizeCreatedRequestStatus(status: string): DispatchRequest["status"] {
+  return status === "Ready for Scheduling" ||
+    status === "Scheduled" ||
+    status === "Resolved" ||
+    status === "Cancelled"
+    ? status
+    : "Open";
+}
+
+function SelectField({
+  label,
+  onChange,
+  options,
+  placeholder,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: string[];
+  placeholder: string;
+  value: string;
+}) {
+  return (
+    <label className="text-sm font-semibold">
+      {label}
+      <select
+        aria-label={label}
+        className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function TicketWorkspaceModal({
   appointment,
   appointments,
+  initialTab = "details",
   liveWriteback,
   onClose,
-  onOpenWorkLog,
   onSchedule,
+  onSaveWorkLog,
   onSaved,
   request,
+  technicians,
 }: {
   appointment?: Appointment;
   appointments: Appointment[];
+  initialTab?: TicketWorkspaceTab;
   liveWriteback: boolean;
   onClose: () => void;
-  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
   onSchedule?: (requestId: string) => void;
+  onSaveWorkLog: (input: WorkLogSaveInput) => Promise<void>;
   onSaved: (result: IntegrationOperationReceipt) => void;
   request?: DispatchRequest;
+  technicians: Technician[];
 }) {
-  const [tab, setTab] = useState<"comms" | "details" | "tracks">("details");
+  const [tab, setTab] = useState<TicketWorkspaceTab>(initialTab);
   const [context, setContext] = useState<MspCentralRequestContext>();
   const [loading, setLoading] = useState(liveWriteback);
   const [error, setError] = useState<string>();
@@ -4303,9 +5133,9 @@ export function TicketWorkspaceModal({
             <button
               className="flex items-center gap-2 rounded-md bg-cc-orange px-3 py-2 text-sm font-semibold text-cc-surface-1 disabled:cursor-not-allowed disabled:opacity-45"
               disabled={!appointment && appointments.length > 0 && !chosenAppointment}
-              title={!appointment && appointments.length > 0 && !chosenAppointment ? "Choose the exact booking before recording time." : "Open Work Log for this booking."}
+              title={!appointment && appointments.length > 0 && !chosenAppointment ? "Choose the exact booking before recording time." : "Open the Work Log tab for this booking."}
               type="button"
-              onClick={() => onOpenWorkLog(request.id, chosenAppointment?.id)}
+              onClick={() => setTab("worklog")}
             >
               <Clock3 className="h-4 w-4" />
               Work Log
@@ -4332,7 +5162,7 @@ export function TicketWorkspaceModal({
           </div>
         </header>
         <div className="flex shrink-0 gap-1 border-b border-white/10 px-5 pt-2" role="tablist">
-          {(["details", "comms", "tracks"] as const).map((value) => (
+          {(["details", "comms", "worklog", "tracks"] as const).map((value) => (
             <button
               key={value}
               aria-selected={tab === value}
@@ -4345,7 +5175,13 @@ export function TicketWorkspaceModal({
               type="button"
               onClick={() => setTab(value)}
             >
-              {value === "details" ? "Overview" : value === "comms" ? "Comms" : "Tracks"}
+              {value === "details"
+                ? "Overview"
+                : value === "comms"
+                  ? "Comms"
+                  : value === "worklog"
+                    ? "Work Log"
+                    : "Tracks"}
             </button>
           ))}
         </div>
@@ -4356,7 +5192,11 @@ export function TicketWorkspaceModal({
                 <h3 className="text-sm font-semibold">Job description</h3>
                 <SafeRequestContent
                   className="mt-3 text-sm leading-6 text-slate-200"
-                  value={latestRequest.notes ?? "No job description has been recorded."}
+                  value={
+                    latestRequest.notesHtml ??
+                    latestRequest.notes ??
+                    "No job description has been recorded."
+                  }
                 />
               </section>
               <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
@@ -4449,6 +5289,20 @@ export function TicketWorkspaceModal({
                 </div>
               </section>
             </div>
+          ) : tab === "worklog" ? (
+            <WorkLogModal
+              embedded
+              appointment={chosenAppointment}
+              liveWriteback={liveWriteback}
+              request={latestRequest}
+              technician={technicianLabel(
+                technicians,
+                chosenAppointment?.technicianId ?? latestRequest.technicianId,
+              )}
+              technicians={technicians}
+              onCancel={() => setTab("details")}
+              onSave={onSaveWorkLog}
+            />
           ) : (
             <TrackWorkspace
               error={workflowError}
@@ -4510,7 +5364,10 @@ function CommunicationThread({
                 <span className="font-semibold text-slate-200">{update.author}</span>
                 <span>{update.createdAt ? formatDateTime(update.createdAt) : ""}</span>
               </div>
-              <SafeRequestContent className="mt-2 text-sm leading-6" value={update.body} />
+              <SafeRequestContent
+                className="mt-2 text-sm leading-6"
+                value={update.bodyHtml ?? update.body}
+              />
             </article>
           ))}
         </div>
@@ -4770,10 +5627,7 @@ function SafeRequestContent({ className, value }: { className?: string; value: s
 }
 
 export function safeRequestContentParts(value: string) {
-  const normalised = value
-    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
-    .replace(/<\s*\/p\s*>/gi, "\n")
-    .replace(/<\s*p\b[^>]*>/gi, "");
+  const normalised = normalizeHtmlLayout(value);
   const parts: Array<{ href?: string; text: string }> = [];
   const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let cursor = 0;
@@ -4786,11 +5640,13 @@ export function safeRequestContentParts(value: string) {
     cursor = match.index + match[0].length;
   }
   appendLinkifiedText(parts, normalised.slice(cursor));
-  return parts.length > 0 ? parts : [{ text: "" }];
+  const compacted = compactContentParts(parts);
+  return compacted.length > 0 ? compacted : [{ text: "" }];
 }
 
 function appendLinkifiedText(parts: Array<{ href?: string; text: string }>, value: string) {
-  const text = decodeHtml(stripHtml(value));
+  const text = normalizeDisplayText(decodeHtml(stripHtml(value)));
+  if (!text) return;
   const urlPattern = /https?:\/\/[^\s<>"']+/gi;
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -4808,6 +5664,76 @@ function appendLinkifiedText(parts: Array<{ href?: string; text: string }>, valu
     cursor = match.index + match[0].length;
   }
   if (cursor < text.length) parts.push({ text: text.slice(cursor) });
+}
+
+function compactContentParts(parts: Array<{ href?: string; text: string }>) {
+  const compacted = parts
+    .map((part) => ({
+      ...part,
+      text: part.href ? normalizeInlineText(part.text) || part.text : part.text,
+    }))
+    .filter((part) => part.href || part.text);
+
+  while (compacted[0] && !compacted[0].href && !compacted[0].text.trim()) {
+    compacted.shift();
+  }
+  while (
+    compacted[compacted.length - 1] &&
+    !compacted[compacted.length - 1].href &&
+    !compacted[compacted.length - 1].text.trim()
+  ) {
+    compacted.pop();
+  }
+
+  if (compacted[0] && !compacted[0].href) {
+    compacted[0] = { text: compacted[0].text.replace(/^\s+/, "") };
+  }
+  const last = compacted[compacted.length - 1];
+  if (last && !last.href) {
+    compacted[compacted.length - 1] = {
+      text: last.text.replace(/\s+$/, ""),
+    };
+  }
+
+  return compacted;
+}
+
+function normalizeHtmlLayout(value: string) {
+  return value
+    .replace(/<\s*(?:script|style)\b[\s\S]*?<\/\s*(?:script|style)\s*>/gi, "")
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/(?:p|div|li|tr|table|tbody|thead|tfoot|h[1-6])\s*>/gi, "\n")
+    .replace(/<\s*(?:p|div|tr|table|tbody|thead|tfoot|h[1-6])\b[^>]*>/gi, "\n")
+    .replace(/<\s*li\b[^>]*>/gi, "\n- ")
+    .replace(/<\s*\/(?:td|th)\s*>/gi, " ")
+    .replace(/<\s*(?:td|th)\b[^>]*>/gi, " ");
+}
+
+function normalizeDisplayText(value: string) {
+  return normalizeBlockText(value);
+}
+
+function normalizeBlockText(value: string) {
+  const normalized = value
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/\r/g, "")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+  const trimmed = normalized.trim();
+  if (!trimmed) {
+    return normalized.includes("\n") ? "\n\n" : "";
+  }
+
+  const prefix = /^[ \t\f\v]/.test(normalized) ? " " : "";
+  const suffix = /[ \t\f\v]$/.test(normalized) ? " " : "";
+  const leadingBreak = normalized.startsWith("\n") ? "\n\n" : "";
+  const trailingBreak = normalized.endsWith("\n") ? "\n\n" : "";
+  return `${leadingBreak || prefix}${trimmed}${trailingBreak || suffix}`;
+}
+
+function normalizeInlineText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function safeHttpUrl(value: string) {
@@ -4835,6 +5761,7 @@ function decodeHtml(value: string) {
 
 export function WorkLogModal({
   appointment,
+  embedded = false,
   liveWriteback,
   onCancel,
   onSave,
@@ -4843,19 +5770,10 @@ export function WorkLogModal({
   technicians,
 }: {
   appointment?: Appointment;
+  embedded?: boolean;
   liveWriteback: boolean;
   onCancel: () => void;
-  onSave: (input: {
-    billable: boolean;
-    booking?: WorklogForwardBooking;
-    disposition?: WorklogDisposition;
-    idempotencyKey: string;
-    minutes: string;
-    notes: string;
-    solution?: string;
-    transfer?: WorklogTransfer;
-    workType: WorklogType;
-  }) => Promise<void>;
+  onSave: (input: WorkLogSaveInput) => Promise<void>;
   request?: DispatchRequest;
   technician: string;
   technicians: Technician[];
@@ -4964,6 +5882,9 @@ export function WorkLogModal({
   }
 
   const latestRequest = requestContext?.request ?? request;
+  const attachments = latestRequest.attachments ?? [];
+  const attachmentHref =
+    latestRequest.helpdeskUrl ?? attachments.find((attachment) => attachment.url)?.url;
 
   const scheduledTime = appointment
     ? `${appointment.start}-${appointment.end}`
@@ -5055,15 +5976,20 @@ export function WorkLogModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4">
+    <div className={embedded ? "contents" : "fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4"}>
       <section
-        aria-labelledby="work-log-title"
-        aria-modal="true"
-        className="flex h-[96vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-lg border border-cc-orange/20 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        aria-label={embedded ? "Work Log" : undefined}
+        aria-labelledby={embedded ? undefined : "work-log-title"}
+        aria-modal={embedded ? undefined : "true"}
+        className={
+          embedded
+            ? "grid gap-4 text-slate-100"
+            : "flex h-[96vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-lg border border-cc-orange/20 bg-cc-surface-1 text-slate-100 shadow-2xl"
+        }
         data-layout="full-screen-split"
-        role="dialog"
+        role={embedded ? "region" : "dialog"}
       >
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5">
+        <div className={embedded ? "flex shrink-0 items-start justify-between gap-4" : "flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5"}>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-cc-orange">
               {liveWriteback ? "MSP Central" : "Mock/test-sync only"}
@@ -5072,20 +5998,22 @@ export function WorkLogModal({
               Work Log
             </h2>
           </div>
-          <button
-            aria-label="Close Work Log"
-            className="rounded-md border border-white/10 bg-white/5 p-2 text-slate-200"
-            type="button"
-            onClick={onCancel}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {embedded ? null : (
+            <button
+              aria-label="Close Work Log"
+              className="rounded-md border border-white/10 bg-white/5 p-2 text-slate-200"
+              type="button"
+              onClick={onCancel}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
-        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+        <div className={embedded ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]" : "grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]"}>
         <section
           aria-label="Ticket information"
-          className="min-h-0 overflow-y-auto p-4 sm:p-5"
+          className={embedded ? "min-h-0" : "min-h-0 overflow-y-auto p-4 sm:p-5"}
         >
         <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
           <h3 className="text-sm font-semibold text-slate-50">
@@ -5117,11 +6045,58 @@ export function WorkLogModal({
               label="Contact"
               value={`${latestRequest.requester} / ${latestRequest.contact}`}
             />
+            {latestRequest.contactPhone ? (
+              <DetailInline label="Phone" value={latestRequest.contactPhone} />
+            ) : null}
+            {latestRequest.contactEmail ? (
+              <DetailInline label="Email" value={latestRequest.contactEmail} />
+            ) : null}
             <DetailInline
               label="Site/address"
               value={latestRequest.siteAddress || latestRequest.site}
             />
           </div>
+
+          {attachments.length > 0 && attachmentHref ? (
+            <div className="mt-4 rounded-md border border-sky-300/20 bg-sky-400/[0.08] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-xs font-semibold uppercase text-slate-300">
+                    Attachments
+                  </h4>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {attachments.length} file{attachments.length === 1 ? "" : "s"} on this request
+                  </p>
+                </div>
+                <a
+                  aria-label={`Open attachments ${attachments.length}`}
+                  className="inline-flex items-center gap-2 rounded-md border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-semibold text-sky-50 hover:bg-sky-300/15"
+                  href={attachmentHref}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Attachments
+                </a>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {attachments.slice(0, 4).map((attachment) => (
+                  <span
+                    className="max-w-full truncate rounded border border-white/10 bg-black/15 px-2 py-1 text-xs text-slate-200"
+                    key={attachment.id}
+                    title={attachment.fileName}
+                  >
+                    {attachment.fileName}
+                  </span>
+                ))}
+                {attachments.length > 4 ? (
+                  <span className="rounded border border-white/10 bg-black/15 px-2 py-1 text-xs text-slate-400">
+                    +{attachments.length - 4} more
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-4 border-t border-white/10 pt-4">
             <h4 className="text-xs font-semibold uppercase text-slate-300">
@@ -5129,7 +6104,11 @@ export function WorkLogModal({
             </h4>
             <SafeRequestContent
               className="mt-2 text-sm leading-5 text-slate-100"
-              value={latestRequest.notes ?? "No job description is recorded in MSP Central."}
+              value={
+                latestRequest.notesHtml ??
+                latestRequest.notes ??
+                "No job description is recorded in MSP Central."
+              }
             />
           </div>
 
@@ -5158,7 +6137,7 @@ export function WorkLogModal({
 
         <section
           aria-label="Work Log entry"
-          className="min-h-0 overflow-y-auto border-t border-white/10 bg-black/10 p-4 lg:border-l lg:border-t-0 sm:p-5"
+          className={embedded ? "min-h-0 rounded-md border border-white/10 bg-black/10 p-4 sm:p-5" : "min-h-0 overflow-y-auto border-t border-white/10 bg-black/10 p-4 lg:border-l lg:border-t-0 sm:p-5"}
         >
         <div className="grid gap-4">
           <label className="block text-sm font-semibold text-slate-200">
@@ -6006,9 +6985,10 @@ function TicketUpdateList({
                   {update.createdAt ? <span>{formatDateTime(update.createdAt)}</span> : null}
                 </span>
               </div>
-              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-100">
-                {update.body}
-              </p>
+              <SafeRequestContent
+                className="mt-2 text-xs leading-5 text-slate-100"
+                value={update.bodyHtml ?? update.body}
+              />
             </article>
           ))}
         </div>
@@ -6616,7 +7596,10 @@ function WeekAppointmentCard({
   const warning = Boolean(appointment.syncIssue);
   const syncing = request?.warnings.includes("Syncing");
   const reviewRequired = request?.warnings.includes("Review required");
-  const priorityClass = bookingCardPriorityClass(request?.priority);
+  const closed = requestIsClosed(request);
+  const priorityClass = closed
+    ? bookingCardClosedClass()
+    : bookingCardPriorityClass(request?.priority);
 
   return (
     <button
@@ -6657,6 +7640,11 @@ function WeekAppointmentCard({
           {syncing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Syncing" /> : null}
           {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
           {warning ? <MailWarning className="h-3.5 w-3.5 shrink-0" /> : null}
+          {closed ? (
+            <span className="rounded-full border border-slate-300/30 bg-slate-200/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-100">
+              Closed
+            </span>
+          ) : null}
         </span>
       </div>
       <div className="mt-1 line-clamp-2 font-semibold leading-snug">
@@ -6776,7 +7764,10 @@ function TimelineOverlapGroup({
     frontAppointment.end,
     trackWidth,
   );
-  const frontPriorityClass = bookingCardPriorityClass(frontRequest?.priority);
+  const frontClosed = requestIsClosed(frontRequest);
+  const frontPriorityClass = frontClosed
+    ? bookingCardClosedClass()
+    : bookingCardPriorityClass(frontRequest?.priority);
 
   return (
     <div
@@ -6843,7 +7834,8 @@ function TimelineOverlapGroup({
           <span className="shrink-0 rounded-full border border-rose-100/40 bg-rose-100/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-50">
             <span className="flex items-center gap-1">
               <SentimentIcon sentiment={frontRequest?.sentiment} />
-              +{item.overlapCount - 1}
+              {frontClosed ? <span>Closed</span> : null}
+              <span>+{item.overlapCount - 1}</span>
             </span>
           </span>
         </div>
@@ -6963,7 +7955,10 @@ function TimelineAppointment({
   const syncing = request?.warnings.includes("Syncing");
   const reviewRequired = request?.warnings.includes("Review required");
   const segments = getTimelineAppointmentSegments(appointment);
-  const priorityClass = bookingCardPriorityClass(request?.priority);
+  const closed = requestIsClosed(request);
+  const priorityClass = closed
+    ? bookingCardClosedClass()
+    : bookingCardPriorityClass(request?.priority);
   return (
     <>
       <TravelSideExtension
@@ -7030,6 +8025,11 @@ function TimelineAppointment({
             {reviewRequired ? <AlertTriangle className="h-3.5 w-3.5 text-amber-100" aria-label="Review required" /> : null}
             {warning || appointment.travelWarning ? (
               <MailWarning className="h-3.5 w-3.5 shrink-0" />
+            ) : null}
+            {closed ? (
+              <span className="rounded-full border border-slate-300/30 bg-slate-200/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-100">
+                Closed
+              </span>
             ) : null}
           </span>
         </div>
@@ -7185,7 +8185,6 @@ function DetailDrawer({
   integrationState,
   now,
   showIntegrations,
-  onOpenWorkLog,
   onOpenWorkspace,
   onReschedule,
   onSyncCalendar,
@@ -7198,7 +8197,6 @@ function DetailDrawer({
   integrationState?: TrackedIntegrationOperation["state"];
   now: Date;
   showIntegrations: boolean;
-  onOpenWorkLog: (requestId: string, appointmentId?: string) => void;
   onOpenWorkspace: (requestId: string, appointmentId?: string) => void;
   onReschedule: (appointment: Appointment) => void;
   onSyncCalendar: () => void;
@@ -7420,27 +8418,12 @@ function DetailDrawer({
           <div className="grid gap-2">
             <ActionButton
               disabled={!request}
-              icon={<Clock3 className="h-4 w-4" />}
-              onClick={() =>
-                request && onOpenWorkLog(request.id, appointment?.id)
-              }
-              primary={Boolean(request)}
-              title={
-                request
-                  ? "Record a local/test-sync Work Log for this request-backed ticket."
-                  : "Work Log requires a linked helpdesk request."
-              }
-            >
-              Work Log
-            </ActionButton>
-            <ActionButton
-              disabled={!request}
               icon={<MessageSquare className="h-4 w-4" />}
               onClick={() =>
                 request && onOpenWorkspace(request.id, appointment?.id)
               }
               primary={Boolean(request)}
-              title={request ? "Open ticket details and customer communications." : "Comms requires a linked Helpdesk request."}
+              title={request ? "Open ticket details, Comms, Work Log, and Tracks." : "Comms requires a linked Helpdesk request."}
             >
               Comms
             </ActionButton>
@@ -7874,7 +8857,7 @@ function appointmentSearchState(
     return "normal";
   }
 
-  const request = requests.find((candidate) => candidate.id === appointment.requestId);
+  const request = requestForAppointment(requests, appointment);
   const matchesSearch = !hasSearch ||
     appointmentMatchesSearch(appointment, search, request, technicians);
   const matchesHealth = !activeHealth ||
@@ -8073,8 +9056,8 @@ function requestMatchesHealthFilter(
     return !request.scheduledStart;
   }
 
-  const linkedAppointments = appointments.filter(
-    (appointment) => appointment.requestId === request.id,
+  const linkedAppointments = appointments.filter((appointment) =>
+    appointmentBelongsToRequest(appointment, request),
   );
   const requestWarnings = request.warnings.join(" ").toLowerCase();
 
@@ -8341,6 +9324,17 @@ function technicianLabel(technicians: Technician[], technicianId?: string) {
     technicians.find((technician) => technician.id === technicianId)
       ?.displayName ?? "Unassigned"
   );
+}
+
+function technicianIdFromName(technicians: Technician[], name?: string) {
+  const normalizedName = name?.trim().toLowerCase();
+  if (!normalizedName) {
+    return undefined;
+  }
+
+  return technicians.find(
+    (technician) => technician.displayName.trim().toLowerCase() === normalizedName,
+  )?.id;
 }
 
 function formatDuration(minutes: number) {

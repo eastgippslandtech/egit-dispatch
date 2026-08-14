@@ -199,6 +199,170 @@ describe("dispatch dashboard provider", () => {
     expect(listRequests).toHaveBeenCalledWith({ cacheOnly: true });
   });
 
+  it("queues Outlook cleanup when a cancelled Helpdesk request still has a linked calendar booking", async () => {
+    const enqueue = vi.fn(async () => ({ operation: { id: "operation-1" } }));
+    const mspClient = {
+      listRequests: async () => [
+        {
+          ageHours: 1,
+          billable: false,
+          contact: "help@acme.example",
+          customer: "Acme Health",
+          dueAt: "2026-08-04T07:00:00.000Z",
+          id: "6768000001410000",
+          priority: "Medium",
+          readyToBook: false,
+          requester: "Alex",
+          requestNumber: "6768000001410000",
+          scheduledEnd: "2026-08-06T11:00:00+10:00",
+          scheduledStart: "2026-08-06T10:00:00+10:00",
+          site: "Unknown site",
+          slaState: "normal",
+          sourceSystem: "msp-central",
+          status: "Cancelled",
+          subject: "Cancelled printer visit",
+          technicianId: "tech-jervy",
+          warnings: [],
+        },
+      ],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DATABASE_URL: "postgresql://example",
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MICROSOFT_CLIENT_ID: "graph-client",
+        MICROSOFT_CLIENT_SECRET: "graph-secret",
+        MICROSOFT_TENANT_ID: "graph-tenant",
+        MOCK_INTEGRATIONS: "false",
+        MSP_CENTRAL_BASE_URL: "https://msp.example",
+        MSP_CENTRAL_CLIENT_ID: "msp-client",
+        MSP_CENTRAL_CLIENT_SECRET: "msp-secret",
+        MSP_CENTRAL_PORTAL: "egit",
+        MSP_CENTRAL_REFRESH_TOKEN: "msp-refresh",
+      }),
+      {
+        crmClient: null,
+        integrationRepository: { enqueue } as never,
+        mspClient,
+        outlookLoader: vi.fn(async ({ mockData }) => ({
+          ...mockData,
+          appointments: [
+            {
+              calendarOwnerEmail: "jervy@egit.com.au",
+              customer: "Acme Health",
+              date: "2026-08-06",
+              end: "11:00",
+              id: "outlook-jervy-cancelled",
+              outlookEventId: "event-cancelled-jervy",
+              outlookLinkedRequestNumber: "6768000001410000",
+              readOnly: false,
+              requestId: "6768000001410000",
+              source: "outlook",
+              start: "10:00",
+              status: "busy",
+              technicianId: "tech-jervy",
+              title: "6768000001410000 cancelled printer visit",
+            },
+          ],
+          calendarDataSource: "outlook" as const,
+          calendarReadOnly: false,
+          calendarStatusLabel: "Outlook Read/Write",
+        })),
+      },
+    );
+
+    expect(data.appointments).toEqual([]);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "dispatch.cancelled_schedule_cleanup",
+        requestId: "6768000001410000",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            action: "outlook.delete_event",
+            payload: expect.objectContaining({
+              eventId: "event-cancelled-jervy",
+              userPrincipalName: "jervy@egit.com.au",
+            }),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("queues Outlook cleanup for Outlook ticket bookings that no longer have active Helpdesk requests", async () => {
+    const enqueue = vi.fn(async () => ({ operation: { id: "operation-1" } }));
+    const mspClient = {
+      listRequests: async () => [],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DATABASE_URL: "postgresql://example",
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MICROSOFT_CLIENT_ID: "graph-client",
+        MICROSOFT_CLIENT_SECRET: "graph-secret",
+        MICROSOFT_TENANT_ID: "graph-tenant",
+        MOCK_INTEGRATIONS: "false",
+        MSP_CENTRAL_BASE_URL: "https://msp.example",
+        MSP_CENTRAL_CLIENT_ID: "msp-client",
+        MSP_CENTRAL_CLIENT_SECRET: "msp-secret",
+        MSP_CENTRAL_PORTAL: "egit",
+        MSP_CENTRAL_REFRESH_TOKEN: "msp-refresh",
+      }),
+      {
+        crmClient: null,
+        integrationRepository: { enqueue } as never,
+        mspClient,
+        outlookLoader: vi.fn(async ({ mockData }) => ({
+          ...mockData,
+          appointments: [
+            {
+              calendarOwnerEmail: "mattd@egit.com.au",
+              customer: "Outlook calendar",
+              date: "2026-08-06",
+              end: "11:00",
+              id: "outlook-matt-orphan",
+              outlookEventId: "event-orphan-matt",
+              outlookLinkedRequestNumber: "237692",
+              readOnly: true,
+              requestId: "237692",
+              source: "outlook",
+              start: "10:00",
+              status: "busy",
+              technicianId: "tech-matt",
+              title: "[CW 237692] CD Ripping and Burning",
+            },
+          ],
+          calendarDataSource: "outlook" as const,
+          calendarReadOnly: false,
+          calendarStatusLabel: "Outlook Read/Write",
+        })),
+      },
+    );
+
+    expect(data.appointments).toEqual([]);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "dispatch.orphaned_outlook_cleanup",
+        requestId: "outlook-orphan:237692",
+        steps: [
+          expect.objectContaining({
+            action: "outlook.delete_event",
+            payload: expect.objectContaining({
+              eventId: "event-orphan-matt",
+              userPrincipalName: "mattd@egit.com.au",
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("keeps Helpdesk requests visible when Outlook dashboard loading stalls", async () => {
     vi.useFakeTimers();
     const mspClient = {

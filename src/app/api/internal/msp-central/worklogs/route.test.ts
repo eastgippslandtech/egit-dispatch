@@ -120,6 +120,30 @@ describe("MSP Central Work Log route", () => {
       .toBeLessThan(queued.steps.findIndex((step: { stepKey: string }) => step.stepKey === "msp:status:resolved"));
   });
 
+  it("queues ticket 22385 without waiting for a live MSP Central owner lookup", async () => {
+    resolveOwnerMock.mockRejectedValueOnce(new Error("MSP Central unavailable"));
+
+    const response = await POST(
+      requestWith({
+        ...command(),
+        idempotencyKey: "worklog:22385:save",
+        requestId: "22385",
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      idempotencyKey: "worklog:22385:save",
+      ok: true,
+      status: "queued",
+    });
+    expect(resolveOwnerMock).not.toHaveBeenCalled();
+    expect(enqueued[0]).toMatchObject({
+      actorEmail: "simeon@egit.com.au",
+      requestId: "22385",
+    });
+  });
+
   it("migrates a legacy saved Work Log without writing it twice", async () => {
     migrate.mockImplementationOnce(async ({ command: submitted, createOperation }) => {
       enqueued.push(createOperation(submitted, true));

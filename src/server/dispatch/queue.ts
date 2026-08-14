@@ -28,7 +28,7 @@ export function requestMatchesDispatchQueue(
   currentTechnicianId?: string,
   seenRequestIds: ReadonlySet<string> = new Set(),
 ) {
-  if (request.status === "Resolved") return false;
+  if (request.status === "Resolved" || request.status === "Cancelled") return false;
 
   switch (view) {
     case "new":

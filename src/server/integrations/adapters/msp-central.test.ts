@@ -86,6 +86,41 @@ describe("MSP Central integration adapters", () => {
     ).resolves.toMatchObject({ externalId: "worklog-9", reconciled: true });
   });
 
+  it("resolves a Work Log owner from email during background processing", async () => {
+    const addRequestWorklog = vi.fn().mockResolvedValue(undefined);
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestWorklog,
+        listRequestWorklogs: vi.fn().mockResolvedValue([]),
+        listTechnicians: vi.fn().mockResolvedValue([
+          {
+            mspCentralEmail: "external.tech@egit.com.au",
+            mspCentralTechnicianId: "msp-external-tech",
+          },
+        ]),
+      }),
+    });
+
+    await adapters["msp.add_worklog"].execute(
+      step("msp.add_worklog", {
+        description: "Replaced the failed power supply.",
+        durationMinutes: 15,
+        endedAt: "2026-08-04T10:15:00+10:00",
+        ownerEmail: "external.tech@egit.com.au",
+        requestId: "22385",
+        startedAt: "2026-08-04T10:00:00+10:00",
+        worklogType: "billable",
+      }),
+    );
+
+    expect(addRequestWorklog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: "msp-external-tech",
+        requestId: "22385",
+      }),
+    );
+  });
+
   it("requires review when an ambiguous Work Log cannot be proven", async () => {
     const adapters = createMspCentralAdapters({
       client: client({
@@ -185,11 +220,12 @@ describe("MSP Central integration adapters", () => {
   });
 
   it("sends customer Comms as an email reply notification", async () => {
+    const addRequestReply = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("connection reset"), { code: "ECONNRESET" }));
     const adapters = createMspCentralAdapters({
       client: client({
-        addRequestReply: vi
-          .fn()
-          .mockRejectedValue(Object.assign(new Error("connection reset"), { code: "ECONNRESET" })),
+        addRequestReply,
         listRequestNotifications: vi.fn().mockResolvedValue([
           {
             description: "<p>Your printer is back online.</p>",
@@ -205,6 +241,7 @@ describe("MSP Central integration adapters", () => {
       adapters["msp.send_reply"].execute(
         step("msp.send_reply", {
           description: "Your printer is back online.",
+          actorEmail: "simeon@egit.com.au",
           occurredAt: new Date(1785801600000).toISOString(),
           requestId: "request-42",
           showToRequester: true,
@@ -212,6 +249,89 @@ describe("MSP Central integration adapters", () => {
         }),
       ),
     ).resolves.toMatchObject({ externalId: "reply-3", reconciled: true });
+    expect(addRequestReply).toHaveBeenCalledWith({
+      actorEmail: "simeon@egit.com.au",
+      description: "Your printer is back online.",
+      requestId: "request-42",
+    });
+  });
+
+  it("reconciles customer Comms when MSP Central records the conversation as an email", async () => {
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestReply: vi
+          .fn()
+          .mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        listRequestNotifications: vi.fn().mockResolvedValue([
+          {
+            description: "<div>Your archive login has been reset.</div>",
+            id: "email-7",
+            sent_time: { value: "1785801600000" },
+            subject: "Re: Ticket #237673, Retailer Archive Webapp",
+            type: "email",
+          },
+        ]),
+      }),
+    });
+
+    await expect(
+      adapters["msp.send_reply"].execute(
+        step("msp.send_reply", {
+          description: "Your archive login has been reset.",
+          occurredAt: new Date(1785801600000).toISOString(),
+          requestId: "request-42",
+          showToRequester: true,
+          visibility: "customer",
+        }),
+      ),
+    ).resolves.toMatchObject({ externalId: "email-7", reconciled: true });
+  });
+
+  it("does not mark a customer Comms reply synced until the outbound conversation is visible", async () => {
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestReply: vi.fn().mockResolvedValue(undefined),
+        listRequestNotifications: vi.fn().mockResolvedValue([]),
+      }),
+    });
+
+    await expect(
+      adapters["msp.send_reply"].execute(
+        step("msp.send_reply", {
+          description: "Your archive login has been reset.",
+          occurredAt: new Date(1785801600000).toISOString(),
+          requestId: "request-42",
+          showToRequester: true,
+          visibility: "customer",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AmbiguousIntegrationError);
+  });
+
+  it("keeps the provider rejection reason on ambiguous customer Comms failures", async () => {
+    const providerError = Object.assign(
+      new Error("MSP Central API request failed with status 500. Mail server not configured."),
+      { status: 500 },
+    );
+    const adapters = createMspCentralAdapters({
+      client: client({
+        addRequestReply: vi.fn().mockRejectedValue(providerError),
+        listRequestNotifications: vi.fn().mockResolvedValue([]),
+      }),
+    });
+
+    await expect(
+      adapters["msp.send_reply"].execute(
+        step("msp.send_reply", {
+          actorEmail: "simeon@egit.com.au",
+          description: "Your archive login has been reset.",
+          occurredAt: new Date(1785801600000).toISOString(),
+          requestId: "request-42",
+          showToRequester: true,
+          visibility: "customer",
+        }),
+      ),
+    ).rejects.toThrow(/Mail server not configured/);
   });
 
   it("keeps internal Comms as a private request note", async () => {

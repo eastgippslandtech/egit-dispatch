@@ -49,6 +49,8 @@ export function FailedActions({
           <div className="divide-y divide-white/[0.07]">
             {actions.map((action) => {
               const busy = busyAction?.operationId === action.id;
+              const needsAbsentConfirmation =
+                requiresAbsentConfirmation(action);
               const retrying =
                 busy && busyAction.action === "retry" && !busyAction.confirmedAbsent;
               const retryingConfirmedAbsent =
@@ -84,12 +86,22 @@ export function FailedActions({
                         aria-busy={retrying}
                         className="inline-flex items-center gap-1.5 rounded-md border border-sky-300/20 bg-sky-400/10 px-2.5 py-1.5 text-xs font-semibold text-sky-100 disabled:opacity-50"
                         disabled={busy}
-                        title="Retry this action after reviewing the provider error"
+                        title={
+                          needsAbsentConfirmation
+                            ? "Safely recheck MSP Central before attempting any duplicate write"
+                            : "Retry this action after reviewing the provider error"
+                        }
                         type="button"
                         onClick={() => onRetry(action.id, false)}
                       >
                         {retrying ? null : <RefreshCw className="h-3.5 w-3.5" />}
-                        {retrying ? "Retrying..." : "Retry"}
+                        {retrying
+                          ? needsAbsentConfirmation
+                            ? "Rechecking..."
+                            : "Retrying..."
+                          : needsAbsentConfirmation
+                            ? "Recheck MSP Central"
+                            : "Retry"}
                       </button>
                     ) : null}
                     {action.state === "review_required" ? (
@@ -182,6 +194,13 @@ function actionLabel(actionType: string) {
     "schedule.booking": "Schedule booking",
   };
   return labels[actionType] ?? actionType.replace(/[._-]+/g, " ");
+}
+
+function requiresAbsentConfirmation(action: FailedActionSummary) {
+  if (action.state !== "review_required") return false;
+  return /may have accepted the write|unknown prior outcome/i.test(
+    action.lastError ?? "",
+  );
 }
 
 function actionStateLabel(state: IntegrationOperationState) {

@@ -48,6 +48,19 @@ describe("MSP Central request mappers", () => {
       {
         account: { name: "Fixture Customer" },
         assets: [{ name: "Fixture printer" }],
+        attachments: [
+          {
+            content_type: "image/jpeg",
+            file_name: "switch-photo.jpg",
+            id: "attachment-1",
+            size: "2048",
+            url: "https://helpdesk.example/attachments/attachment-1",
+          },
+          {
+            filename: "quote.pdf",
+            id: "attachment-2",
+          },
+        ],
         category: { name: "Hardware" },
         description: "Printer queue is stuck after driver update.",
         due_by_time: "2026-07-09T12:00:00+10:00",
@@ -95,6 +108,22 @@ describe("MSP Central request mappers", () => {
       technicianId: "tech-matt",
     });
     expect(request.assetNames).toEqual(["Fixture printer"]);
+    expect(request.attachments).toEqual([
+      {
+        byteLength: 2048,
+        fileName: "switch-photo.jpg",
+        id: "attachment-1",
+        mimeType: "image/jpeg",
+        url: "https://helpdesk.example/attachments/attachment-1",
+      },
+      {
+        byteLength: undefined,
+        fileName: "quote.pdf",
+        id: "attachment-2",
+        mimeType: undefined,
+        url: undefined,
+      },
+    ]);
     expect(request).toMatchObject({
       category: "Hardware",
       item: "Printer",
@@ -241,7 +270,9 @@ describe("MSP Central request mappers", () => {
         id: "msp-detail-1",
         requester: {
           email_id: "requester@example.com",
+          mobile: "0400 111 222",
           name: "Requesting User",
+          phone: "03 5152 4450",
         },
       },
       { now },
@@ -249,9 +280,32 @@ describe("MSP Central request mappers", () => {
 
     expect(request).toMatchObject({
       contact: "requester@example.com",
+      contactEmail: "requester@example.com",
+      contactPhone: "03 5152 4450",
       customer: "Client Company",
       notes: "Printer is offline.\nPlease call reception & confirm access.",
+      notesHtml:
+        "<p>Printer is offline.</p><p>Please call reception &amp; confirm access.</p>",
     });
+  });
+
+  it("preserves request description links for Command Centre display", () => {
+    const request = mapMspCentralRequest(
+      {
+        description:
+          '<p>Customer Job #: 06148405</p><p><a href="https://jobs.example.com/go/06148405">Go to job</a></p><p><a href="https://jobs.example.com/take/06148405">Take this job</a></p>',
+        id: "msp-detail-links",
+      },
+      { now },
+    );
+
+    expect(request.notes).toContain("Go to job");
+    expect(request.notesHtml).toContain(
+      'href="https://jobs.example.com/go/06148405"',
+    );
+    expect(request.notesHtml).toContain(
+      'href="https://jobs.example.com/take/06148405"',
+    );
   });
 
   it("uses MSP Central account address fields when no site address is present", () => {
@@ -273,6 +327,51 @@ describe("MSP Central request mappers", () => {
     expect(request).toMatchObject({
       customer: "Bairnsdale Tyre Service",
       siteAddress: "12 Service Street, Bairnsdale VIC 3875",
+      siteAddressSource: "msp-central",
+      siteTown: "Bairnsdale",
+    });
+  });
+
+  it("uses a full MSP Central account billing address block", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: {
+          billing_address: "167 BOSWORTH ROAD\nBAIRNSDALE, VIC 3875\nAustralia",
+          name: "ABL Refrigeration Airconditioning Services",
+        },
+        request_number: "REQ-MSP-BILLING-ADDRESS",
+        site: { name: "Unknown site" },
+      },
+      { now },
+    );
+
+    expect(request).toMatchObject({
+      customer: "ABL Refrigeration Airconditioning Services",
+      siteAddress: "167 BOSWORTH ROAD, BAIRNSDALE, VIC 3875, Australia",
+      siteAddressSource: "msp-central",
+      siteTown: "Bairnsdale",
+    });
+  });
+
+  it("composes MSP Central customer address fields from address, city, state, and postal code", () => {
+    const request = mapMspCentralRequest(
+      {
+        account: {
+          address: "1 Rovan Place",
+          city: "Bairnsdale",
+          name: "Bairnsdale Bearings Tools & Industrial",
+          postal_code: "3875",
+          state: "VIC",
+        },
+        request_number: "REQ-MSP-CUSTOMER-ADDRESS",
+        site: { name: "Unknown site" },
+      },
+      { now },
+    );
+
+    expect(request).toMatchObject({
+      customer: "Bairnsdale Bearings Tools & Industrial",
+      siteAddress: "1 Rovan Place, Bairnsdale VIC 3875",
       siteAddressSource: "msp-central",
       siteTown: "Bairnsdale",
     });
@@ -320,6 +419,12 @@ describe("MSP Central request mappers", () => {
       "Scheduled",
     );
     expect(mapMspCentralStatus("closed")).toBe("Resolved");
+    expect(mapMspCentralStatus("closed", "2026-07-09T09:00:00+10:00")).toBe(
+      "Resolved",
+    );
+    expect(mapMspCentralStatus("cancelled", "2026-07-09T09:00:00+10:00")).toBe(
+      "Cancelled",
+    );
     expect(mapMspCentralSlaState("violated", undefined, now)).toBe("overdue");
     expect(
       mapMspCentralSlaState(
@@ -399,12 +504,39 @@ describe("MSP Central request mappers", () => {
           sent_time: { value: "1785801600000" },
           type: "reply",
         },
+        {
+          description: "<p>Your archive login has been reset.</p>",
+          id: "notification-2",
+          sender: { email_id: "support@egit.com.au", name: "Support" },
+          sent_time: { value: "1785801900000" },
+          type: "email",
+        },
+        {
+          description: "<p>Not sure if it is me but the login fails.</p>",
+          id: "notification-3",
+          sender: { email_id: "sales@giantbairnsdale.com.au", name: "Sales" },
+          time: { value: "1786408039809" },
+          type: "CONVERSATION",
+        },
       ]),
     ).toEqual([
       expect.objectContaining({
         author: "Simeon",
         body: "Your printer is back online.",
+        bodyHtml: "<p>Your printer is back online.</p>",
         id: "notification-1",
+      }),
+      expect.objectContaining({
+        author: "Support",
+        body: "Your archive login has been reset.",
+        bodyHtml: "<p>Your archive login has been reset.</p>",
+        id: "notification-2",
+      }),
+      expect.objectContaining({
+        author: "Sales",
+        body: "Not sure if it is me but the login fails.",
+        createdAt: new Date(1786408039809).toISOString(),
+        id: "notification-3",
       }),
     ]);
   });

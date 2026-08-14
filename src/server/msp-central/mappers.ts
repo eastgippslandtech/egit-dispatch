@@ -15,6 +15,7 @@ import {
 import { bookingTypeForRequest } from "@/server/dispatch/booking";
 import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type {
+  MspCentralRawAttachment,
   MspCentralRawNotification,
   MspCentralRawRequest,
   MspCentralRawRequestNote,
@@ -81,6 +82,7 @@ export function mapMspCentralRequest(
     readPriorityStatusName(raw.customer) ??
     "Unknown customer";
   const notes = htmlToPlainText(raw.description);
+  const notesHtml = htmlDisplayContent(raw.description);
   const inferredSiteTown = findKnownSiteTown([
     readString(raw.subject),
     notes,
@@ -116,20 +118,31 @@ export function mapMspCentralRequest(
     autoAssignment ? ADVANCED_WORKS_AUTO_ASSIGNMENT_WARNING : undefined,
     scheduledStart && !scheduledEnd ? "Scheduled end time missing" : undefined,
   ].filter((warning): warning is string => Boolean(warning));
+  const contactEmail =
+    readString(raw.requester?.email) ??
+    readString(raw.requester?.email_id) ??
+    readString(raw.requester_email);
+  const contactPhone =
+    readString(raw.requester?.phone) ??
+    readString(raw.requester?.phone_number) ??
+    readString(raw.requester?.mobile) ??
+    readString(raw.requester?.mobile_number) ??
+    readString(raw.requester?.contact_number) ??
+    readString(raw.requester_phone) ??
+    readString(raw.requester_mobile);
 
   const request: DispatchRequest = {
     id: readString(raw.id) ?? requestNumber,
     ageHours: estimateAgeHours(readDateTime(raw.created_time), now),
+    attachments: mapMspCentralRequestAttachments(raw.attachments),
     assetNames: raw.assets
       ?.map((asset) => readString(asset.name))
       .filter((asset): asset is string => Boolean(asset)),
     billable: Boolean(raw.is_billable ?? raw.billable),
     category: readPriorityStatusName(raw.category),
-    contact:
-      readString(raw.requester?.email) ??
-      readString(raw.requester?.email_id) ??
-      readString(raw.requester_email) ??
-      "Unknown contact",
+    contact: contactEmail ?? contactPhone ?? "Unknown contact",
+    contactEmail,
+    contactPhone,
     customer,
     crmAccountId: readString(raw.account?.id),
     dueAt,
@@ -139,6 +152,7 @@ export function mapMspCentralRequest(
     ),
     item: readPriorityStatusName(raw.item),
     notes,
+    notesHtml,
     onsite: optionalBoolean(raw.is_onsite ?? raw.onsite),
     priority: mapMspCentralPriority(readPriorityStatusName(raw.priority)),
     readyToBook: isReadyToBook(raw, scheduledStart),
@@ -201,6 +215,35 @@ export function mapMspCentralRequests(
   return rawRequests.map((request) => mapMspCentralRequest(request, options));
 }
 
+export function mapMspCentralRequestAttachments(
+  attachments: MspCentralRawAttachment[] | null | undefined = [],
+) {
+  return (attachments ?? [])
+    .map((attachment, index) => {
+      const fileName =
+        readString(attachment.file_name) ??
+        readString(attachment.filename) ??
+        readString(attachment.name);
+      if (!fileName) {
+        return undefined;
+      }
+
+      return {
+        id: readString(attachment.id) ?? `attachment-${index + 1}`,
+        byteLength: readAttachmentByteLength(attachment.size),
+        fileName,
+        mimeType: readString(attachment.content_type),
+        url:
+          readString(attachment.url) ??
+          readString(attachment.href) ??
+          readString(attachment.attachment_url),
+      };
+    })
+    .filter((attachment): attachment is NonNullable<typeof attachment> =>
+      Boolean(attachment),
+    );
+}
+
 export function mapMspCentralTechnicians(
   rawTechnicians: MspCentralRawTechnician[] = [],
   profiles: StaffProfile[] = getInitialStaffProfiles(),
@@ -254,12 +297,16 @@ export function mapMspCentralStatus(
 ): RequestStatus {
   const normalized = value?.trim().toLowerCase();
 
-  if (scheduledStart || normalized === "scheduled") {
-    return "Scheduled";
-  }
-
   if (normalized === "resolved" || normalized === "closed") {
     return "Resolved";
+  }
+
+  if (normalized === "cancelled" || normalized === "canceled") {
+    return "Cancelled";
+  }
+
+  if (scheduledStart || normalized === "scheduled") {
+    return "Scheduled";
   }
 
   if (normalized?.includes("ready")) {
@@ -379,6 +426,7 @@ export function mapMspCentralRequestNotes(
         readString(note.created_by?.email) ??
         "Unknown author",
       body,
+      bodyHtml: htmlDisplayContent(note.description),
       createdAt: readDateTime(note.created_time),
       id: readString(note.id) ?? `request-note-${index}`,
     };
@@ -402,7 +450,7 @@ export function mapMspCentralRequestNotifications(
   notifications: MspCentralRawNotification[] = [],
 ) {
   return notifications.flatMap((notification, index) => {
-    if (notification.type?.trim().toLowerCase() !== "reply") return [];
+    if (!isCustomerConversationNotification(notification.type)) return [];
     const body = htmlToPlainText(notification.description);
     if (!body) return [];
 
@@ -413,11 +461,21 @@ export function mapMspCentralRequestNotifications(
           readString(notification.sender?.email_id) ??
           "Helpdesk",
         body,
-        createdAt: readDateTime(notification.sent_time),
+        bodyHtml: htmlDisplayContent(notification.description),
+        createdAt: readDateTime(notification.sent_time ?? notification.time),
         id: readString(notification.id) ?? `request-notification-${index}`,
       } satisfies MspCentralRequestUpdate,
     ];
   });
+}
+
+export function isCustomerConversationNotification(type?: string | null) {
+  const normalized = type?.trim().toLowerCase();
+  return (
+    normalized === "reply" ||
+    normalized === "email" ||
+    normalized === "conversation"
+  );
 }
 
 export function mapMspCentralRequestWorklogs(
@@ -431,6 +489,7 @@ export function mapMspCentralRequestWorklogs(
       readString(worklog.created_by?.email_id) ??
       "Unknown technician",
     body: htmlToPlainText(worklog.description) || "Work logged.",
+    bodyHtml: htmlDisplayContent(worklog.description),
     createdAt:
       readDateTime(worklog.recorded_time) ??
       readDateTime(worklog.start_time) ??
@@ -542,9 +601,24 @@ function findKnownSiteTown(values: Array<string | undefined>) {
 }
 
 function readMspCentralSiteAddress(raw: MspCentralRawRequest) {
+  const accountShippingAddress = readString(raw.account?.shipping_address);
+  const accountBillingAddress = readString(raw.account?.billing_address);
+
   return firstUsableAddress(
-    { address: readString(raw.site?.address), city: readString(raw.site?.city) },
-    { address: readString(raw.site_address), city: readString(raw.site?.city) },
+    formatStructuredAddress({
+      city: raw.site?.city,
+      code: raw.site?.code ?? raw.site?.postal_code ?? raw.site?.zip,
+      country: raw.site?.country,
+      state: raw.site?.state,
+      street: raw.site?.address,
+    }),
+    formatStructuredAddress({
+      city: raw.site?.city,
+      code: raw.site?.code ?? raw.site?.postal_code ?? raw.site?.zip,
+      country: raw.site?.country,
+      state: raw.site?.state,
+      street: raw.site_address,
+    }),
     formatStructuredAddress({
       city: raw.site?.city,
       code: raw.site?.code ?? raw.site?.postal_code ?? raw.site?.zip,
@@ -559,6 +633,7 @@ function readMspCentralSiteAddress(raw: MspCentralRawRequest) {
       state: raw.account?.shipping_state,
       street: raw.account?.shipping_street,
     }),
+    fullAddressCandidate(accountShippingAddress, raw.account?.shipping_city),
     formatStructuredAddress({
       city: raw.account?.billing_city,
       code: raw.account?.billing_code,
@@ -566,15 +641,28 @@ function readMspCentralSiteAddress(raw: MspCentralRawRequest) {
       state: raw.account?.billing_state,
       street: raw.account?.billing_street,
     }),
-    { address: readString(raw.account?.address), city: readString(raw.account?.city) },
+    fullAddressCandidate(accountBillingAddress, raw.account?.billing_city),
     formatStructuredAddress({
       city: raw.account?.city,
       code: raw.account?.postal_code ?? raw.account?.zip,
       country: raw.account?.country,
       state: raw.account?.state,
-      street: raw.account?.street,
+      street: raw.account?.address ?? raw.account?.street,
     }),
   );
+}
+
+function fullAddressCandidate(
+  address?: string,
+  city?: string | null,
+) {
+  const cleanAddress = cleanAddressText(address);
+  if (!cleanAddress) return undefined;
+
+  return {
+    address: cleanAddress,
+    city: readString(city) ?? findKnownSiteTown([cleanAddress]),
+  };
 }
 
 function firstUsableAddress(
@@ -604,6 +692,17 @@ function formatStructuredAddress(parts: {
   const address = [street, locality, country].filter(Boolean).join(", ");
 
   return { address, city };
+}
+
+function cleanAddressText(value?: string) {
+  return value
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(", ")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,+/g, ",")
+    .trim() || undefined;
 }
 
 function isUsableStreetAddress(address?: string) {
@@ -732,6 +831,17 @@ function readString(value: unknown) {
   return text ? text : undefined;
 }
 
+function readAttachmentByteLength(value: unknown) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim())
+        : Number.NaN;
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function readMspCentralDisplayRequestNumber(raw: MspCentralRawRequest) {
   return (
     readString(raw.display_id) ??
@@ -768,6 +878,10 @@ export function htmlToPlainText(value?: string | null) {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim() || undefined;
+}
+
+function htmlDisplayContent(value?: string | null) {
+  return value?.trim() || undefined;
 }
 
 function readDateTime(value: unknown) {

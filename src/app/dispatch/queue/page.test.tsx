@@ -6,6 +6,7 @@ import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
 
 import DispatchQueuePage from "./page";
+import { QueueScheduleModal } from "./queue-schedule-modal";
 
 const routerRefresh = vi.fn();
 const routerPush = vi.fn();
@@ -121,6 +122,44 @@ test("confirms a schedule from the queue and refreshes it in place", async () =>
   );
   expect(routerRefresh).toHaveBeenCalled();
   expect(routerPush).not.toHaveBeenCalled();
+
+  fetchMock.mockRestore();
+});
+
+test("accepts a live queue schedule locally when provider confirmation stalls", async () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  const onScheduled = vi.fn();
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(() => new Promise<Response>(() => undefined));
+
+  render(
+    <QueueScheduleModal
+      dashboard={{
+        ...data,
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+      }}
+      request={request}
+      onCancel={vi.fn()}
+      onScheduled={onScheduled}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+
+  await waitFor(() =>
+    expect(onScheduled).toHaveBeenCalledWith(
+      `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+    ),
+  );
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/internal/dispatch/live-schedule",
+    expect.objectContaining({ method: "POST" }),
+  );
 
   fetchMock.mockRestore();
 });

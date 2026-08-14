@@ -31,6 +31,7 @@ export type DispatchConfig = {
     clientSecret?: string;
     timezone: string;
   };
+  notificationEmailFrom?: string;
 };
 
 const requiredLiveKeys = [
@@ -94,6 +95,9 @@ export function readDispatchConfig(env: DispatchEnv = process.env): DispatchConf
         normalizedEnv.GRAPH_CALENDAR_TIMEZONE ??
         "AUS Eastern Standard Time",
     },
+    notificationEmailFrom:
+      normalizedEnv.COMMAND_CENTRE_NOTIFICATION_FROM_EMAIL ??
+      "support@egit.com.au",
   };
 }
 

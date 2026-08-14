@@ -719,6 +719,77 @@ describe("technician navigation", () => {
     }
   });
 
+  it("refreshes an expired mobile session before starting lunch", async () => {
+    const liveRileySession: TechnicianSession = {
+      ...approvedRileySession,
+      mobileSession: {
+        accessToken: "expired-access-riley",
+        expiresAt: "2026-07-26T02:00:00.000Z",
+        refreshToken: "refresh-riley",
+        staffEmail: riley.email,
+      },
+    };
+    sessionRefreshMock.refreshMobileSession.mockResolvedValue({
+      accessToken: "fresh-access-riley",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      refreshToken: "fresh-refresh-riley",
+      staffEmail: riley.email,
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              override: {
+                endsAt: "2026-07-26T02:30:00.000Z",
+                id: "lunch",
+                status: "lunch",
+              },
+            },
+            meta: {
+              requestId: "mobile-test",
+              serverTime: "2026-07-26T02:00:00.000Z",
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    try {
+      const profile = renderProfileSettings(liveRileySession);
+      await pressButtonAsync(profile, "Start lunch");
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        "https://command.egit.com.au/api/mobile/v1/presence",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer expired-access-riley",
+          }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        "https://command.egit.com.au/api/mobile/v1/presence",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer fresh-access-riley",
+          }),
+        }),
+      );
+      expect(textValues(profile.root).join("\n")).toContain(
+        "Lunch started: 30 minutes",
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("only allows lunch once per local day", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-30T02:00:00.000Z"));

@@ -390,24 +390,38 @@ describe("mobile API service", () => {
     });
   });
 
-  it("defers reconciliation of an Outlook copy so schedule reads do not wait for MSP Central", async () => {
-    const linkedRequest = getDispatchDesignMockData().requests[0];
+  it("promotes a linked Outlook copy to a writable Helpdesk job before returning mobile jobs", async () => {
+    const linkedRequest = {
+      ...getDispatchDesignMockData().requests[0],
+      id: "6768000001422000",
+      requestNumber: "22240",
+      subject: "RSS JOB 101091, RSS, SALE COLLEGE - SALE",
+    };
     const linkedAppointment: Appointment = {
       ...outlookAppointment,
       id: "outlook-tech-riley-event-linked-1",
       outlookEventId: "event-linked-1",
       outlookLinkedRequestNumber: linkedRequest.requestNumber,
-      title: `${linkedRequest.requestNumber} ${linkedRequest.subject}`,
+      title: `[CW ${linkedRequest.requestNumber}] ${linkedRequest.subject}`,
     };
+    const linkedDatabaseJob: DatabaseJobRow = {
+      ...dbJob,
+      id: "00000000-0000-4000-8000-000000022240",
+      outlookEventId: "event-linked-1",
+      sdpRequestId: linkedRequest.id,
+      sdpRequestNumber: linkedRequest.requestNumber,
+    };
+    const listJobsForStaff = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([linkedDatabaseJob]);
     const save = vi.fn().mockResolvedValue(undefined);
     let reconciliationTask: (() => Promise<void>) | undefined;
 
     const response = await listMobileJobs({
       auth: rileyMobileAuth,
       database: createDatabase({
-        async listJobsForStaff() {
-          return [];
-        },
+        listJobsForStaff,
       }),
       deferReconciliation(task) {
         reconciliationTask = task;
@@ -421,20 +435,20 @@ describe("mobile API service", () => {
       to: "2026-07-14",
     });
 
-    expect(save).not.toHaveBeenCalled();
     expect(response.jobs).toHaveLength(1);
     expect(response.jobs[0]).toMatchObject({
-      id: "outlook-tech-riley-event-linked-1",
+      id: "00000000-0000-4000-8000-000000022240",
       outlookEventId: "event-linked-1",
-      source: "outlook",
+      requestNumber: "22240",
+      source: "msp_central",
       permissions: expect.objectContaining({
-        canComplete: false,
-        canStartTimer: false,
-        canWriteWorklog: false,
+        canComplete: true,
+        canStartTimer: true,
+        canWriteWorklog: true,
       }),
     });
-
-    await reconciliationTask?.();
+    expect(reconciliationTask).toBeUndefined();
+    expect(listJobsForStaff).toHaveBeenCalledTimes(2);
 
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({

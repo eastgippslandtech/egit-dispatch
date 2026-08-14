@@ -148,6 +148,31 @@ describe("FailedActions", () => {
     expect(onRetry).toHaveBeenCalledWith("operation-review", true);
   });
 
+  it("offers a safe recheck when a write may already have reached MSP Central", () => {
+    const onRetry = vi.fn();
+    render(
+      <FailedActions
+        actions={[
+          {
+            ...action("operation-review", "review_required"),
+            actionType: "helpdesk.communication",
+            lastError:
+              "MSP Central may have accepted the write; manual review is required before retrying.",
+          },
+        ]}
+        busyAction={undefined}
+        onCancel={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Recheck MSP Central" }));
+    expect(onRetry).toHaveBeenCalledWith("operation-review", false);
+    expect(
+      screen.getByRole("button", { name: "Confirm absent and retry" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows which recovery action is pending", () => {
     render(
       <FailedActions

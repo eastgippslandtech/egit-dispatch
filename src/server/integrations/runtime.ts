@@ -4,11 +4,14 @@ import { readDispatchConfig } from "@/server/dispatch/env";
 import { getConfiguredDispatchLinkStore } from "@/server/dispatch/link-store";
 import { createGraphClient } from "@/server/graph/client";
 import { createMspCentralClient } from "@/server/msp-central/client";
+import { getConfiguredNotificationRepository } from "@/server/notifications/repository";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
 
 import { createCommandCentreAdapters } from "./adapters/command-centre";
+import { createEmailAdapters } from "./adapters/email";
 import { createMspCentralAdapters } from "./adapters/msp-central";
 import { createOutlookAdapters } from "./adapters/outlook";
+import { createPushNotificationAdapters } from "./adapters/push";
 import { createIntegrationProcessor } from "./processor";
 import { createIntegrationAdapterRegistry } from "./registry";
 import { createPostgresIntegrationRepository } from "./repository";
@@ -17,9 +20,17 @@ export function createConfiguredIntegrationWorker() {
   const config = readDispatchConfig();
   const databaseUrl = requiredDatabaseUrl(config.databaseUrl);
   const repository = createPostgresIntegrationRepository({ databaseUrl });
+  const graphClient = createGraphClient(config.microsoft);
   const adapters = {
+    ...createPushNotificationAdapters({
+      repository: getConfiguredNotificationRepository(databaseUrl),
+    }),
     ...createMspCentralAdapters({ client: createMspCentralClient(config) }),
-    ...createOutlookAdapters({ graphClient: createGraphClient(config.microsoft) }),
+    ...createOutlookAdapters({ graphClient }),
+    ...createEmailAdapters({
+      fromUserPrincipalName: config.notificationEmailFrom,
+      graphClient,
+    }),
     ...createCommandCentreAdapters({
       dispatchLinkStore: getConfiguredDispatchLinkStore(databaseUrl),
       invalidate: async () => {

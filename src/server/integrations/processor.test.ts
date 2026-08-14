@@ -146,6 +146,41 @@ describe("integration processor", () => {
     });
   });
 
+  it("adds the parent operation actor email to legacy step payloads during execution", async () => {
+    const step = makeStep({
+      action: "msp.send_reply",
+      payload: {
+        description: "Reply from Command Centre.",
+        requestId: "request-42",
+      },
+    });
+    const harness = createHarness([step]);
+    harness.repository.getOperation = vi.fn(async () => ({
+      ...makeOperation("operation-1"),
+      actorEmail: "simeon@egit.com.au",
+    }));
+    const execute = vi.fn().mockResolvedValue({});
+    const processor = createIntegrationProcessor({
+      clock: () => now,
+      jitter: (delay) => delay,
+      registry: createIntegrationAdapterRegistry({
+        "msp.send_reply": { execute, writeSafety: "non_idempotent" },
+      }),
+      repository: harness.repository,
+      workerId: "worker-a",
+    });
+
+    await processor.processDue();
+
+    expect(execute).toHaveBeenCalledWith({
+      ...step,
+      payload: {
+        ...step.payload,
+        actorEmail: "simeon@egit.com.au",
+      },
+    });
+  });
+
   it.each([
     [1, 1],
     [2, 5],

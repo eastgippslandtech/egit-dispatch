@@ -135,15 +135,21 @@ export function QueueScheduleModal({
       );
 
       if (liveSchedule) {
-        const result = await publishLiveSchedule({
+        onScheduled(
+          `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+        );
+        void publishLiveSchedule({
           appointmentId,
           bookingType,
           crew,
           customer: request.customer,
           date: pending.date,
+          description: request.notes,
           end: pending.end,
           eventId: leadAppointment?.outlookEventId,
+          helpdeskUrl: request.helpdeskUrl,
           idempotencyKey,
+          latestUpdate: latestRequestUpdateSummary(request),
           location: request.siteAddress ?? request.site,
           previousAssignments,
           priority: request.priority,
@@ -173,8 +179,15 @@ export function QueueScheduleModal({
             dashboard.technicians,
             pending.technicianId,
           ),
+        }).catch((scheduleError) => {
+          console.warn("Queue schedule sync could not be confirmed.", {
+            message:
+              scheduleError instanceof Error
+                ? scheduleError.message
+                : "Unknown live schedule error.",
+            requestId: request.id,
+          });
         });
-        onScheduled(scheduleReceiptMessage(request.requestNumber, result.status));
         return;
       }
 
@@ -480,19 +493,16 @@ function technicianMspCentralId(
     ?.mspCentralTechnicianId ?? undefined;
 }
 
+function latestRequestUpdateSummary(request: DispatchRequest) {
+  if (!request.updateInfo) return undefined;
+  return [request.updateInfo.summary, request.updateInfo.detail]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(": ");
+}
+
 function createClientCommandId(prefix: string) {
   const id =
     globalThis.crypto?.randomUUID?.() ??
     `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${prefix}:${id}`;
-}
-
-function scheduleReceiptMessage(requestNumber: string, status?: string) {
-  if (status === "review_required") {
-    return `${requestNumber} was saved locally, but provider sync needs review.`;
-  }
-  if (status === "synced") {
-    return `${requestNumber} scheduled in MSP Central and Outlook.`;
-  }
-  return `${requestNumber} scheduled. Syncing with MSP Central and Outlook.`;
 }

@@ -104,7 +104,7 @@ function filterResolvedLiveRequests(
   }
 
   const requests = dashboard.requests.filter(
-    (request) => request.status !== "Resolved",
+    (request) => request.status !== "Resolved" && request.status !== "Cancelled",
   );
 
   if (requests.length === dashboard.requests.length) {

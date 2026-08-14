@@ -63,6 +63,8 @@ describe("Dispatch presence controls", () => {
   });
 
   it("sets manual Leave with a reason and required end time", async () => {
+    const leaveEndsAt = "2026-07-27T17:30";
+
     render(<PresenceControls technicians={[technician]} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Team status" }));
@@ -74,7 +76,7 @@ describe("Dispatch presence controls", () => {
       target: { value: "Sick" },
     });
     fireEvent.change(within(panel).getByLabelText("Leave until"), {
-      target: { value: "2026-07-27T17:30" },
+      target: { value: leaveEndsAt },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Confirm Leave" }));
 
@@ -84,13 +86,28 @@ describe("Dispatch presence controls", () => {
         expect.objectContaining({
           body: JSON.stringify({
             action: "set_leave",
-            endsAt: "2026-07-27T17:30",
+            endsAt: new Date(leaveEndsAt).toISOString(),
             reason: "Sick",
             technicianId: technician.id,
           }),
           method: "POST",
         }),
       ),
+    );
+  });
+
+  it("uses 15-minute intervals for manual Leave end times", async () => {
+    render(<PresenceControls technicians={[technician]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Team status" }));
+    const panel = await screen.findByRole("dialog", { name: "Team status" });
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Set Leave for Jervy" }),
+    );
+
+    expect(within(panel).getByLabelText("Leave until")).toHaveAttribute(
+      "step",
+      "900",
     );
   });
 

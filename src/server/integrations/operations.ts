@@ -29,14 +29,18 @@ export type ScheduleOperationInput = {
   crew?: ScheduleTechnician[];
   customer?: string;
   date: string;
+  description?: string;
   end: string;
+  helpdeskUrl?: string;
   idempotencyKey: string;
+  latestUpdate?: string;
   lead: ScheduleTechnician;
   location?: string;
   previousAssignments?: PreviousScheduleAssignment[];
   priority?: Priority;
   requestId: string;
   requestNumber: string;
+  scheduleAction?: "scheduled" | "rescheduled";
   sourceVersion?: string;
   start: string;
   subject: string;
@@ -46,7 +50,8 @@ export type WorklogOperationInput = {
   actorEmail: string;
   calendarAssignments?: PreviousScheduleAssignment[];
   command: WorklogDispositionCommand;
-  ownerId: string;
+  ownerEmail?: string;
+  ownerId?: string;
   sourceVersion?: string;
   worklogAlreadySaved?: boolean;
 };
@@ -63,14 +68,26 @@ export type CommunicationOperationInput = {
 
 export type CreateRequestOperationInput = {
   actorEmail: string;
+  category?: string;
   customer?: string;
+  customerId?: string;
+  contactId?: string;
   description?: string;
+  impact?: string;
+  impactDetails?: string;
   idempotencyKey: string;
   priority: "Critical" | "High" | "Medium" | "Low";
+  requestType?: string;
   requesterEmail?: string;
   site?: string;
   sourceVersion?: string;
+  status?: string;
+  subcategory?: string;
   subject: string;
+  technicianEmail?: string;
+  technicianId?: string;
+  technicianName?: string;
+  urgency?: string;
 };
 
 export type MergeOperationInput = {
@@ -78,6 +95,31 @@ export type MergeOperationInput = {
   childRequestId: string;
   idempotencyKey: string;
   parentRequestId: string;
+  sourceVersion?: string;
+};
+
+export type CancelledScheduleCleanupOperationInput = {
+  actorEmail: string;
+  events: Array<{
+    eventId: string;
+    technicianId?: string;
+    userPrincipalName: string;
+  }>;
+  idempotencyKey: string;
+  requestId: string;
+  requestNumber: string;
+  sourceVersion?: string;
+};
+
+export type OrphanedOutlookCleanupOperationInput = {
+  actorEmail: string;
+  events: Array<{
+    eventId: string;
+    requestNumber: string;
+    technicianId?: string;
+    userPrincipalName: string;
+  }>;
+  idempotencyKey: string;
   sourceVersion?: string;
 };
 
@@ -131,8 +173,11 @@ export function scheduleOperation(
     crew,
     customer: clean(input.customer),
     date: scheduleWindow.startDate,
+    description: clean(input.description),
     end: scheduleWindow.end,
     endDate: scheduleWindow.endDate,
+    helpdeskUrl: clean(input.helpdeskUrl),
+    latestUpdate: clean(input.latestUpdate),
     lead,
     location: clean(input.location),
     previousAssignments,
@@ -171,6 +216,41 @@ export function scheduleOperation(
     requestId: input.requestId,
     sourceVersion: input.sourceVersion,
     steps: [
+      ...pushNotificationSteps({
+        actorEmail: input.actorEmail,
+        customer: input.customer,
+        eventType:
+          input.scheduleAction === "rescheduled"
+            ? "schedule_changed"
+            : "assignment",
+        idempotencyKey: input.idempotencyKey,
+        requestId: input.requestId,
+        requestNumber: input.requestNumber,
+        subject: input.subject,
+        technicians: [lead, ...crew],
+        title:
+          input.scheduleAction === "rescheduled"
+            ? "Schedule changed"
+            : "Ticket assigned",
+      }),
+      ...technicianScheduleEmailSteps({
+        bookingType: input.bookingType,
+        customer: input.customer,
+        description: input.description,
+        eventType:
+          input.scheduleAction === "rescheduled" ? "rescheduled" : "assignment",
+        helpdeskUrl: input.helpdeskUrl,
+        idempotencyKey: input.idempotencyKey,
+        latestUpdate: input.latestUpdate,
+        requestId: input.requestId,
+        requestNumber: input.requestNumber,
+        scheduledDate: scheduleWindow.startDate,
+        scheduledEnd: scheduleWindow.end,
+        scheduledStart: scheduleWindow.start,
+        site: input.location,
+        subject: input.subject,
+        technicians: [lead, ...crew],
+      }),
       step("msp_central", "msp.schedule_request", "msp:schedule", {
         requestId: input.requestId,
         scheduledEnd,
@@ -215,6 +295,72 @@ export function scheduleOperation(
   });
 }
 
+export function cancelledScheduleCleanupOperation(
+  input: CancelledScheduleCleanupOperationInput,
+): EnqueueIntegrationOperation {
+  const assignments = uniqueAssignments(
+    input.events.map((event) => ({
+      eventId: event.eventId,
+      technicianId: event.technicianId ?? "unknown",
+      userPrincipalName: event.userPrincipalName,
+    })),
+  ).sort(byTechnicianId);
+  if (assignments.length === 0) {
+    throw new Error("At least one linked Outlook event is required.");
+  }
+  const steps: EnqueueIntegrationOperation["steps"] = [];
+  appendCalendarCleanup(steps, assignments);
+  steps.push(clearScheduleStep(input.requestId), refreshStep(input.requestId));
+
+  return operation({
+    actionType: "dispatch.cancelled_schedule_cleanup",
+    actorEmail: input.actorEmail,
+    idempotencyKey: input.idempotencyKey,
+    payload: jsonRecord({
+      events: assignments,
+      requestId: input.requestId,
+      requestNumber: input.requestNumber,
+    }),
+    requestId: input.requestId,
+    sourceVersion: input.sourceVersion,
+    steps,
+  });
+}
+
+export function orphanedOutlookCleanupOperation(
+  input: OrphanedOutlookCleanupOperationInput,
+): EnqueueIntegrationOperation {
+  const assignments = uniqueAssignments(
+    input.events.map((event) => ({
+      eventId: event.eventId,
+      technicianId: event.technicianId ?? "unknown",
+      userPrincipalName: event.userPrincipalName,
+    })),
+  ).sort(byTechnicianId);
+  if (assignments.length === 0) {
+    throw new Error("At least one orphaned Outlook event is required.");
+  }
+  const requestNumbers = [
+    ...new Set(input.events.map((event) => event.requestNumber).filter(Boolean)),
+  ].sort();
+  const requestId = `outlook-orphan:${requestNumbers[0] ?? "unknown"}`;
+  const steps: EnqueueIntegrationOperation["steps"] = [];
+  appendCalendarCleanup(steps, assignments);
+
+  return operation({
+    actionType: "dispatch.orphaned_outlook_cleanup",
+    actorEmail: input.actorEmail,
+    idempotencyKey: input.idempotencyKey,
+    payload: jsonRecord({
+      events: assignments,
+      requestNumbers,
+    }),
+    requestId,
+    sourceVersion: input.sourceVersion,
+    steps,
+  });
+}
+
 export function worklogOperation(
   input: WorklogOperationInput,
 ): EnqueueIntegrationOperation {
@@ -243,6 +389,7 @@ export function worklogOperation(
           durationMinutes: command.durationMinutes,
           endedAt: command.endedAt,
           ownerId: input.ownerId,
+          ownerEmail: input.ownerEmail ?? input.actorEmail,
           requestId: command.requestId,
           startedAt: command.startedAt,
           worklogType: command.workType,
@@ -256,7 +403,12 @@ export function worklogOperation(
     actionType: "helpdesk.worklog",
     actorEmail: input.actorEmail,
     idempotencyKey: command.idempotencyKey,
-    payload: jsonRecord({ assignments, command, ownerId: input.ownerId }),
+    payload: jsonRecord({
+      assignments,
+      command,
+      ownerEmail: input.ownerEmail ?? input.actorEmail,
+      ownerId: input.ownerId,
+    }),
     requestId: command.requestId,
     sourceVersion: input.sourceVersion,
     steps,
@@ -268,6 +420,7 @@ export function communicationOperation(
 ): EnqueueIntegrationOperation {
   const visibility = input.visibility === "internal" ? "internal" : "customer";
   const payload = jsonRecord({
+    actorEmail: input.actorEmail,
     contentFingerprint: fingerprintPayload(input.body.trim()),
     description: input.body.trim(),
     occurredAt: input.occurredAt,
@@ -300,12 +453,24 @@ export function createRequestOperation(
   input: CreateRequestOperationInput,
 ): EnqueueIntegrationOperation {
   const request = jsonRecord({
+    category: clean(input.category),
     customer: clean(input.customer),
+    customerId: clean(input.customerId),
+    contactId: clean(input.contactId),
     description: clean(input.description),
+    impact: clean(input.impact),
+    impactDetails: clean(input.impactDetails),
     priority: input.priority,
+    requestType: clean(input.requestType),
     requesterEmail: clean(input.requesterEmail)?.toLowerCase(),
     site: clean(input.site),
+    status: clean(input.status) ?? "Open",
+    subcategory: clean(input.subcategory),
     subject: input.subject.trim(),
+    technicianEmail: clean(input.technicianEmail)?.toLowerCase(),
+    technicianId: clean(input.technicianId),
+    technicianName: clean(input.technicianName),
+    urgency: clean(input.urgency),
   });
   const commandFingerprint = fingerprintPayload(request);
   const pendingRequestId = `pending:${commandFingerprint.slice(0, 24)}`;
@@ -363,6 +528,244 @@ export function mergeOperation(
       ),
     ],
   });
+}
+
+function technicianScheduleEmailSteps({
+  bookingType,
+  customer,
+  description,
+  eventType,
+  helpdeskUrl,
+  idempotencyKey,
+  latestUpdate,
+  requestId,
+  requestNumber,
+  scheduledDate,
+  scheduledEnd,
+  scheduledStart,
+  site,
+  subject,
+  technicians,
+}: {
+  bookingType?: BookingType;
+  customer?: string;
+  description?: string;
+  eventType: "assignment" | "rescheduled";
+  helpdeskUrl?: string;
+  idempotencyKey: string;
+  latestUpdate?: string;
+  requestId: string;
+  requestNumber: string;
+  scheduledDate: string;
+  scheduledEnd: string;
+  scheduledStart: string;
+  site?: string;
+  subject: string;
+  technicians: ScheduleTechnician[];
+}): EnqueueIntegrationOperation["steps"] {
+  const unique = uniqueTechnicians(technicians);
+  return unique
+    .map((technician) => {
+      const toEmail = clean(technician.technicianEmail) ?? clean(technician.userPrincipalName);
+      if (!toEmail) return undefined;
+      const payload = technicianScheduleEmailPayload({
+        bookingType,
+        customer,
+        description,
+        eventKey: `${idempotencyKey}:email:${eventType}:${technician.technicianId}`,
+        helpdeskUrl,
+        latestUpdate,
+        requestId,
+        requestNumber,
+        scheduledDate,
+        scheduledEnd,
+        scheduledStart,
+        site,
+        subject,
+        technicianName: technician.technicianName,
+        toEmail,
+      });
+      return step(
+        "email",
+        "email.send_technician_schedule_confirmation",
+        `email:${eventType}:${technician.technicianId}`,
+        payload,
+      );
+    })
+    .filter((emailStep): emailStep is EnqueueIntegrationOperation["steps"][number] =>
+      Boolean(emailStep),
+    );
+}
+
+function technicianScheduleEmailPayload(input: {
+  bookingType?: BookingType;
+  customer?: string;
+  description?: string;
+  eventKey: string;
+  helpdeskUrl?: string;
+  latestUpdate?: string;
+  requestId: string;
+  requestNumber: string;
+  scheduledDate: string;
+  scheduledEnd: string;
+  scheduledStart: string;
+  site?: string;
+  subject: string;
+  technicianName?: string;
+  toEmail: string;
+}) {
+  const context = {
+    ...input,
+    bookingType: input.bookingType,
+    customer: clean(input.customer),
+    description: clean(input.description),
+    helpdeskUrl:
+      clean(input.helpdeskUrl) ??
+      `https://command.egit.com.au/tickets/${encodeURIComponent(input.requestNumber)}`,
+    latestUpdate: clean(input.latestUpdate),
+    site: clean(input.site),
+    technicianName: clean(input.technicianName),
+  };
+  return jsonRecord({
+    ...context,
+    html: buildTechnicianScheduleEmailHtml(context),
+    plainText: buildTechnicianScheduleEmailText(context),
+    subjectLine: `Scheduled: ${input.requestNumber} ${input.subject}`,
+  });
+}
+
+function buildTechnicianScheduleEmailText(input: {
+  bookingType?: BookingType;
+  customer?: string;
+  description?: string;
+  helpdeskUrl: string;
+  latestUpdate?: string;
+  requestNumber: string;
+  scheduledDate: string;
+  scheduledEnd: string;
+  scheduledStart: string;
+  site?: string;
+  subject: string;
+  technicianName?: string;
+}) {
+  return [
+    `Ticket scheduled: ${input.requestNumber}`,
+    input.subject,
+    "",
+    input.technicianName ? `Technician: ${input.technicianName}` : undefined,
+    input.customer ? `Customer: ${input.customer}` : undefined,
+    input.site ? `Site: ${input.site}` : undefined,
+    input.bookingType ? `Booking type: ${input.bookingType}` : undefined,
+    `When: ${input.scheduledDate} ${input.scheduledStart}-${input.scheduledEnd}`,
+    "",
+    input.description ? `Description:\n${input.description}` : undefined,
+    input.latestUpdate ? `Latest update:\n${input.latestUpdate}` : undefined,
+    `Helpdesk: ${input.helpdeskUrl}`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function buildTechnicianScheduleEmailHtml(input: {
+  bookingType?: BookingType;
+  customer?: string;
+  description?: string;
+  helpdeskUrl: string;
+  latestUpdate?: string;
+  requestNumber: string;
+  scheduledDate: string;
+  scheduledEnd: string;
+  scheduledStart: string;
+  site?: string;
+  subject: string;
+  technicianName?: string;
+}) {
+  const rows = [
+    ["Technician", input.technicianName],
+    ["Customer", input.customer],
+    ["Site", input.site],
+    ["Booking type", input.bookingType],
+    ["When", `${input.scheduledDate} ${input.scheduledStart}-${input.scheduledEnd}`],
+  ].filter(([, value]) => Boolean(value));
+
+  return [
+    "<div>",
+    `<h2>Ticket scheduled: ${escapeHtml(input.requestNumber)}</h2>`,
+    `<p><strong>${escapeHtml(input.subject)}</strong></p>`,
+    "<table>",
+    ...rows.map(
+      ([label, value]) =>
+        `<tr><td><strong>${escapeHtml(label ?? "")}</strong></td><td>${escapeHtml(value ?? "")}</td></tr>`,
+    ),
+    "</table>",
+    input.description
+      ? `<h3>Description</h3><p>${escapeHtml(input.description).replace(/\n/g, "<br />")}</p>`
+      : undefined,
+    input.latestUpdate
+      ? `<h3>Latest update</h3><p>${escapeHtml(input.latestUpdate).replace(/\n/g, "<br />")}</p>`
+      : undefined,
+    `<p><a href="${escapeAttribute(input.helpdeskUrl)}">Open ticket in Helpdesk</a></p>`,
+    "</div>",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeAttribute(value: string) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
+}
+
+function pushNotificationSteps({
+  actorEmail,
+  customer,
+  eventType,
+  idempotencyKey,
+  requestId,
+  requestNumber,
+  subject,
+  technicians,
+  title,
+}: {
+  actorEmail: string;
+  customer?: string;
+  eventType: "assignment" | "schedule_changed";
+  idempotencyKey: string;
+  requestId: string;
+  requestNumber: string;
+  subject: string;
+  technicians: ScheduleTechnician[];
+  title: string;
+}): EnqueueIntegrationOperation["steps"] {
+  const actor = normalizeEmail(actorEmail);
+  return technicians
+    .filter((technician) => !isActorTechnician(actor, technician))
+    .map((technician) =>
+      step("push", "push.notify", `push:${eventType}:${technician.technicianId}`, {
+        body: `${requestNumber}: ${subject}`,
+        customer: clean(customer),
+        eventKey: `${idempotencyKey}:push:${eventType}:${technician.technicianId}`,
+        eventType,
+        requestId,
+        requestNumber,
+        technicianId: technician.technicianId,
+        title,
+      }),
+    );
+}
+
+function isActorTechnician(actorEmail: string, technician: ScheduleTechnician) {
+  return [technician.technicianEmail, technician.userPrincipalName].some(
+    (email) => normalizeEmail(email) === actorEmail,
+  );
 }
 
 function appendDispositionSteps(
@@ -776,4 +1179,8 @@ function melbourneOffsetMilliseconds(instant: Date) {
 
 function clean(value?: string) {
   return value?.trim() || undefined;
+}
+
+function normalizeEmail(value?: string) {
+  return value?.trim().toLowerCase() ?? "";
 }

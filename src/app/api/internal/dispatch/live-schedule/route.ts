@@ -22,9 +22,12 @@ type LiveScheduleCommand = {
   crew?: LiveScheduleCrewMember[];
   customer?: string;
   date?: string;
+  description?: string;
   end?: string;
   eventId?: string;
+  helpdeskUrl?: string;
   idempotencyKey?: string;
+  latestUpdate?: string;
   location?: string;
   priority?: Priority;
   previousAssignments?: LiveSchedulePreviousAssignment[];
@@ -86,8 +89,11 @@ export async function POST(request: Request) {
         })),
         customer: command.customer,
         date: command.date,
+        description: command.description,
         end: command.end,
+        helpdeskUrl: command.helpdeskUrl,
         idempotencyKey: command.idempotencyKey,
+        latestUpdate: command.latestUpdate,
         lead: {
           eventId: command.eventId,
           mspCentralTechnicianId: command.technicianMspCentralId,
@@ -101,6 +107,7 @@ export async function POST(request: Request) {
         priority: command.priority,
         requestId: command.requestId,
         requestNumber: command.requestNumber,
+        scheduleAction: command.scheduleAction,
         sourceVersion: command.sourceVersion,
         start: command.start,
         subject: command.subject,
@@ -336,9 +343,12 @@ function validateCommand(command: LiveScheduleCommand, request: Request) {
     }>,
     customer: clean(command.customer),
     date: command.date!,
+    description: clean(command.description),
     end: command.end!,
     eventId: clean(command.eventId),
+    helpdeskUrl: clean(command.helpdeskUrl),
     idempotencyKey: requireIdempotencyKey(request, command.idempotencyKey),
+    latestUpdate: clean(command.latestUpdate),
     location: clean(command.location),
     previousAssignments,
     priority: validPriority(command.priority),

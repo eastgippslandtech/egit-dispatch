@@ -400,6 +400,41 @@ describe("technician presence derivation", () => {
     });
   });
 
+  it("treats all-day Outlook leave marked Free as Leave ahead of same-day meetings", () => {
+    expect(
+      derive({
+        appointments: [
+          appointment({
+            bookingType: undefined,
+            isAllDay: true,
+            outlookIssue: "all-day",
+            outlookShowAs: "free",
+            requestId: undefined,
+            source: "outlook",
+            start: "09:00",
+            end: "17:00",
+            title: "Annual leave",
+          }),
+          appointment({
+            bookingType: undefined,
+            id: "meeting-event",
+            outlookShowAs: "busy",
+            requestId: undefined,
+            source: "outlook",
+            start: "12:00",
+            end: "12:30",
+            title: "Operations meeting",
+          }),
+        ],
+        requests: [],
+      }),
+    ).toMatchObject({
+      context: "Annual leave",
+      source: "outlook",
+      status: "leave",
+    });
+  });
+
   it("reports lower-priority overlapping activities without leaking Personal details", () => {
     const result = derive({
       appointments: [

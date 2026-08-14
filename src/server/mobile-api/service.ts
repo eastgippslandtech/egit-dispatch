@@ -77,6 +77,7 @@ type ResolvedTimerJob = {
 };
 
 const MOBILE_OUTLOOK_READ_TIMEOUT_MS = 3_000;
+const MOBILE_LINK_RECONCILIATION_TIMEOUT_MS = 2_500;
 
 export const rileyMobileAuth: MobileAuthContext = {
   email: "riley@egit.com.au",
@@ -126,21 +127,35 @@ export async function listMobileJobs({
       staffPromise,
       listTestSyncedMobileJobs({ auth, from, to }),
     ]);
-    const [jobs, outlookJobs] = await Promise.all([
+    const [initialJobs, outlookJobs] = await Promise.all([
       database.listJobsForStaff({ from, staffId: staff.id, to }),
       listOutlookMobileJobs({ from, outlookCalendar, staff, to }),
     ]);
-    const mappedJobs = jobs.map(mapDatabaseJob);
+    let jobs = initialJobs;
+    let mappedJobs = jobs.map(mapDatabaseJob);
+    const reconciliationPromise = reconcileLinkedOutlookJobs({
+      jobs: mappedJobs,
+      linkStore,
+      mspClient,
+      outlookJobs,
+      staff,
+    });
+    const reconciled = await withMobileProviderTimeout(
+      reconciliationPromise,
+      MOBILE_LINK_RECONCILIATION_TIMEOUT_MS,
+      "Mobile linked Outlook reconciliation timed out.",
+    ).catch((error) => {
+      console.error("Mobile linked Outlook reconciliation was deferred", safeError(error));
+      deferReconciliation?.(() =>
+        reconciliationPromise.then(() => undefined, () => undefined),
+      );
+      return false;
+    });
+    if (reconciled) {
+      jobs = await database.listJobsForStaff({ from, staffId: staff.id, to });
+      mappedJobs = jobs.map(mapDatabaseJob);
+    }
 
-    deferReconciliation?.(() =>
-      reconcileLinkedOutlookJobs({
-        jobs: mappedJobs,
-        linkStore,
-        mspClient,
-        outlookJobs,
-        staff,
-      }).then(() => undefined),
-    );
     const linkedOutlookEventIds = new Set(
       [...mappedJobs, ...testJobs]
         .map((job) => job.outlookEventId)
@@ -768,7 +783,7 @@ async function reconcileLinkedOutlookJobs({
 function normalizeRequestNumber(value?: string | null) {
   const clean = value?.trim();
   if (!clean) return undefined;
-  return clean.match(/\d{6,}/)?.[0] ?? clean.toUpperCase();
+  return clean.match(/\d{5,}/)?.[0] ?? clean.toUpperCase();
 }
 
 function extractEmail(value?: string) {

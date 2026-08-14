@@ -44,6 +44,7 @@ function event(overrides: Partial<MicrosoftGraphEvent> = {}): MicrosoftGraphEven
 
 describe("Graph event mapper", () => {
   it("extracts ServiceDesk request numbers from subject or body preview", () => {
+    expect(extractLinkedRequestNumber("[CW 22240] RSS job")).toBe("22240");
     expect(extractLinkedRequestNumber("REQ-100211 Server work")).toBe("100211");
     expect(extractLinkedRequestNumber("SDP 100246 upgrade")).toBe("100246");
     expect(extractLinkedRequestNumber("No request", "Ticket #100368")).toBe("100368");

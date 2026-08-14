@@ -215,6 +215,128 @@ describe("Graph client", () => {
     );
   });
 
+  it("sends technician schedule emails through Microsoft Graph sendMail", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "token-value" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+      });
+
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    await client.sendMail({
+      fromUserPrincipalName: "support@egit.com.au",
+      html: "<p>Ticket scheduled</p>",
+      plainText: "Ticket scheduled",
+      subject: "Scheduled: 22240 RSS job",
+      to: "jervy@egit.com.au",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://graph.microsoft.com/v1.0/users/support%40egit.com.au/sendMail",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-value",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+      message: {
+        body: {
+          content: "<p>Ticket scheduled</p>",
+          contentType: "HTML",
+        },
+        subject: "Scheduled: 22240 RSS job",
+        toRecipients: [
+          {
+            emailAddress: {
+              address: "jervy@egit.com.au",
+            },
+          },
+        ],
+      },
+      saveToSentItems: true,
+    });
+  });
+
+  it("explains when technician email is missing the Microsoft Graph Mail.Send app role", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        access_token: fakeGraphToken(["Calendars.Read", "Calendars.ReadWrite"]),
+      }),
+    });
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    await expect(
+      client.sendMail({
+        fromUserPrincipalName: "support@egit.com.au",
+        plainText: "Ticket scheduled",
+        subject: "Scheduled: 22240 RSS job",
+        to: "jervy@egit.com.au",
+      }),
+    ).rejects.toThrow(
+      "Microsoft Graph Mail.Send application permission is not granted for technician email.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends technician email when the Graph token includes Mail.Send", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: fakeGraphToken([
+            "Calendars.ReadWrite",
+            "Mail.Send",
+          ]),
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+      });
+    const client = createGraphClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      fetchImpl: fetchMock,
+      tenantId: "tenant-id",
+    });
+
+    await client.sendMail({
+      fromUserPrincipalName: "support@egit.com.au",
+      plainText: "Ticket scheduled",
+      subject: "Scheduled: 22240 RSS job",
+      to: "jervy@egit.com.au",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://graph.microsoft.com/v1.0/users/support%40egit.com.au/sendMail",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("reads one Outlook event for mobile schedule detail", async () => {
     const fetchMock = vi
       .fn()
@@ -295,3 +417,14 @@ describe("Graph client", () => {
     ).toHaveLength(1);
   });
 });
+
+function fakeGraphToken(roles: string[]) {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value))
+      .toString("base64url");
+  return [
+    encode({ alg: "none", typ: "JWT" }),
+    encode({ roles }),
+    "signature",
+  ].join(".");
+}

@@ -11,11 +11,10 @@ import { fingerprintPayload } from "@/server/integrations/fingerprint";
 import { integrationRouteErrorStatus } from "@/server/integrations/http";
 import { worklogOperation } from "@/server/integrations/operations";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
-import { createMspCentralClient } from "@/server/msp-central/client";
+import { findStaffForZohoLogin } from "@/server/staff/profiles";
 import { validateWorklogDispositionCommand } from "@/server/worklogs/disposition";
 import { createPostgresWorklogMigrationCoordinator } from "@/server/worklogs/migration";
 import { createPostgresWorklogOutcomeStore } from "@/server/worklogs/outcome-store";
-import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
@@ -51,11 +50,8 @@ export async function POST(request: Request) {
         );
       }
     }
-    const mspClient = createMspCentralClient(config);
-    const owner = await resolveMspCentralWorklogOwner({
-      email: access.email,
-      mspClient,
-    });
+    const ownerId = findStaffForZohoLogin(access.email)?.mspCentralTechnicianId
+      ?.trim();
     const outcomeStore = createPostgresWorklogOutcomeStore({
       databaseUrl: config.databaseUrl,
     });
@@ -80,7 +76,8 @@ export async function POST(request: Request) {
           actorEmail: access.email,
           calendarAssignments,
           command: queuedCommand,
-          ownerId: owner.id,
+          ownerEmail: access.email,
+          ownerId,
           worklogAlreadySaved,
         }),
     });

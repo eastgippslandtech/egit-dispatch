@@ -7,7 +7,8 @@ export type RequestStatus =
   | "Open"
   | "Ready for Scheduling"
   | "Scheduled"
-  | "Resolved";
+  | "Resolved"
+  | "Cancelled";
 export type SyncStatus =
   | "linked"
   | "needs-review"
@@ -52,9 +53,11 @@ export type DispatchRequest = {
   id: string;
   requestNumber: string;
   subject: string;
+  attachments?: DispatchRequestAttachment[];
   sourceSystem?: "mock" | "msp-central-fixture" | "msp-central" | "command-centre-db";
   helpdeskUrl?: string;
   notes?: string;
+  notesHtml?: string;
   updatedAt?: string;
   updatedByEmail?: string;
   updateInfo?: {
@@ -79,6 +82,8 @@ export type DispatchRequest = {
   mockTravelMinutes?: number;
   requester: string;
   contact: string;
+  contactEmail?: string;
+  contactPhone?: string;
   priority: Priority;
   sentiment?: RequestSentiment;
   status: RequestStatus;
@@ -96,6 +101,14 @@ export type DispatchRequest = {
   slaState: SlaState;
   warnings: string[];
   activeTimer?: ActiveDispatchTimer;
+};
+
+export type DispatchRequestAttachment = {
+  id: string;
+  fileName: string;
+  byteLength?: number;
+  mimeType?: string;
+  url?: string;
 };
 
 export type ActiveDispatchTimer = {

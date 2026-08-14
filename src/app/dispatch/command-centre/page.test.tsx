@@ -75,6 +75,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function openSelectedDrawerWorkLogTab() {
+  fireEvent.click(
+    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
+      name: "Comms",
+    }),
+  );
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("tab", { name: "Work Log" }));
+  return workspace;
+}
+
 test("renders the locked Command Centre prototype with shared mock data", async () => {
   render(await CommandCentrePage());
 
@@ -304,6 +315,8 @@ test("queue-opened request requires an explicit booking for Work Log", () => {
     />,
   );
 
+  fireEvent.click(screen.getByRole("button", { name: "Assigned jobs" }));
+
   fireEvent.click(
     within(screen.getByTestId("request-queue")).getByRole("button", {
       name: `Open ${request.requestNumber} ticket workspace`,
@@ -319,9 +332,8 @@ test("queue-opened request requires an explicit booking for Work Log", () => {
   expect(workLogButton).toBeEnabled();
   fireEvent.click(workLogButton);
 
-  const workLog = screen.getByRole("dialog", { name: "Work Log" });
-  expect(workLog).toBeInTheDocument();
-  expect(within(workLog).getByText("11:00-12:00")).toBeInTheDocument();
+  expect(within(workspace).getByRole("region", { name: "Work Log" })).toBeInTheDocument();
+  expect(within(workspace).getByText("11:00-12:00")).toBeInTheDocument();
 });
 
 test("live scheduling supports a lead technician and additional crew", () => {
@@ -457,7 +469,30 @@ test("live schedule publishing times out instead of leaving the modal spinning",
   expect(outcome).toMatch(/timed out/i);
 });
 
-test("shows clear pending feedback while creating a request", () => {
+test("shows clear pending feedback while creating a request", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/internal/msp-central/lookups")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              customers: [
+                {
+                  address: "1 Rovan Place, Bairnsdale VIC 3875",
+                  id: "customer-1",
+                  name: "Bairnsdale Bearings",
+                },
+              ],
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          ),
+        );
+      }
+      if (init?.method === "POST") return new Promise(() => undefined);
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    }),
+  );
   render(
     <CreateRequestModal
       onCancel={vi.fn()}
@@ -468,12 +503,321 @@ test("shows clear pending feedback while creating a request", () => {
   fireEvent.change(screen.getByLabelText("Subject"), {
     target: { value: "Prepare a new laptop" },
   });
-  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+  fireEvent.change(screen.getByLabelText("Customer"), {
+    target: { value: "Bairnsdale" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.click(screen.getByRole("button", {
+    name: /Bairnsdale Bearings/i,
+  }));
   fireEvent.click(screen.getByRole("button", { name: "Create request" }));
 
   const button = screen.getByRole("button", { name: "Creating request..." });
   expect(button).toBeDisabled();
   expect(button).toHaveAttribute("aria-busy", "true");
+});
+
+test("loads customer contacts and autofills requester email for a new request", async () => {
+  const fetchMock = vi.fn((url: string) => {
+    const textUrl = String(url);
+    if (textUrl.includes("type=customers")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            customers: [
+              {
+                address: "1 Rovan Place, Bairnsdale VIC 3875",
+                id: "customer-1",
+                name: "Bairnsdale Bearings",
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        ),
+      );
+    }
+    if (textUrl.includes("type=contacts")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            contacts: [
+              {
+                email: "mireille@example.com",
+                id: "contact-1",
+                name: "Mireille",
+                phone: "0351432432",
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<CreateRequestModal onCancel={vi.fn()} onCreated={vi.fn()} />);
+
+  fireEvent.change(screen.getByLabelText("Customer"), {
+    target: { value: "Bairnsdale" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Bairnsdale Bearings/i }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining("type=contacts"),
+    expect.any(Object),
+  );
+  expect(screen.getByLabelText("Requester")).toHaveValue("Mireille");
+  expect(screen.getByLabelText("Requester email")).toHaveValue(
+    "mireille@example.com",
+  );
+  expect(screen.getByLabelText("Site")).toHaveValue(
+    "1 Rovan Place, Bairnsdale VIC 3875",
+  );
+});
+
+test("offers to create a customer when customer search has no matches", async () => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    const textUrl = String(url);
+    if (textUrl.includes("type=customers")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ customers: [] }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    }
+    if (init?.method === "POST") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            customer: {
+              address: "10 Main Street, Bairnsdale, VIC, 3875",
+              city: "Bairnsdale",
+              id: "customer-new-1",
+              name: "Wildlife Rescue",
+            },
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 201 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<CreateRequestModal onCancel={vi.fn()} onCreated={vi.fn()} />);
+
+  fireEvent.change(screen.getByLabelText("Customer"), {
+    target: { value: "Wildlife Rescue" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: 'Create customer "Wildlife Rescue"' }),
+  );
+
+  const customerDialog = screen.getByRole("dialog", { name: "Create customer" });
+  fireEvent.change(within(customerDialog).getByLabelText("Address"), {
+    target: { value: "10 Main Street" },
+  });
+  fireEvent.change(within(customerDialog).getByLabelText("City"), {
+    target: { value: "Bairnsdale" },
+  });
+  fireEvent.change(within(customerDialog).getByLabelText("State"), {
+    target: { value: "VIC" },
+  });
+  fireEvent.change(within(customerDialog).getByLabelText("Postcode"), {
+    target: { value: "3875" },
+  });
+  await act(async () => {
+    fireEvent.click(
+      within(customerDialog).getByRole("button", { name: "Create customer" }),
+    );
+    await Promise.resolve();
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/internal/msp-central/lookups",
+    expect.objectContaining({ method: "POST" }),
+  );
+  const createCall = fetchMock.mock.calls.find(
+    ([url, init]) =>
+      url === "/api/internal/msp-central/lookups" && init?.method === "POST",
+  );
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    address: "10 Main Street",
+    city: "Bairnsdale",
+    name: "Wildlife Rescue",
+    postalCode: "3875",
+    state: "VIC",
+    type: "customer",
+  });
+  expect(screen.getByLabelText("Customer")).toHaveValue("Wildlife Rescue");
+  expect(screen.getByLabelText("Site")).toHaveValue(
+    "10 Main Street, Bairnsdale, VIC, 3875",
+  );
+});
+
+test("submits Helpdesk request classification fields from the create request form", async () => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    const textUrl = String(url);
+    if (textUrl.includes("type=request-options")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            options: {
+              categories: ["Hardware", "Network"],
+              impacts: ["Affects Business", "Affects User"],
+              priorities: ["Low", "Medium", "High", "Critical"],
+              requestTypes: ["Incident", "Service Request"],
+              subcategories: ["Printer", "Switching"],
+              urgencies: ["Low", "Normal", "High", "Urgent"],
+            },
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        ),
+      );
+    }
+    if (textUrl.includes("type=customers")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            customers: [
+              {
+                id: "customer-1",
+                name: "Example Co",
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        ),
+      );
+    }
+    if (textUrl.includes("type=contacts")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ contacts: [] }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    }
+    if (init?.method === "POST") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            operationId: "operation-create-1",
+            pendingRequestId: "pending:create-1",
+            status: "queued",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 202 },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<CreateRequestModal onCancel={vi.fn()} onCreated={vi.fn()} />);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  fireEvent.change(screen.getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.change(screen.getByLabelText("Customer"), {
+    target: { value: "Example" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Example Co/i }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(251);
+  });
+  fireEvent.change(screen.getByLabelText("Request type"), {
+    target: { value: "Incident" },
+  });
+  fireEvent.change(screen.getByLabelText("Impact"), {
+    target: { value: "Affects User" },
+  });
+  fireEvent.change(screen.getByLabelText("Urgency"), {
+    target: { value: "High" },
+  });
+  fireEvent.change(screen.getByLabelText("Priority"), {
+    target: { value: "High" },
+  });
+  fireEvent.change(screen.getByLabelText("Category"), {
+    target: { value: "Hardware" },
+  });
+  fireEvent.change(screen.getByLabelText("Subcategory"), {
+    target: { value: "Printer" },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/internal/msp-central/requests",
+    expect.objectContaining({ method: "POST" }),
+  );
+  const createCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/internal/msp-central/requests",
+  );
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    category: "Hardware",
+    impact: "Affects User",
+    priority: "High",
+    requestType: "Incident",
+    subcategory: "Printer",
+    urgency: "High",
+  });
+  expect(JSON.parse(String(createCall?.[1]?.body))).not.toMatchObject({
+    group: expect.anything(),
+    item: expect.anything(),
+    level: expect.anything(),
+    mode: expect.anything(),
+  });
+});
+
+test("keeps the create request form focused on fields dispatch actually uses", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ options: {} }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      ),
+    ),
+  );
+
+  render(<CreateRequestModal onCancel={vi.fn()} onCreated={vi.fn()} />);
+
+  expect(screen.getByLabelText("Requester")).toBeInTheDocument();
+  expect(screen.getByLabelText("Request type")).toBeInTheDocument();
+  expect(screen.getByLabelText("Status")).toBeInTheDocument();
+  expect(screen.getByLabelText("Impact")).toBeInTheDocument();
+  expect(screen.getByLabelText("Urgency")).toBeInTheDocument();
+  expect(screen.getByLabelText("Priority")).toBeInTheDocument();
+  expect(screen.getByLabelText("Category")).toBeInTheDocument();
+  expect(screen.getByLabelText("Subcategory")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Mode")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Level")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Group")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Item")).not.toBeInTheDocument();
 });
 
 test("shows clear pending feedback while merging a request", () => {
@@ -754,16 +1098,65 @@ test("closes schedule confirmation and leaves persistent review state", async ()
   fireEvent.click(within(dialog).getByRole("button", { name: "Confirm schedule" }));
   await act(async () => undefined);
 
-  expect(
-    screen.getByText(
-      `${request.requestNumber} scheduled locally. Provider sync needs review.`,
-    ),
-  ).toBeInTheDocument();
   expect(screen.queryByText("Schedule request")).not.toBeInTheDocument();
+  await act(async () => undefined);
   expect(screen.getByRole("link", { name: "Review required" })).toHaveAttribute(
     "href",
     "/integrations",
   );
+});
+
+test("accepts a live schedule locally even when provider queue confirmation stalls", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const fetchMock = vi.fn(
+    () => new Promise<Response>(() => undefined),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: data.requests.map((candidate) =>
+          candidate.id === request.id
+            ? { ...candidate, sourceSystem: "msp-central" as const }
+            : candidate,
+        ),
+      }}
+    />,
+  );
+
+  const requestButton = screen.getByRole("button", {
+    name: `${request.requestNumber} ${request.subject}`,
+  });
+  const requestCard = requestButton.closest("article");
+  if (!requestCard) throw new Error("Expected draggable request card.");
+  const dataTransfer = { effectAllowed: "move", setData: vi.fn() };
+  fireEvent.dragStart(requestCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(screen.getAllByTestId("timeline-track")[0], {
+    clientX: 120,
+    dataTransfer,
+  });
+
+  await act(async () => undefined);
+  const dialog = screen.getByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Confirm schedule" }));
+  await act(async () => undefined);
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(screen.queryByText("Schedule request")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(
+      `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getAllByText(request.subject).length).toBeGreaterThan(0);
 });
 
 test("rescheduling a refreshed crew appointment sends the parent schedule group", async () => {
@@ -851,6 +1244,91 @@ test("rescheduling a refreshed crew appointment sends the parent schedule group"
   expect(screen.getByText("Thursday 9 July 2026")).toBeInTheDocument();
 });
 
+test("dragging a scheduled appointment reschedules the existing booking group", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    scheduledEnd: "2026-07-08T11:00:00+10:00",
+    scheduledStart: "2026-07-08T10:00:00+10:00",
+    sourceSystem: "msp-central" as const,
+    status: "Scheduled" as const,
+    technicianId: data.technicians[0].id,
+  };
+  const lead = {
+    ...data.appointments[0],
+    calendarOwnerEmail: data.technicians[0].outlookEmail,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "drag-existing-lead",
+    outlookEventId: "event-existing-lead",
+    readOnly: false,
+    requestId: request.id,
+    scheduleAssignmentRole: "lead" as const,
+    scheduleGroupId: "existing-schedule-group",
+    start: "10:00",
+    technicianId: data.technicians[0].id,
+    title: request.subject,
+  };
+  const targetTechnician = data.technicians[1];
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      appointmentId: "existing-schedule-group",
+      operationId: "operation-drag-reschedule-1",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [lead],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+        selectedRequestId: request.id,
+      }}
+    />,
+  );
+
+  const appointmentCard = screen.getByTestId("timeline-appointment-drag-existing-lead");
+  const dataTransfer = { effectAllowed: "move", setData: vi.fn() };
+  fireEvent.dragStart(appointmentCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(
+    screen.getAllByTestId("timeline-track")[
+      data.technicians.findIndex((technician) => technician.id === targetTechnician.id)
+    ],
+    { clientX: 120, dataTransfer },
+  );
+  await act(async () => undefined);
+  const dialog = screen.getByRole("dialog");
+  await act(async () => {
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm schedule" }),
+    );
+  });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    appointmentId: "existing-schedule-group",
+    previousAssignments: [
+      {
+        eventId: "event-existing-lead",
+        technicianId: data.technicians[0].id,
+        userPrincipalName: data.technicians[0].outlookEmail,
+      },
+    ],
+    scheduleAction: "rescheduled",
+    technicianId: targetTechnician.id,
+  });
+  expect(screen.getAllByTestId(/timeline-appointment-/)).toHaveLength(1);
+});
+
 test("queue scheduling reassigns an existing linked booking instead of duplicating it", async () => {
   const data = getDispatchDesignMockData();
   const request = {
@@ -901,6 +1379,8 @@ test("queue scheduling reassigns an existing linked booking instead of duplicati
     />,
   );
 
+  fireEvent.click(screen.getByRole("button", { name: "Assigned jobs" }));
+
   const requestCard = screen
     .getByRole("button", { name: `${request.requestNumber} ${request.subject}` })
     .closest("article");
@@ -937,6 +1417,97 @@ test("queue scheduling reassigns an existing linked booking instead of duplicati
   expect(
     screen.queryByTestId("timeline-appointment-existing-simeon-booking"),
   ).not.toBeInTheDocument();
+});
+
+test("dragging a scheduled request reuses an Outlook booking linked by ticket number", async () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    id: "676800000237190",
+    requestNumber: "237190",
+    sourceSystem: "msp-central" as const,
+  };
+  const simeon = data.technicians.find(
+    (technician) => technician.displayName === "Simeon",
+  )!;
+  const jervy = data.technicians.find(
+    (technician) => technician.displayName === "Jervy",
+  )!;
+  const existing = {
+    ...data.appointments[0],
+    calendarOwnerEmail: simeon.outlookUserPrincipalName ?? simeon.outlookEmail,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "outlook-number-linked-booking",
+    outlookEventId: "outlook-number-linked-event",
+    outlookLinkedRequestNumber: "237190",
+    requestId: "237190",
+    scheduleAssignmentRole: "lead" as const,
+    scheduleGroupId: "number-linked-schedule-group",
+    start: "10:00",
+    technicianId: simeon.id,
+    title: request.subject,
+  };
+  const fetchMock = vi.fn().mockResolvedValue({
+    json: async () => ({
+      appointmentId: "number-linked-schedule-group",
+      operationId: "operation-number-linked-reschedule",
+      status: "queued",
+    }),
+    ok: true,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CommandCentrePrototype
+      data={{
+        ...data,
+        appointments: [existing],
+        calendarDataSource: "outlook",
+        calendarReadOnly: false,
+        dispatchDataSource: "msp-central",
+        requests: [request],
+        selectedRequestId: request.id,
+      }}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Assigned jobs" }));
+  const requestCard = screen
+    .getByRole("button", { name: `${request.requestNumber} ${request.subject}` })
+    .closest("article");
+  if (!requestCard) throw new Error("Expected draggable request card.");
+  const dataTransfer = { effectAllowed: "move", setData: vi.fn() };
+  fireEvent.dragStart(requestCard, { dataTransfer });
+  await act(async () => undefined);
+  fireEvent.drop(
+    screen.getAllByTestId("timeline-track")[
+      data.technicians.findIndex((technician) => technician.id === jervy.id)
+    ],
+    { clientX: 120, dataTransfer },
+  );
+  await act(async () => undefined);
+  const dialog = screen.getByRole("dialog");
+  await act(async () => {
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm schedule" }),
+    );
+  });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    appointmentId: "number-linked-schedule-group",
+    previousAssignments: [
+      {
+        eventId: "outlook-number-linked-event",
+        technicianId: simeon.id,
+        userPrincipalName: simeon.outlookUserPrincipalName ?? simeon.outlookEmail,
+      },
+    ],
+    scheduleAction: "rescheduled",
+    technicianId: jervy.id,
+  });
 });
 
 test("does not claim manual calendar sync succeeded when review is required", async () => {
@@ -1252,21 +1823,26 @@ test("keeps the Helpdesk link available for a completed request calendar booking
   );
 });
 
-test("opens a Work Log modal from the drawer with latest job information", async () => {
+test("folds Work Log into the ticket workspace from the drawer", async () => {
   render(await CommandCentrePage());
 
   const drawer = screen.getByTestId("command-centre-drawer");
-  fireEvent.click(within(drawer).getByRole("button", { name: "Work Log" }));
+  expect(
+    within(drawer).queryByRole("button", { name: "Work Log" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(within(drawer).getByRole("button", { name: "Comms" }));
 
-  const dialog = screen.getByRole("dialog", { name: "Work Log" });
-  expect(dialog).toHaveAttribute("data-layout", "full-screen-split");
+  const dialog = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(dialog).getByRole("tab", { name: "Work Log" }));
   expect(within(dialog).getByRole("region", { name: "Ticket information" })).toBeInTheDocument();
   expect(within(dialog).getByRole("region", { name: "Work Log entry" })).toBeInTheDocument();
   expect(within(dialog).getByRole("heading", { name: "Work Log" })).toBeInTheDocument();
   expect(within(dialog).getByText("Latest job information")).toBeInTheDocument();
   expect(within(dialog).getByText("Request number")).toBeInTheDocument();
-  expect(within(dialog).getByText("REQ-100284")).toBeInTheDocument();
-  expect(within(dialog).getByText("Packhouse label printer offline")).toBeInTheDocument();
+  expect(within(dialog).getAllByText("REQ-100284").length).toBeGreaterThan(0);
+  expect(
+    within(dialog).getAllByText("Packhouse label printer offline").length,
+  ).toBeGreaterThan(0);
   expect(within(dialog).getByText("Customer/site")).toBeInTheDocument();
   expect(within(dialog).getByText("Status")).toBeInTheDocument();
   expect(within(dialog).getByText("Priority")).toBeInTheDocument();
@@ -1287,16 +1863,67 @@ test("opens a Work Log modal from the drawer with latest job information", async
   expect(within(dialog).getByRole("button", { name: "Save Work Log" })).toBeInTheDocument();
 });
 
-test("keeps customer communication out of the Work Log flow", async () => {
-  render(await CommandCentrePage());
+test("shows a Work Log attachments button when the request has attachments", () => {
+  const data = getDispatchDesignMockData();
+  const request = {
+    ...data.requests[0],
+    attachments: [
+      {
+        id: "attachment-1",
+        fileName: "switch-photo.jpg",
+        url: "https://mspcentral.example/requests/123/attachments/attachment-1",
+      },
+      {
+        id: "attachment-2",
+        fileName: "quote.pdf",
+      },
+    ],
+    helpdeskUrl: "https://mspcentral.example/requests/123",
+  } as DispatchRequest;
 
-  fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
+  render(
+    <WorkLogModal
+      liveWriteback
+      request={request}
+      technician="Jervy"
+      technicians={data.technicians}
+      onCancel={vi.fn()}
+      onSave={vi.fn()}
+    />,
   );
 
   const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(
+    within(dialog).getByRole("link", { name: "Open attachments 2" }),
+  ).toHaveAttribute("href", "https://mspcentral.example/requests/123");
+  expect(within(dialog).getByText("switch-photo.jpg")).toBeInTheDocument();
+  expect(within(dialog).getByText("quote.pdf")).toBeInTheDocument();
+});
+
+test("hides the Work Log attachments button when the request has no attachments", () => {
+  const data = getDispatchDesignMockData();
+
+  render(
+    <WorkLogModal
+      liveWriteback
+      request={{ ...data.requests[0], attachments: [] } as DispatchRequest}
+      technician="Jervy"
+      technicians={data.technicians}
+      onCancel={vi.fn()}
+      onSave={vi.fn()}
+    />,
+  );
+
+  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  expect(
+    within(dialog).queryByRole("link", { name: /Open attachments/ }),
+  ).not.toBeInTheDocument();
+});
+
+test("keeps customer communication out of the Work Log flow", async () => {
+  render(await CommandCentrePage());
+
+  const dialog = openSelectedDrawerWorkLogTab();
   expect(within(dialog).getByLabelText("Work type")).toBeInTheDocument();
   expect(within(dialog).queryByText("Visibility")).not.toBeInTheDocument();
   expect(within(dialog).queryByText("Customer-facing")).not.toBeInTheDocument();
@@ -1320,13 +1947,8 @@ test("opens Work Log against the exact selected appointment", async () => {
     />,
   );
   fireEvent.click(screen.getByTestId("timeline-appointment-appt-1-second"));
-  fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
-  );
 
-  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const dialog = openSelectedDrawerWorkLogTab();
   expect(within(dialog).getByText("14:00-15:00")).toBeInTheDocument();
 });
 
@@ -1374,6 +1996,71 @@ test("preserves optimistic schedules while refreshed server data is still stale"
   ).toEqual(optimisticRequest);
 });
 
+test("preserves a dragged reschedule without keeping the stale old booking", () => {
+  const incoming = getDispatchDesignMockData();
+  const request = {
+    ...incoming.requests[0],
+    scheduledEnd: "2026-07-08T11:00:00.000Z",
+    scheduledStart: "2026-07-08T10:00:00.000Z",
+    status: "Scheduled" as const,
+    technicianId: "tech-simeon",
+  };
+  const staleAppointment = {
+    customer: request.customer,
+    date: "2026-07-08",
+    end: "11:00",
+    id: "old-simeon-booking",
+    requestId: request.id,
+    scheduleGroupId: "schedule-group-1",
+    source: "linked" as const,
+    start: "10:00",
+    status: "confirmed" as const,
+    technicianId: "tech-simeon",
+    title: request.subject,
+  };
+  const optimisticRequest = {
+    ...request,
+    scheduledEnd: "2026-07-08T12:00:00.000Z",
+    scheduledStart: "2026-07-08T11:00:00.000Z",
+    technicianId: "tech-jervy",
+  };
+  const movedAppointment = {
+    ...staleAppointment,
+    id: "moved-jervy-booking",
+    end: "12:00",
+    start: "11:00",
+    technicianId: "tech-jervy",
+  };
+
+  const reconciled = reconcileDashboardWithPendingWritebacks(
+    {
+      ...incoming,
+      appointments: [movedAppointment],
+      requests: incoming.requests.map((candidate) =>
+        candidate.id === request.id ? optimisticRequest : candidate,
+      ),
+    },
+    {
+      ...incoming,
+      appointments: [staleAppointment],
+      requests: incoming.requests.map((candidate) =>
+        candidate.id === request.id ? request : candidate,
+      ),
+    },
+    new Set([request.id]),
+  );
+
+  expect(reconciled.appointments).toHaveLength(1);
+  expect(reconciled.appointments[0]).toMatchObject({
+    id: "moved-jervy-booking",
+    start: "11:00",
+    technicianId: "tech-jervy",
+  });
+  expect(
+    reconciled.appointments.some((appointment) => appointment.id === "old-simeon-booking"),
+  ).toBe(false);
+});
+
 test("keeps customer communications separate from a live Work Log", async () => {
   vi.useRealTimers();
   const data = getDispatchDesignMockData();
@@ -1418,6 +2105,8 @@ test("keeps customer communications separate from a live Work Log", async () => 
         ],
         request: {
           ...selectedRequest,
+          contactEmail: "labels@example.com",
+          contactPhone: "03 5152 4450",
           notes: "The Zebra label printer is offline after a power outage.",
           sourceSystem: "msp-central",
         },
@@ -1427,19 +2116,18 @@ test("keeps customer communications separate from a live Work Log", async () => 
   );
 
   render(await CommandCentrePage());
-  fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
-  );
 
-  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const dialog = openSelectedDrawerWorkLogTab();
   expect(await within(dialog).findByText("Job description")).toBeInTheDocument();
   expect(
     await within(dialog).findByText(
       "The Zebra label printer is offline after a power outage.",
     ),
   ).toBeInTheDocument();
+  expect(within(dialog).getByText("Phone")).toBeInTheDocument();
+  expect(within(dialog).getByText("03 5152 4450")).toBeInTheDocument();
+  expect(within(dialog).getByText("Email")).toBeInTheDocument();
+  expect(within(dialog).getByText("labels@example.com")).toBeInTheDocument();
   expect(within(dialog).queryByText("Customer responses")).not.toBeInTheDocument();
   expect(within(dialog).queryByText("Internal notes")).not.toBeInTheDocument();
   expect(within(dialog).getByText("Previous work logs")).toBeInTheDocument();
@@ -1456,13 +2144,7 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
 
   fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
 
-  fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
-  );
-
-  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const dialog = openSelectedDrawerWorkLogTab();
   fireEvent.change(within(dialog).getByLabelText("Work Log notes"), {
     target: { value: "Replaced failed switch and verified labels print." },
   });
@@ -1477,8 +2159,7 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
     within(dialog).getByRole("button", { name: "Save Work Log and complete ticket" }),
   );
 
-  const drawer = screen.getByTestId("command-centre-drawer");
-  expect(within(drawer).getByText("Resolved")).toBeInTheDocument();
+  expect(screen.queryByTestId("timeline-appointment-appt-1")).not.toBeInTheDocument();
   expect(screen.getByText("Work Log saved and ticket resolved locally for test sync.")).toBeInTheDocument();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(3_500);
@@ -1491,13 +2172,8 @@ test("requires an outcome for a scheduled Work Log and completes the request", a
 test("shows the required conditional fields for book forward and transfer", async () => {
   render(await CommandCentrePage());
   fireEvent.click(screen.getByTestId("timeline-appointment-appt-1"));
-  fireEvent.click(
-    within(screen.getByTestId("command-centre-drawer")).getByRole("button", {
-      name: "Work Log",
-    }),
-  );
 
-  const dialog = screen.getByRole("dialog", { name: "Work Log" });
+  const dialog = openSelectedDrawerWorkLogTab();
   fireEvent.click(within(dialog).getByLabelText("Book forward"));
   expect(within(dialog).getByLabelText("Forward technician")).toBeInTheDocument();
   expect(within(dialog).getByLabelText("Forward date")).toBeInTheDocument();
@@ -1717,7 +2393,9 @@ test("shows customer emails and clickable external links in Comms", async () => 
         customerResponses: [
           {
             author: "Mel Harris",
-            body: 'Please use <a href="https://jobs.example.com/123">Go to job</a>.',
+            body: "Please use Go to job.",
+            bodyHtml:
+              'Please use <a href="https://jobs.example.com/123">Go to job</a>.',
             id: "response-1",
           },
         ],
@@ -1757,13 +2435,34 @@ test("creates a new live Helpdesk request from the queue", async () => {
     ...data,
     dispatchDataSource: "msp-central",
   });
-  const fetchMock = vi.fn().mockResolvedValue({
-    json: async () => ({
-      operationId: "operation-create-1",
-      pendingRequestId: "pending:create-1",
-      status: "queued",
-    }),
-    ok: true,
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/internal/msp-central/lookups")) {
+      return Promise.resolve({
+        json: async () => ({
+          customers: [
+            {
+              id: "customer-1",
+              name: "Example Co",
+            },
+          ],
+        }),
+        ok: true,
+      });
+    }
+    if (init?.method === "POST") {
+      return Promise.resolve({
+        json: async () => ({
+          operationId: "operation-create-1",
+          pendingRequestId: "pending:create-1",
+          status: "queued",
+        }),
+        ok: true,
+      });
+    }
+    return Promise.resolve({
+      json: async () => ({}),
+      ok: true,
+    });
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -1780,6 +2479,12 @@ test("creates a new live Helpdesk request from the queue", async () => {
   fireEvent.change(within(dialog).getByLabelText("Requester email"), {
     target: { value: "user@example.com" },
   });
+  fireEvent.change(within(dialog).getByLabelText("Customer"), {
+    target: { value: "Example" },
+  });
+  fireEvent.click(await within(dialog).findByRole("button", {
+    name: /Example Co/i,
+  }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
 
   await waitFor(() =>
@@ -1793,11 +2498,100 @@ test("creates a new live Helpdesk request from the queue", async () => {
   );
   expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
     idempotencyKey: expect.stringMatching(/^request:/),
+    customer: "Example Co",
+    customerId: "customer-1",
     subject: "Printer offline",
   });
   expect(
     await screen.findByText("Request creation queued. Syncing with MSP Central."),
   ).toBeInTheDocument();
+});
+
+test("creates a live Helpdesk request and immediately opens scheduling", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  getTestSyncedDispatchDashboardDataMock.mockResolvedValueOnce({
+    ...data,
+    dispatchDataSource: "msp-central",
+  });
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (String(url).includes("/api/internal/msp-central/lookups")) {
+      return Promise.resolve({
+        json: async () => ({
+          customers: [
+            {
+              address: "137 Main Street, Bairnsdale VIC 3875",
+              id: "customer-1",
+              name: "Example Co",
+            },
+          ],
+        }),
+        ok: true,
+      });
+    }
+    if (init?.method === "POST") {
+      return Promise.resolve({
+        json: async () => ({
+          createdRequestId: "6768000001520715",
+          createdRequestNumber: "22336",
+          operationId: "operation-create-1",
+          pendingRequestId: "pending:create-1",
+          status: "synced",
+        }),
+        ok: true,
+      });
+    }
+    return Promise.resolve({
+      json: async () => ({}),
+      ok: true,
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(await CommandCentrePage());
+  fireEvent.click(screen.getByRole("button", { name: "Create request" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Create request" });
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Printer offline" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Description"), {
+    target: { value: "Printer cannot reach the network." },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Requester email"), {
+    target: { value: "user@example.com" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Customer"), {
+    target: { value: "Example" },
+  });
+  fireEvent.click(await within(dialog).findByRole("button", {
+    name: /Example Co/i,
+  }));
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Create and schedule" }),
+  );
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/internal/msp-central/requests",
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+  const createCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/internal/msp-central/requests",
+  );
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    customer: "Example Co",
+    customerId: "customer-1",
+    subject: "Printer offline",
+    waitForProvider: true,
+  });
+
+  const scheduleDialog = await screen.findByRole("dialog", {
+    name: "Schedule request",
+  });
+  expect(within(scheduleDialog).getByText("22336")).toBeInTheDocument();
+  expect(within(scheduleDialog).getByText("Printer offline")).toBeInTheDocument();
 });
 
 test("closes request creation and reports durable review state", async () => {
@@ -1809,13 +2603,34 @@ test("closes request creation and reports durable review state", async () => {
   });
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({
-      json: async () => ({
-        operationId: "operation-create-review",
-        pendingRequestId: "pending:create-review",
-        status: "review_required",
-      }),
-      ok: true,
+    vi.fn((url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/internal/msp-central/lookups")) {
+        return Promise.resolve({
+          json: async () => ({
+            customers: [
+              {
+                id: "customer-review",
+                name: "Review Customer",
+              },
+            ],
+          }),
+          ok: true,
+        });
+      }
+      if (init?.method === "POST") {
+        return Promise.resolve({
+          json: async () => ({
+            operationId: "operation-create-review",
+            pendingRequestId: "pending:create-review",
+            status: "review_required",
+          }),
+          ok: true,
+        });
+      }
+      return Promise.resolve({
+        json: async () => ({}),
+        ok: true,
+      });
     }),
   );
 
@@ -1825,6 +2640,12 @@ test("closes request creation and reports durable review state", async () => {
   fireEvent.change(within(dialog).getByLabelText("Subject"), {
     target: { value: "Printer offline" },
   });
+  fireEvent.change(within(dialog).getByLabelText("Customer"), {
+    target: { value: "Review" },
+  });
+  fireEvent.click(await within(dialog).findByRole("button", {
+    name: /Review Customer/i,
+  }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Create request" }));
 
   expect(
@@ -1907,6 +2728,44 @@ test("turns safe external links in request content into clickable links", () => 
     { text: " or " },
     { href: "https://portal.example.com/", text: "https://portal.example.com" },
     { text: "." },
+  ]);
+});
+
+test("collapses Helpdesk email layout whitespace while keeping action links", () => {
+  const parts = safeRequestContentParts(`
+    <table>
+      <tr><td>
+
+
+
+
+        Customer Job #: 06148405
+
+
+
+
+        <a href="https://links.amtek.au/ls/click?upn=u001.LONG-LINK">Go to job</a>
+
+
+
+
+        <a href="https://links.amtek.au/ls/click?upn=u002.LONG-LINK">Take this job</a>
+
+
+
+
+      </td></tr>
+    </table>
+  `);
+
+  expect(parts).toEqual([
+    { text: "Customer Job #: 06148405\n\n" },
+    { href: "https://links.amtek.au/ls/click?upn=u001.LONG-LINK", text: "Go to job" },
+    { text: "\n\n" },
+    {
+      href: "https://links.amtek.au/ls/click?upn=u002.LONG-LINK",
+      text: "Take this job",
+    },
   ]);
 });
 

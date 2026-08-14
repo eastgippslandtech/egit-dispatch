@@ -278,6 +278,7 @@ export function PresenceControls({
                               Leave until
                               <input
                                 className="mt-1 w-full rounded border border-white/10 bg-cc-canvas px-2 py-1.5 text-xs text-white [color-scheme:dark]"
+                                step={15 * 60}
                                 type="datetime-local"
                                 value={leaveEndsAt}
                                 onChange={(event) =>
@@ -293,7 +294,7 @@ export function PresenceControls({
                               onClick={() =>
                                 void updatePresence(technician.id, {
                                   action: "set_leave",
-                                  endsAt: leaveEndsAt,
+                                  endsAt: dateTimeLocalToIso(leaveEndsAt),
                                   reason: leaveReason,
                                   technicianId: technician.id,
                                 })
@@ -327,6 +328,11 @@ async function responseMessage(response: Response) {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function dateTimeLocalToIso(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : value;
 }
 
 function updatePresenceSnapshot(

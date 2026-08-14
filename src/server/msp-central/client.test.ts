@@ -11,6 +11,7 @@ import { MspCentralConfigurationError } from "./errors";
 describe("MSP Central live client", () => {
   afterEach(() => {
     resetMspCentralAccessTokenCacheForTests();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -101,6 +102,67 @@ describe("MSP Central live client", () => {
       requestNumber: "REQ-123",
       sourceSystem: "msp-central",
       subject: "Printer offline",
+    });
+  });
+
+  it("enriches live requests from the MSP Central customer address when the request list only has account identity", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          requests: [
+            {
+              account: { id: "account-abl", name: "ABL Refrigeration Airconditioning Services" },
+              id: "6768000001600001",
+              request_number: "22450",
+              status: { name: "Open" },
+              subject: "Aircon workstation issue",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customer: {
+            address: "1 Rovan Place",
+            city: "Bairnsdale",
+            postal_code: "3875",
+            state: "VIC",
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const requests = await client.listRequests();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining(
+        "https://mspcentral.manageengine.com.au/app/memsp1783593801295/api/v3/customers/account-abl",
+      ),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(requests[0]).toMatchObject({
+      siteAddress: "1 Rovan Place, Bairnsdale VIC 3875",
+      siteAddressSource: "msp-central",
+      siteTown: "Bairnsdale",
     });
   });
 
@@ -311,20 +373,12 @@ describe("MSP Central live client", () => {
 
     const context = await client.getRequestContext("123");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining("/requests/123/notes"),
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
-      expect.stringContaining("/requests/123/notifications"),
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
-      expect.stringContaining("/requests/123/worklogs"),
-      expect.objectContaining({ method: "GET" }),
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/requests/123/notes"),
+        expect.stringContaining("/requests/123/notifications"),
+        expect.stringContaining("/requests/123/worklogs"),
+      ]),
     );
     expect(context.request).toMatchObject({
       customer: "Client Company",
@@ -419,6 +473,174 @@ describe("MSP Central live client", () => {
         author: "Client User",
         body: "I have replied with the requested details.",
         id: "email-reply-1",
+      }),
+    ]);
+  });
+
+  it("hydrates MSP conversation notification details when the list omits the email body", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        };
+      }
+      if (url.endsWith("/requests/6768000001520715")) {
+        return {
+          ok: true,
+          json: async () => ({
+            request: {
+              customer: { name: "Giant Bairnsdale" },
+              id: "6768000001520715",
+              request_number: "22336",
+              subject: "Ticket #237673, Retailer Archive Webapp",
+            },
+          }),
+        };
+      }
+      if (url.includes("/requests/6768000001520715/notes")) {
+        return {
+          ok: true,
+          json: async () => ({ list_info: { has_more_rows: false }, notes: [] }),
+        };
+      }
+      if (url.includes("/requests/6768000001520715/worklogs")) {
+        return {
+          ok: true,
+          json: async () => ({ list_info: { has_more_rows: false }, worklogs: [] }),
+        };
+      }
+      if (url.endsWith("/requests/6768000001520715/notifications/6768000001563874")) {
+        return {
+          ok: true,
+          json: async () => ({
+            notification: {
+              description:
+                "<p>Hey Simeon,</p><p>Not sure if it is me but getting this message when using the login details</p>",
+              id: "6768000001563874",
+              sender: {
+                email_id: "sales@giantbairnsdale.com.au",
+                name: "Sales",
+              },
+              time: { value: "1786408039809" },
+              type: "CONVERSATION",
+            },
+          }),
+        };
+      }
+      if (url.includes("/requests/6768000001520715/notifications")) {
+        return {
+          ok: true,
+          json: async () => ({
+            list_info: { has_more_rows: false },
+            notifications: [
+              {
+                id: "6768000001563874",
+                sender: {
+                  email_id: "sales@giantbairnsdale.com.au",
+                  name: "Sales",
+                },
+                subject: "Re: [Request ID :##22131##] : Ticket #237673",
+                time: { value: "1786408039809" },
+                type: "CONVERSATION",
+              },
+            ],
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    const context = await client.getRequestContext("6768000001520715");
+
+    expect(context.customerResponses).toEqual([
+      expect.objectContaining({
+        author: "Sales",
+        body:
+          "Hey Simeon,\nNot sure if it is me but getting this message when using the login details",
+        createdAt: new Date(1786408039809).toISOString(),
+        id: "6768000001563874",
+      }),
+    ]);
+  });
+
+  it("hydrates request notifications used for customer reply reconciliation", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        };
+      }
+      if (url.endsWith("/requests/6768000001520715/notifications/6768000001563874")) {
+        return {
+          ok: true,
+          json: async () => ({
+            notification: {
+              description:
+                "<p>Reply from Command Centre that MSP accepted before the timeout.</p>",
+              id: "6768000001563874",
+              sent_time: { value: "1786408039809" },
+              type: "reply",
+            },
+          }),
+        };
+      }
+      if (url.includes("/requests/6768000001520715/notifications")) {
+        return {
+          ok: true,
+          json: async () => ({
+            list_info: { has_more_rows: false },
+            notifications: [
+              {
+                id: "6768000001563874",
+                sent_time: { value: "1786408039809" },
+                subject: "Re: Ticket #237673",
+                type: "reply",
+              },
+            ],
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await expect(
+      client.listRequestNotifications?.("6768000001520715"),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        description:
+          "<p>Reply from Command Centre that MSP accepted before the timeout.</p>",
+        id: "6768000001563874",
+        type: "reply",
       }),
     ]);
   });
@@ -1163,6 +1385,18 @@ describe("MSP Central live client", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({
+          technicians: [
+            {
+              email_id: "simeon@egit.com.au",
+              id: "msp-tech-simeon",
+              name: "Simeon",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response_status: { status: "success" } }),
       })
       .mockResolvedValueOnce({
@@ -1183,6 +1417,7 @@ describe("MSP Central live client", () => {
     );
 
     await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
       description: "Your printer is back online.",
       requestId: "123",
     });
@@ -1193,15 +1428,16 @@ describe("MSP Central live client", () => {
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.stringContaining("/requests/123/notifications"),
       expect.objectContaining({ method: "POST" }),
     );
-    const customerBody = fetchMock.mock.calls[2][1].body as URLSearchParams;
-    const internalBody = fetchMock.mock.calls[3][1].body as URLSearchParams;
+    const customerBody = fetchMock.mock.calls[3][1].body as URLSearchParams;
+    const internalBody = fetchMock.mock.calls[4][1].body as URLSearchParams;
     expect(JSON.parse(customerBody.get("input_data") ?? "{}")).toMatchObject({
       notification: {
         description: "Your printer is back online.",
+        sender: { id: "msp-tech-simeon" },
         subject: "Re: [Request ID :##REQ-123##] : Printer offline",
         to: [{ email_id: "customer@example.com" }],
         type: "reply",
@@ -1214,6 +1450,333 @@ describe("MSP Central live client", () => {
         show_to_requester: false,
       },
     });
+  });
+
+  it("strips display names and punctuation from customer reply recipients", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: { email_id: "Sales <sales@giantbairnsdale.com.au>" },
+            requester_email: "fallback@example.com",
+            subject: "Archive login",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ technicians: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
+      description: "Your archive login has been reset.",
+      requestId: "123",
+    });
+
+    const body = fetchMock.mock.calls[3][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
+      notification: {
+        to: [{ email_id: "sales@giantbairnsdale.com.au" }],
+      },
+    });
+  });
+
+  it("retries customer Comms with the requester ID when MSP rejects the email recipient format", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: {
+              email_id: "sales@giantbairnsdale.com.au",
+              id: "requester-123",
+            },
+            subject: "Archive login",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ technicians: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () =>
+          JSON.stringify({
+            response_status: {
+              messages: [
+                {
+                  message:
+                    "Special characters present in recipients' address. Please remove and send.",
+                },
+              ],
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
+      description: "Your archive login has been reset.",
+      requestId: "123",
+    });
+
+    const firstBody = fetchMock.mock.calls[3][1].body as URLSearchParams;
+    const secondBody = fetchMock.mock.calls[4][1].body as URLSearchParams;
+    expect(JSON.parse(firstBody.get("input_data") ?? "{}")).toMatchObject({
+      notification: {
+        to: [{ email_id: "sales@giantbairnsdale.com.au" }],
+      },
+    });
+    expect(JSON.parse(secondBody.get("input_data") ?? "{}")).toMatchObject({
+      notification: {
+        to: [{ id: "requester-123" }],
+      },
+    });
+  });
+
+  it("falls back when the primary requester email field has no valid bare address", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: { email_id: "RSS SERVICE DESK / not an address" },
+            requester_email: "servicedesk@rss.com.au",
+            subject: "Printer setup",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ technicians: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
+      description: "Booked in.",
+      requestId: "123",
+    });
+
+    const body = fetchMock.mock.calls[3][1].body as URLSearchParams;
+    expect(JSON.parse(body.get("input_data") ?? "{}")).toMatchObject({
+      notification: {
+        to: [{ email_id: "servicedesk@rss.com.au" }],
+      },
+    });
+  });
+
+  it("allows longer provider time for outbound customer reply writes", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    timeoutSpy.mockImplementation(() => undefined as never);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: { email_id: "customer@example.com" },
+            subject: "Printer offline",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          technicians: [
+            {
+              email_id: "simeon@egit.com.au",
+              id: "msp-tech-simeon",
+              name: "Simeon",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
+      description: "Your printer is back online.",
+      requestId: "123",
+    });
+
+    expect(timeoutSpy).toHaveBeenNthCalledWith(1, 12_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 12_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(3, 12_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(4, 45_000);
+  });
+
+  it("refreshes a stale MSP access token once when a customer reply write returns unauthorized", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "stale-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          request: {
+            id: "123",
+            request_number: "REQ-123",
+            requester: { email_id: "customer@example.com" },
+            subject: "Printer offline",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          technicians: [
+            {
+              email_id: "simeon@egit.com.au",
+              id: "msp-tech-simeon",
+              name: "Simeon",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "fresh-access-token",
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ response_status: { status: "success" } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "refresh-token",
+      }),
+    );
+
+    await client.addRequestReply?.({
+      actorEmail: "simeon@egit.com.au",
+      description: "Your printer is back online.",
+      requestId: "123",
+    });
+
+    expect(fetchMock.mock.calls[3]?.[1]?.headers).toMatchObject({
+      Authorization: "Zoho-oauthtoken stale-access-token",
+    });
+    expect(fetchMock.mock.calls[5]?.[1]?.headers).toMatchObject({
+      Authorization: "Zoho-oauthtoken fresh-access-token",
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/oauth/v2/token"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("creates a live Helpdesk request with the dispatcher supplied fields", async () => {
@@ -1245,12 +1808,21 @@ describe("MSP Central live client", () => {
 
     await expect(
       client.createRequest?.({
-        customer: "Example Co",
+        category: "Hardware",
+        customerId: "customer-1",
+        contactId: "contact-1",
         description: "Printer cannot reach the network.",
+        impact: "Affects User",
         priority: "High",
+        requestType: "Incident",
         requesterEmail: "user@example.com",
         site: "Bairnsdale office",
+        status: "Open",
+        subcategory: "Printer",
         subject: "Printer offline",
+        technicianId: "tech-1",
+        technicianName: "Jervy",
+        urgency: "High",
       }),
     ).resolves.toEqual({ id: "456", requestNumber: "REQ-456" });
 
@@ -1262,14 +1834,548 @@ describe("MSP Central live client", () => {
     const body = fetchMock.mock.calls[1][1].body as URLSearchParams;
     expect(JSON.parse(body.get("input_data") ?? "{}")).toEqual({
       request: {
-        account: { name: "Example Co" },
+        category: { name: "Hardware" },
         description: "Printer cannot reach the network.",
+        impact: { name: "Affects User" },
         priority: { name: "High" },
-        requester: { email_id: "user@example.com" },
+        request_type: { name: "Incident" },
+        requester: { id: "contact-1" },
         site: { name: "Bairnsdale office" },
+        status: { name: "Open" },
+        subcategory: { name: "Printer" },
         subject: "Printer offline",
+        urgency: { name: "High" },
       },
     });
+  });
+
+  it("lists MSP Central customers and contacts for request creation lookup", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customers: [
+            {
+              city: "Bairnsdale",
+              id: "customer-1",
+              name: "Bairnsdale Bearings",
+              phone: "51521580",
+              street: "1 Rovan Place",
+              state: "VIC",
+              postal_code: "3875",
+            },
+          ],
+          list_info: { has_more_rows: false },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          contacts: [
+            {
+              email_id: "mireille@example.com",
+              first_name: "Mireille",
+              id: "contact-1",
+              phone: "0351432432",
+            },
+          ],
+          list_info: { has_more_rows: false },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "lookup-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "lookup-refresh-token",
+      }),
+    );
+
+    await expect(client.listCustomers("bearings")).resolves.toEqual([
+      {
+        address: "1 Rovan Place, Bairnsdale, VIC, 3875",
+        city: "Bairnsdale",
+        id: "customer-1",
+        name: "Bairnsdale Bearings",
+        phone: "51521580",
+      },
+    ]);
+    await expect(
+      client.listContacts?.({ customerId: "customer-1", query: "mir" }),
+    ).resolves.toEqual([
+      {
+        email: "mireille@example.com",
+        id: "contact-1",
+        name: "Mireille",
+        phone: "0351432432",
+      },
+    ]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/v3/customers"),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("/api/v3/customers/customer-1/users"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("creates an MSP Central customer for request creation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customer: {
+            city: "Bairnsdale",
+            id: "customer-new-1",
+            name: "Wildlife Rescue",
+            phone: "51520000",
+            postal_code: "3875",
+            state: "VIC",
+            street: "10 Main Street",
+          },
+          response_status: { status: "success" },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "lookup-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "lookup-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.createCustomer?.({
+        address: "10 Main Street",
+        city: "Bairnsdale",
+        country: "Australia",
+        email: "help@wildlife.example",
+        name: "Wildlife Rescue",
+        phone: "51520000",
+        postalCode: "3875",
+        state: "VIC",
+      }),
+    ).resolves.toEqual({
+      address: "10 Main Street, Bairnsdale, VIC, 3875",
+      city: "Bairnsdale",
+      id: "customer-new-1",
+      name: "Wildlife Rescue",
+      phone: "51520000",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/v3/customers"),
+      expect.objectContaining({
+        body: expect.any(URLSearchParams),
+        method: "POST",
+      }),
+    );
+    const body = fetchMock.mock.calls[1]?.[1]?.body as URLSearchParams;
+    expect(JSON.parse(String(body.get("input_data")))).toEqual({
+      customer: {
+        address: "10 Main Street",
+        city: "Bairnsdale",
+        country: "Australia",
+        email_id: "help@wildlife.example",
+        name: "Wildlife Rescue",
+        phone: "51520000",
+        postal_code: "3875",
+        state: "VIC",
+      },
+    });
+  });
+
+  it("loads and sorts full paginated MSP Central request categories", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("accounts.zoho.com.au/oauth/v2/token")) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: "msp-access-token" }),
+        };
+      }
+
+      if (url.includes("/api/v3/categories")) {
+        const inputData = new URL(url).searchParams.get("input_data");
+        const startIndex = inputData
+          ? JSON.parse(inputData).list_info.start_index
+          : 1;
+        return {
+          ok: true,
+          json: async () =>
+            startIndex === 1
+              ? {
+                  categories: [
+                    { name: "Network" },
+                    { name: "Backup" },
+                  ],
+                  list_info: {
+                    has_more_rows: true,
+                    row_count: 2,
+                    start_index: 1,
+                  },
+                }
+              : {
+                  categories: [
+                    { name: "Security" },
+                    { name: "Cloud Services" },
+                  ],
+                  list_info: {
+                    has_more_rows: false,
+                    row_count: 2,
+                    start_index: 3,
+                  },
+                },
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({ list_info: { has_more_rows: false } }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "option-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "option-refresh-token",
+      }),
+    );
+
+    await expect(client.listRequestFormOptions?.()).resolves.toMatchObject({
+      categories: ["Backup", "Cloud Services", "Network", "Security"],
+    });
+    const categoryCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/api/v3/categories"),
+    );
+    expect(categoryCalls).toHaveLength(2);
+  });
+
+  it("searches customers beyond the first two MSP Central catalogue pages", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customers: Array.from({ length: 50 }, (_, index) => ({
+            id: `customer-page-1-${index}`,
+            name: `Customer Page 1 ${index}`,
+          })),
+          list_info: {
+            has_more_rows: true,
+            row_count: 50,
+            start_index: 1,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customers: Array.from({ length: 50 }, (_, index) => ({
+            id: `customer-page-2-${index}`,
+            name: `Customer Page 2 ${index}`,
+          })),
+          list_info: {
+            has_more_rows: true,
+            row_count: 50,
+            start_index: 51,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          customers: [
+            {
+              city: "Bairnsdale",
+              id: "customer-wildlife",
+              name: "Wildlife Unlimited",
+            },
+            {
+              city: "Sale",
+              id: "customer-veitch",
+              name: "Veitch Industries",
+            },
+          ],
+          list_info: {
+            has_more_rows: false,
+            row_count: 2,
+            start_index: 101,
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "lookup-full-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "lookup-full-refresh-token",
+      }),
+    );
+
+    await expect(client.listCustomers("wildlife")).resolves.toEqual([
+      expect.objectContaining({
+        city: "Bairnsdale",
+        id: "customer-wildlife",
+        name: "Wildlife Unlimited",
+      }),
+    ]);
+    await expect(client.listCustomers("veitch")).resolves.toEqual([
+      expect.objectContaining({
+        city: "Sale",
+        id: "customer-veitch",
+        name: "Veitch Industries",
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("loads customer requesters when MSP Central exposes them as customer users", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          users: [
+            {
+              email_id: "requester@example.com",
+              id: "requester-1",
+              name: "Garage Doors Requester",
+              phone: "0351511111",
+            },
+          ],
+          list_info: { has_more_rows: false },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "requester-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "requester-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.listContacts?.({ customerId: "customer-garage", query: "" }),
+    ).resolves.toEqual([
+      {
+        email: "requester@example.com",
+        id: "requester-1",
+        name: "Garage Doors Requester",
+        phone: "0351511111",
+      },
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/v3/customers/customer-garage/users"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("keeps trying customer requester routes when the first route is empty", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          users: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          requesters: [
+            {
+              email_id: "ryan@example.com",
+              id: "requester-ryan",
+              name: "Ryan Garage",
+              phone: "0351550000",
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "requester-fallback-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "requester-fallback-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.listContacts?.({ customerId: "customer-garage", query: "ryan" }),
+    ).resolves.toEqual([
+      {
+        email: "ryan@example.com",
+        id: "requester-ryan",
+        name: "Ryan Garage",
+        phone: "0351550000",
+      },
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/v3/customers/customer-garage/users"),
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("/api/v3/customers/customer-garage/requesters"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("falls back to global requesters linked to the selected customer", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "msp-access-token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          users: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          requesters: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          contacts: [],
+          list_info: { has_more_rows: false },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          users: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          requesters: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          contacts: [],
+          list_info: { has_more_rows: false },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          list_info: { has_more_rows: false },
+          requesters: [
+            {
+              account: { id: "customer-garage", name: "Garage Doors" },
+              email_id: "ryan@example.com",
+              id: "requester-ryan",
+              name: "Ryan Garage",
+            },
+            {
+              account: { id: "other-customer", name: "Other Customer" },
+              email_id: "other@example.com",
+              id: "requester-other",
+              name: "Ryan Other",
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createMspCentralClient(
+      readDispatchConfig({
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MSP_CENTRAL_ACCOUNTS_URL: "https://accounts.zoho.com.au",
+        MSP_CENTRAL_BASE_URL: "https://mspcentral.manageengine.com.au",
+        MSP_CENTRAL_CLIENT_ID: "global-requester-client-id",
+        MSP_CENTRAL_CLIENT_SECRET: "client-secret",
+        MSP_CENTRAL_PORTAL: "memsp1783593801295",
+        MSP_CENTRAL_REFRESH_TOKEN: "global-requester-refresh-token",
+      }),
+    );
+
+    await expect(
+      client.listContacts?.({ customerId: "customer-garage", query: "ryan" }),
+    ).resolves.toEqual([
+      {
+        email: "ryan@example.com",
+        id: "requester-ryan",
+        name: "Ryan Garage",
+      },
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
+      expect.stringContaining("/api/v3/requesters"),
+      expect.objectContaining({ method: "GET" }),
+    );
   });
 
   it("adds a hidden deterministic marker and can find the created request", async () => {

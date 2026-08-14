@@ -3,6 +3,7 @@ import type {
   MicrosoftGraphEvent,
   MicrosoftGraphEventDraft,
   MicrosoftGraphEventUpdate,
+  MicrosoftGraphSendMailInput,
 } from "./types";
 
 type FetchLike = typeof fetch;
@@ -271,14 +272,69 @@ export function createGraphClient({
     return (await response.json()) as MicrosoftGraphEvent;
   }
 
+  async function sendMail(input: MicrosoftGraphSendMailInput) {
+    const token = await acquireToken();
+    ensureTokenHasAppRole(
+      token,
+      "Mail.Send",
+      "Microsoft Graph Mail.Send application permission is not granted for technician email.",
+    );
+    const response = await fetchImpl(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(
+        input.fromUserPrincipalName,
+      )}/sendMail`,
+      {
+        body: JSON.stringify(graphMailBody(input)),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: requestSignal(),
+      },
+    );
+
+    if (!response.ok) {
+      throw new GraphApiError(
+        `Microsoft Graph mail send failed for ${input.to}.`,
+        response.status,
+      );
+    }
+
+    return { id: response.headers?.get("request-id") ?? undefined };
+  }
+
   return {
     acquireToken,
     createEvent,
     deleteEvent,
     getEvent,
     listCalendarView,
+    sendMail,
     updateEvent,
   };
+}
+
+function ensureTokenHasAppRole(token: string, role: string, message: string) {
+  const roles = graphTokenRoles(token);
+  if (roles && !roles.includes(role)) {
+    throw new GraphApiError(message);
+  }
+}
+
+function graphTokenRoles(token: string) {
+  const [, payload] = token.split(".");
+  if (!payload) return undefined;
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = Buffer.from(normalized, "base64").toString("utf8");
+    const parsed = JSON.parse(decoded) as { roles?: unknown };
+    return Array.isArray(parsed.roles)
+      ? parsed.roles.filter((role): role is string => typeof role === "string")
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function requestSignal() {
@@ -325,5 +381,25 @@ function graphEventBody(input: MicrosoftGraphEventDraft, timezone: string) {
     },
     subject: input.subject,
     transactionId: input.transactionId,
+  };
+}
+
+function graphMailBody(input: MicrosoftGraphSendMailInput) {
+  return {
+    message: {
+      body: {
+        content: input.html ?? input.plainText,
+        contentType: input.html ? "HTML" : "Text",
+      },
+      subject: input.subject,
+      toRecipients: [
+        {
+          emailAddress: {
+            address: input.to,
+          },
+        },
+      ],
+    },
+    saveToSentItems: true,
   };
 }

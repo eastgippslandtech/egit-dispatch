@@ -38,6 +38,7 @@ export const REVIEWER_DEMO_CODE = "EGIT-REVIEW-2026";
 
 interface SessionContextValue {
   isSigningIn: boolean;
+  refreshAccessToken: () => Promise<string | null>;
   signInError: string | null;
   session: TechnicianSession;
   signInWithReviewerDemo: (code: string) => boolean;
@@ -227,6 +228,17 @@ export function AppProviders({
   const sessionValue = useMemo<SessionContextValue>(
     () => ({
       isSigningIn,
+      refreshAccessToken: async () => {
+        if (
+          session.status !== "approved" ||
+          !session.mobileSession ||
+          isLocalMockSession(session.mobileSession)
+        ) {
+          return null;
+        }
+
+        return refreshApprovedSession(session.mobileSession);
+      },
       signInError,
       session,
       signInWithZoho: async () => {
@@ -262,7 +274,7 @@ export function AppProviders({
         setSession({ status: "signed-out" });
       },
     }),
-    [isSigningIn, session, signInError, signInWithZoho],
+    [isSigningIn, refreshApprovedSession, session, signInError, signInWithZoho],
   );
 
   return (

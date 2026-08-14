@@ -317,6 +317,9 @@ function mapRequest(
     contact:
       pickString(summaries, ["contactPhone", "phone", "requesterEmail", "contactEmail"]) ??
       "Unknown contact",
+    contactEmail:
+      pickString(summaries, ["requesterEmail", "contactEmail", "email"]) ?? undefined,
+    contactPhone: pickString(summaries, ["contactPhone", "phone"]) ?? undefined,
     customer:
       pickString(summaries, ["customerName", "customer", "accountName", "account"]) ??
       "Unknown customer",
@@ -586,6 +589,9 @@ function pickStatus(
   const normalized = status?.toLowerCase() ?? "";
   if (normalized.includes("resolved") || normalized.includes("closed")) {
     return "Resolved";
+  }
+  if (normalized.includes("cancelled") || normalized.includes("canceled")) {
+    return "Cancelled";
   }
   if (scheduledStart || normalized.includes("scheduled")) {
     return "Scheduled";

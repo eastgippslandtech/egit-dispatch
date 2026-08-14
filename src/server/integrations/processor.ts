@@ -7,6 +7,7 @@ import type { IntegrationAdapterRegistry } from "./registry";
 import type { IntegrationOperationStep } from "./types";
 
 const RETRY_DELAYS_MINUTES = [1, 5, 15, 60, 360] as const;
+const DEFAULT_STEP_TIMEOUT_MS = 55_000;
 
 type ProcessorRepository = Pick<
   IntegrationRepository,
@@ -24,7 +25,7 @@ export function createIntegrationProcessor({
   jitter = defaultJitter,
   registry,
   repository,
-  stepTimeoutMs = 12_000,
+  stepTimeoutMs = DEFAULT_STEP_TIMEOUT_MS,
   workerId,
 }: {
   clock?: () => Date;
@@ -87,7 +88,10 @@ export function createIntegrationProcessor({
 
     let result;
     try {
-      result = await executeWithTimeout(adapter.execute(step), stepTimeoutMs);
+      result = await executeWithTimeout(
+        adapter.execute(withOperationActorEmail(step, operation.actorEmail)),
+        stepTimeoutMs,
+      );
     } catch (error) {
       const failure = classifyIntegrationError(error, {
         writeSafety: adapter.writeSafety,
@@ -182,6 +186,27 @@ export function createIntegrationProcessor({
       input,
     );
   }
+}
+
+function withOperationActorEmail(
+  step: IntegrationOperationStep,
+  actorEmail?: string,
+): IntegrationOperationStep {
+  if (
+    step.action !== "msp.send_reply" ||
+    typeof step.payload.actorEmail === "string" ||
+    !actorEmail?.trim()
+  ) {
+    return step;
+  }
+
+  return {
+    ...step,
+    payload: {
+      ...step.payload,
+      actorEmail: actorEmail.trim().toLowerCase(),
+    },
+  };
 }
 
 function executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number) {

@@ -12,6 +12,13 @@ import {
 import type { Appointment, DispatchDashboardData, DispatchRequest } from "./types";
 import { buildGraphPlanningRange } from "@/server/graph/range";
 import { buildOutlookCalendarDashboardData } from "@/server/graph/technician-calendars";
+import { fingerprintPayload } from "@/server/integrations/fingerprint";
+import {
+  cancelledScheduleCleanupOperation,
+  orphanedOutlookCleanupOperation,
+} from "@/server/integrations/operations";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
+import type { EnqueueIntegrationOperation } from "@/server/integrations/types";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { getMspCentralFixtureDashboardData } from "@/server/msp-central/fixtures";
 import type { MspCentralClient } from "@/server/msp-central/types";
@@ -26,11 +33,15 @@ import {
 
 type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
+type IntegrationOperationRepository = {
+  enqueue(input: EnqueueIntegrationOperation): Promise<unknown>;
+};
 
 const OUTLOOK_DASHBOARD_TIMEOUT_MS = 12_000;
 const CRM_ENRICHMENT_TIMEOUT_MS = 8_000;
 const MSP_REQUESTS_TIMEOUT_MS = 7_000;
 const MSP_TECHNICIANS_TIMEOUT_MS = 2_500;
+const CANCELLED_OUTLOOK_CLEANUP_TIMEOUT_MS = 1_500;
 
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
@@ -41,11 +52,13 @@ export async function getDispatchDashboardData(
   {
     database = getConfiguredDispatchDashboardDatabase(config.databaseUrl),
     crmClient,
+    integrationRepository,
     mspClient,
     outlookLoader = buildOutlookCalendarDashboardData,
   }: {
     database?: DispatchDashboardDatabase | null;
     crmClient?: ZohoCrmAccountsClient | null;
+    integrationRepository?: IntegrationOperationRepository | null;
     mspClient?: MspCentralClient;
     outlookLoader?: OutlookLoader;
   } = {},
@@ -187,7 +200,16 @@ export async function getDispatchDashboardData(
       const linkedSchedule = mergeMspCentralScheduleWithOutlook(
         requests,
         outlookData.appointments,
+        { pruneOrphanedOutlookEvents: requestsResult.status === "fulfilled" },
       );
+      await queueCancelledOutlookCleanup(linkedSchedule.cancelledOutlookEvents, {
+        config,
+        repository: integrationRepository,
+      });
+      await queueOrphanedOutlookCleanup(linkedSchedule.orphanedOutlookEvents, {
+        config,
+        repository: integrationRepository,
+      });
       const combined = {
         ...dashboard,
         appointments: linkedSchedule.appointments,
@@ -230,6 +252,174 @@ export async function getDispatchDashboardData(
     selectedRequestId: "",
     dispatchDataSource: "mock",
   }, config);
+}
+
+async function queueOrphanedOutlookCleanup(
+  events: ReturnType<
+    typeof mergeMspCentralScheduleWithOutlook
+  >["orphanedOutlookEvents"],
+  {
+    config,
+    repository,
+  }: {
+    config: DispatchConfig;
+    repository?: IntegrationOperationRepository | null;
+  },
+) {
+  if (config.mode !== "live" || events.length === 0) return;
+  const resolvedRepository =
+    repository ??
+    (config.databaseUrl
+      ? createPostgresIntegrationRepository({ databaseUrl: config.databaseUrl })
+      : null);
+  if (!resolvedRepository) return;
+
+  try {
+    await withProviderTimeout(
+      Promise.all(
+        orphanedEventGroups(events).map((group) =>
+          resolvedRepository.enqueue(
+            orphanedOutlookCleanupOperation({
+              actorEmail: "system@command.egit.com.au",
+              events: group.events,
+              idempotencyKey: `orphaned-outlook:${group.requestNumber}:${fingerprintPayload(group.events)}`,
+            }),
+          ),
+        ),
+      ),
+      CANCELLED_OUTLOOK_CLEANUP_TIMEOUT_MS,
+      "Orphaned Outlook cleanup queue timed out.",
+    );
+  } catch (error) {
+    console.error("Orphaned Outlook cleanup queue failed", safeError(error));
+  }
+}
+
+async function queueCancelledOutlookCleanup(
+  events: ReturnType<
+    typeof mergeMspCentralScheduleWithOutlook
+  >["cancelledOutlookEvents"],
+  {
+    config,
+    repository,
+  }: {
+    config: DispatchConfig;
+    repository?: IntegrationOperationRepository | null;
+  },
+) {
+  if (config.mode !== "live" || events.length === 0) return;
+  const resolvedRepository =
+    repository ??
+    (config.databaseUrl
+      ? createPostgresIntegrationRepository({ databaseUrl: config.databaseUrl })
+      : null);
+  if (!resolvedRepository) return;
+
+  try {
+    await withProviderTimeout(
+      Promise.all(
+        cancelledEventGroups(events).map((group) =>
+          resolvedRepository.enqueue(
+            cancelledScheduleCleanupOperation({
+              actorEmail: "system@command.egit.com.au",
+              events: group.events,
+              idempotencyKey: `cancelled-schedule:${group.requestId}:${fingerprintPayload(group.events)}`,
+              requestId: group.requestId,
+              requestNumber: group.requestNumber,
+            }),
+          ),
+        ),
+      ),
+      CANCELLED_OUTLOOK_CLEANUP_TIMEOUT_MS,
+      "Cancelled Outlook cleanup queue timed out.",
+    );
+  } catch (error) {
+    console.error("Cancelled Outlook cleanup queue failed", safeError(error));
+  }
+}
+
+function orphanedEventGroups(
+  events: ReturnType<
+    typeof mergeMspCentralScheduleWithOutlook
+  >["orphanedOutlookEvents"],
+) {
+  const groups = new Map<
+    string,
+    {
+      events: Array<{
+        eventId: string;
+        requestNumber: string;
+        technicianId?: string;
+        userPrincipalName: string;
+      }>;
+      requestNumber: string;
+    }
+  >();
+  for (const event of events) {
+    const existing =
+      groups.get(event.requestNumber) ??
+      {
+        events: [],
+        requestNumber: event.requestNumber,
+      };
+    existing.events.push({
+      eventId: event.eventId,
+      requestNumber: event.requestNumber,
+      technicianId: event.technicianId,
+      userPrincipalName: event.userPrincipalName,
+    });
+    groups.set(event.requestNumber, existing);
+  }
+  return [...groups.values()].map((group) => ({
+    ...group,
+    events: group.events.sort((first, second) =>
+      `${first.userPrincipalName}:${first.eventId}`.localeCompare(
+        `${second.userPrincipalName}:${second.eventId}`,
+      ),
+    ),
+  }));
+}
+
+function cancelledEventGroups(
+  events: ReturnType<
+    typeof mergeMspCentralScheduleWithOutlook
+  >["cancelledOutlookEvents"],
+) {
+  const groups = new Map<
+    string,
+    {
+      events: Array<{
+        eventId: string;
+        technicianId?: string;
+        userPrincipalName: string;
+      }>;
+      requestId: string;
+      requestNumber: string;
+    }
+  >();
+  for (const event of events) {
+    const existing =
+      groups.get(event.requestId) ??
+      {
+        events: [],
+        requestId: event.requestId,
+        requestNumber: event.requestNumber,
+      };
+    existing.events.push({
+      eventId: event.eventId,
+      technicianId: event.technicianId,
+      userPrincipalName: event.userPrincipalName,
+    });
+    groups.set(event.requestId, existing);
+  }
+  return [...groups.values()].map((group) => ({
+    ...group,
+    events: group.events.sort((first, second) =>
+      `${first.userPrincipalName}:${first.eventId}`.localeCompare(
+        `${second.userPrincipalName}:${second.eventId}`,
+      ),
+    ),
+  }));
 }
 
 async function enrichDashboardWithZohoCrmAddresses(

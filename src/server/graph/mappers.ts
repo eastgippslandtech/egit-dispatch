@@ -8,7 +8,7 @@ import type { MicrosoftGraphEvent } from "./types";
 import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
 
 const REQUEST_NUMBER_PATTERN =
-  /\b(?:REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{6,})\b/i;
+  /\b(?:CW|REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{5,})\b/i;
 
 export function extractLinkedRequestNumber(
   subject?: string,

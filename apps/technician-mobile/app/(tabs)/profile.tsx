@@ -18,7 +18,7 @@ import {
   enableWhileUsingLocation,
   getWhileUsingLocationStatus,
 } from "../../src/features/location/foreground-location";
-import { createApiClient } from "../../src/api/client";
+import { createApiClient, MobileApiError } from "../../src/api/client";
 import { getMobileRuntimeConfig } from "../../src/config/runtime";
 import {
   hasUsedLunchToday,
@@ -31,7 +31,7 @@ import { colours } from "../../src/theme/tokens";
 
 export default function ProfileRoute() {
   const router = useRouter();
-  const { session, signOut } = useSession();
+  const { refreshAccessToken, session, signOut } = useSession();
   const [locationStatus, setLocationStatus] = useState("Not enabled");
   const [notificationStatus, setNotificationStatus] = useState("Not enabled");
   const staff =
@@ -106,10 +106,13 @@ export default function ProfileRoute() {
 
     void hasUsedLunchToday(staff.email).then((usedToday) => {
       if (cancelled) return;
-      setLunchTakenToday(usedToday);
-      if (usedToday) {
-        setLunchStatus("Lunch already taken today");
-      }
+      setLunchTakenToday((current) => {
+        if (current) return current;
+        if (usedToday) {
+          setLunchStatus("Lunch already taken today");
+        }
+        return usedToday;
+      });
     });
 
     return () => {
@@ -158,6 +161,7 @@ export default function ProfileRoute() {
       await createApiClient({
         accessToken: mobileSession.accessToken,
         baseUrl: config.mobileApiBaseUrl,
+        refreshAccessToken,
       }).request("/presence", {
         body: { action: "start_lunch" },
         method: "POST",
@@ -165,8 +169,12 @@ export default function ProfileRoute() {
       await markLunchUsedToday(staff.email);
       setLunchTakenToday(true);
       setLunchStatus("Lunch started: 30 minutes");
-    } catch {
-      setLunchStatus("Lunch could not be started. Please try again.");
+    } catch (error) {
+      setLunchStatus(
+        error instanceof MobileApiError
+          ? `Lunch could not be started (${error.status}). Please try again.`
+          : "Lunch could not be started. Please try again.",
+      );
     } finally {
       setLunchBusy(false);
     }

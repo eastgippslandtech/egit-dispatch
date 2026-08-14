@@ -5,6 +5,8 @@ import type {
   MspCentralRawWorklog,
   MspCentralTimestamp,
 } from "@/server/msp-central/types";
+import { isCustomerConversationNotification } from "@/server/msp-central/mappers";
+import { resolveMspCentralWorklogOwner } from "@/server/worklogs/owner";
 import { roundWorklogMinutes } from "@/server/worklogs/time";
 
 import {
@@ -63,20 +65,34 @@ export function createMspCentralAdapters({
           ),
         write: async () => {
           await client.addRequestReply!({
+            actorEmail: payload.actorEmail,
             description: payload.description,
             requestId: payload.requestId,
           });
-          return {};
+          const existing = await reconcileReply(
+            await client.listRequestNotifications!(payload.requestId),
+            payload,
+          );
+          if (existing) return existing;
+          throw new AmbiguousIntegrationError(
+            "MSP Central accepted the customer reply request, but the outbound conversation is not visible yet.",
+          );
         },
       });
     }),
     "msp.add_worklog": nonIdempotent(async (step) => {
-      const payload = worklogPayload(step);
+      const basePayload = worklogPayload(step);
       if (!client.addRequestWorklog || !client.listRequestWorklogs) {
         throw new PermanentIntegrationError(
           "MSP Central Work Log writeback is unavailable.",
         );
       }
+      const owner = await resolveMspCentralWorklogOwner({
+        email: basePayload.ownerEmail,
+        mspClient: client,
+        technicianId: basePayload.ownerId,
+      });
+      const payload = { ...basePayload, ownerId: owner.id };
       return executeWithReconciliation({
         step,
         reconcile: async () =>
@@ -244,7 +260,7 @@ async function executeWithReconciliation({
     }
 
     throw new AmbiguousIntegrationError(
-      "MSP Central may have accepted the write; manual review is required before retrying.",
+      `MSP Central may have accepted the write; manual review is required before retrying. Provider said: ${mapped.message}`,
       { cause: error, httpStatus: mapped.httpStatus },
     );
   }
@@ -275,7 +291,7 @@ function reconcileReply(
   const expectedFingerprint = contentFingerprint(payload.description);
   const match = notifications.find(
     (notification) =>
-      notification.type?.trim().toLowerCase() === "reply" &&
+      isCustomerConversationNotification(notification.type) &&
       withinReconciliationWindow(
         timestampMilliseconds(notification.sent_time),
         new Date(payload.occurredAt).getTime(),
@@ -317,6 +333,7 @@ function notePayload(step: IntegrationOperationStep) {
     step.payload.visibility === "internal" ? "internal" : "customer";
   return {
     description: requiredString(step.payload, "description"),
+    actorEmail: optionalString(step.payload, "actorEmail"),
     occurredAt: requiredDate(step.payload, "occurredAt"),
     requestId: requiredString(step.payload, "requestId"),
     showToRequester: visibility === "customer",
@@ -340,7 +357,8 @@ function worklogPayload(step: IntegrationOperationStep) {
     description: requiredString(step.payload, "description"),
     durationMinutes,
     endedAt: requiredDate(step.payload, "endedAt"),
-    ownerId: requiredString(step.payload, "ownerId"),
+    ownerEmail: optionalString(step.payload, "ownerEmail"),
+    ownerId: optionalString(step.payload, "ownerId"),
     requestId: requiredString(step.payload, "requestId"),
     startedAt: requiredDate(step.payload, "startedAt"),
     worklogType,
@@ -381,13 +399,25 @@ function createRequestPayload(step: IntegrationOperationStep) {
     throw new PermanentIntegrationError("Request priority is invalid.");
   }
   return {
+    category: optionalString(step.payload, "category"),
     commandFingerprint: requiredString(step.payload, "commandFingerprint"),
     customer: optionalString(step.payload, "customer"),
+    customerId: optionalString(step.payload, "customerId"),
+    contactId: optionalString(step.payload, "contactId"),
     description: optionalString(step.payload, "description"),
+    impact: optionalString(step.payload, "impact"),
+    impactDetails: optionalString(step.payload, "impactDetails"),
     priority,
+    requestType: optionalString(step.payload, "requestType"),
     requesterEmail: optionalString(step.payload, "requesterEmail"),
     site: optionalString(step.payload, "site"),
+    status: optionalString(step.payload, "status"),
+    subcategory: optionalString(step.payload, "subcategory"),
     subject: requiredString(step.payload, "subject"),
+    technicianEmail: optionalString(step.payload, "technicianEmail"),
+    technicianId: optionalString(step.payload, "technicianId"),
+    technicianName: optionalString(step.payload, "technicianName"),
+    urgency: optionalString(step.payload, "urgency"),
   };
 }
 

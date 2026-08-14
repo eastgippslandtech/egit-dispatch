@@ -36,6 +36,7 @@ describe("integration reliability end to end", () => {
 
     expect(harness.operation(operation.id).state).toBe("synced");
     expect(harness.executionOrder).toEqual([
+      "email:assignment:tech-simeon",
       "msp:schedule",
       "outlook:lead:tech-simeon",
       "command:link",
@@ -69,6 +70,25 @@ describe("integration reliability end to end", () => {
     expect(harness.operation(operation.id).state).toBe("synced");
     expect(harness.executionCount("msp.schedule_request")).toBe(1);
     expect(graphAttempts).toBe(2);
+  });
+
+  it("sends the local schedule push before MSP Central can block the writeback", async () => {
+    const harness = createDeterministicIntegrationHarness();
+    harness.on("msp.schedule_request", async () => {
+      throw new RetryableIntegrationError("MSP Central unavailable", 503);
+    });
+
+    const operation = await harness.enqueue(
+      scheduleCommand({ actorEmail: "dispatcher@egit.com.au" }),
+    );
+    await harness.drain();
+
+    expect(harness.executionOrder.slice(0, 3)).toEqual([
+      "push:assignment:tech-simeon",
+      "email:assignment:tech-simeon",
+      "msp:schedule",
+    ]);
+    expect(harness.operation(operation.id).state).toBe("retrying");
   });
 
   it("does not repeat Graph when a later MSP Central step retries", async () => {
@@ -282,10 +302,12 @@ function createDeterministicIntegrationHarness() {
   const actions = [
     "command_centre.invalidate_request",
     "command_centre.persist_dispatch_link",
+    "email.send_technician_schedule_confirmation",
     "msp.add_worklog",
     "msp.merge_requests",
     "msp.schedule_request",
     "outlook.upsert_event",
+    "push.notify",
   ];
   const nonIdempotent = new Set(["msp.add_worklog", "msp.merge_requests"]);
   const adapters = Object.fromEntries(
@@ -650,9 +672,11 @@ class FakeIntegrationSql implements IntegrationSql {
   }
 }
 
-function scheduleCommand() {
+function scheduleCommand({
+  actorEmail = "simeon@egit.com.au",
+}: { actorEmail?: string } = {}) {
   return scheduleOperation({
-    actorEmail: "simeon@egit.com.au",
+    actorEmail,
     appointmentId: "appointment-42",
     bookingType: "Remote",
     customer: "Example Co",

@@ -207,10 +207,6 @@ function appointmentCandidates({
   const activeJob = inRange(nowMinutes, startMinutes, endMinutes);
   const showAs = appointment.outlookShowAs?.toLowerCase();
 
-  if (showAs === "free") {
-    return [];
-  }
-
   if (
     activeJob &&
     appointment.isAllDay &&
@@ -239,6 +235,10 @@ function appointmentCandidates({
         status: "leave",
       }),
     ];
+  }
+
+  if (showAs === "free") {
+    return [];
   }
 
   if (activeJob && isPersonalAppointment(appointment)) {

@@ -70,7 +70,7 @@ export async function POST(request: Request) {
       const override = await withTimeout(
         repository.setLeave({
           createdByEmail: access.email,
-          endsAt: body.endsAt,
+          endsAt: normalizeManualLeaveEndsAt(body.endsAt),
           reason: body.reason,
           source: "dispatch",
           technicianEmail,
@@ -154,4 +154,41 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 
 function isTimeoutError(error: unknown) {
   return error instanceof Error && /timed out/i.test(error.message);
+}
+
+function normalizeManualLeaveEndsAt(value: string) {
+  const trimmed = value.trim();
+  if (hasTimezone(trimmed)) {
+    return trimmed;
+  }
+
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2})?$/.exec(
+    trimmed,
+  );
+  if (!match) return trimmed;
+
+  return new Date(melbourneLocalTimestamp(match[1], match[2])).toISOString();
+}
+
+function hasTimezone(value: string) {
+  return /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
+}
+
+function melbourneLocalTimestamp(dateKey: string, time: string) {
+  const utcGuess = new Date(`${dateKey}T${time}:00.000Z`);
+  const offsetName =
+    new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Melbourne",
+      timeZoneName: "shortOffset",
+    })
+      .formatToParts(utcGuess)
+      .find((part) => part.type === "timeZoneName")?.value ?? "GMT+10";
+  const match = /GMT([+-]\d{1,2})(?::?(\d{2}))?/.exec(offsetName);
+  const hours = match ? Number.parseInt(match[1], 10) : 10;
+  const minutes = match?.[2] ? Number.parseInt(match[2], 10) : 0;
+  const sign = hours >= 0 ? "+" : "-";
+  return `${dateKey}T${time}:00${sign}${String(Math.abs(hours)).padStart(
+    2,
+    "0",
+  )}:${String(minutes).padStart(2, "0")}`;
 }

@@ -168,4 +168,33 @@ describe("internal presence API", () => {
       error: "Technician is not enabled for Command Centre presence.",
     });
   });
+
+  it("treats timezone-less manual Leave times as Australia/Melbourne local time", async () => {
+    const setLeave = vi.fn().mockResolvedValue({ id: "leave", status: "leave" });
+    repositoryMock.mockReturnValue({
+      clear: vi.fn(),
+      listActive: vi.fn(),
+      setLeave,
+      startLunch: vi.fn(),
+    });
+
+    const response = await POST(
+      new Request("https://command.egit.com.au/api/internal/presence", {
+        body: JSON.stringify({
+          action: "set_leave",
+          endsAt: "2026-08-12T09:00",
+          reason: "Annual leave",
+          technicianId: technician.id,
+        }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(setLeave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endsAt: "2026-08-11T23:00:00.000Z",
+      }),
+    );
+  });
 });

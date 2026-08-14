@@ -90,6 +90,10 @@ export function DispatchQueueScreen({
   const [seenRequestIds, setSeenRequestIds] = useState<Set<string>>(new Set());
   const [selectedRequestId, setSelectedRequestId] = useState<string>();
   const [workspaceRequestId, setWorkspaceRequestId] = useState<string>();
+  const [workspaceAppointmentId, setWorkspaceAppointmentId] = useState<string>();
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<
+    "comms" | "details" | "tracks" | "worklog"
+  >("details");
   const [mergeRequestId, setMergeRequestId] = useState<string>();
   const [scheduleRequestId, setScheduleRequestId] = useState<string>();
   const [workLogTarget, setWorkLogTarget] = useState<WorkLogTarget>();
@@ -199,8 +203,14 @@ export function DispatchQueueScreen({
     dashboard.dispatchDataSource === "msp-central" &&
     request?.sourceSystem === "msp-central";
 
-  function openWorkspace(requestId: string) {
+  function openWorkspace(
+    requestId: string,
+    initialTab: "comms" | "details" | "tracks" | "worklog" = "details",
+    appointmentId?: string,
+  ) {
     setSelectedRequestId(requestId);
+    setWorkspaceAppointmentId(appointmentId);
+    setWorkspaceInitialTab(initialTab);
     setWorkspaceRequestId(requestId);
     setSeenRequestIds((current) => new Set(current).add(requestId));
   }
@@ -208,6 +218,8 @@ export function DispatchQueueScreen({
   function scheduleRequest(requestId: string) {
     setSelectedRequestId(requestId);
     setWorkspaceRequestId(undefined);
+    setWorkspaceAppointmentId(undefined);
+    setWorkspaceInitialTab("details");
     setScheduleRequestId(requestId);
   }
 
@@ -227,7 +239,26 @@ export function DispatchQueueScreen({
     router.refresh();
   }
 
-  async function saveWorkLog({
+  async function saveWorkLog(input: {
+    billable: boolean;
+    booking?: WorklogForwardBooking;
+    disposition?: WorklogDisposition;
+    idempotencyKey: string;
+    minutes: string;
+    notes: string;
+    solution?: string;
+    transfer?: WorklogTransfer;
+    workType: WorklogType;
+  }) {
+    return saveWorkLogForTarget(workLogTarget, workLogRequest, input, () =>
+      setWorkLogTarget(undefined),
+    );
+  }
+
+  async function saveWorkLogForTarget(
+    target: WorkLogTarget | undefined,
+    request: DispatchRequest | undefined,
+    {
     booking,
     disposition,
     idempotencyKey,
@@ -246,8 +277,10 @@ export function DispatchQueueScreen({
     solution?: string;
     transfer?: WorklogTransfer;
     workType: WorklogType;
-  }) {
-    if (!workLogTarget || !workLogRequest) return;
+  },
+    clearTarget: () => void,
+  ) {
+    if (!target || !request) return;
     const description = notes.trim();
     const durationMinutes = roundWorklogMinutes(Number(minutes));
     if (!description || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
@@ -256,15 +289,15 @@ export function DispatchQueueScreen({
     }
     const appointment = resolveWorkLogAppointment(
       dashboard.appointments,
-      workLogTarget.appointmentId,
+      target.appointmentId,
     );
-    const scheduled = Boolean(appointment || workLogRequest.scheduledStart);
+    const scheduled = Boolean(appointment || request.scheduledStart);
     if (scheduled && !disposition) {
       setToast("Choose what happens to this scheduled job after saving.");
       return;
     }
-    if (!liveWriteback(workLogRequest)) {
-      setWorkLogTarget(undefined);
+    if (!liveWriteback(request)) {
+      clearTarget();
       setToast("Work Log captured in this test session.");
       return;
     }
@@ -289,7 +322,7 @@ export function DispatchQueueScreen({
         durationMinutes,
         endedAt,
         idempotencyKey,
-        requestId: workLogRequest.id,
+        requestId: request.id,
         scheduled,
         solution,
         startedAt,
@@ -297,7 +330,7 @@ export function DispatchQueueScreen({
         visibility: workType === "internal" ? "internal" : "external",
         workType,
       });
-      setWorkLogTarget(undefined);
+      clearTarget();
       setToast(
         result.status === "review_required"
           ? "Work Log saved locally. Provider sync needs review."
@@ -450,23 +483,49 @@ export function DispatchQueueScreen({
           onMerge={() => selectedRequest && setMergeRequestId(selectedRequest.id)}
           onOpen={() => selectedRequest && openWorkspace(selectedRequest.id)}
           onSchedule={() => selectedRequest && scheduleRequest(selectedRequest.id)}
-          onWorkLog={() => selectedRequest && setWorkLogTarget({ requestId: selectedRequest.id, appointmentId: selectedAppointment?.id })}
+          onWorkLog={() =>
+            selectedRequest &&
+            openWorkspace(
+              selectedRequest.id,
+              "worklog",
+              selectedAppointment?.id,
+            )
+          }
         />
       </div>
 
       {workspaceRequest ? (
         <TicketWorkspaceModal
+          appointment={resolveWorkLogAppointment(
+            dashboard.appointments,
+            workspaceAppointmentId,
+          )}
           appointments={requestAppointments(dashboard.appointments, workspaceRequest.id)}
+          initialTab={workspaceInitialTab}
           liveWriteback={liveWriteback(workspaceRequest)}
           request={workspaceRequest}
-          onClose={() => setWorkspaceRequestId(undefined)}
-          onOpenWorkLog={(requestId, appointmentId) => {
+          technicians={dashboard.technicians}
+          onClose={() => {
             setWorkspaceRequestId(undefined);
-            setWorkLogTarget({ requestId, appointmentId });
+            setWorkspaceAppointmentId(undefined);
+            setWorkspaceInitialTab("details");
           }}
+          onSaveWorkLog={(input) =>
+            saveWorkLogForTarget(
+              { appointmentId: workspaceAppointmentId, requestId: workspaceRequest.id },
+              workspaceRequest,
+              input,
+              () => {
+                setWorkspaceAppointmentId(undefined);
+                setWorkspaceInitialTab("details");
+              },
+            )
+          }
           onSchedule={scheduleRequest}
           onSaved={() => {
             setWorkspaceRequestId(undefined);
+            setWorkspaceAppointmentId(undefined);
+            setWorkspaceInitialTab("details");
             setToast("Communication queued in MSP Central.");
             router.refresh();
           }}

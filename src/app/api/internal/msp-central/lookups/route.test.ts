@@ -145,6 +145,7 @@ describe("MSP Central lookup route", () => {
   it("creates a customer for request creation lookup", async () => {
     createCustomer.mockResolvedValueOnce({
       address: "10 Main Street, Bairnsdale VIC 3875",
+      customerGroup: "Sale",
       id: "customer-new-1",
       name: "Wildlife Rescue",
       phone: "51520000",
@@ -156,6 +157,7 @@ describe("MSP Central lookup route", () => {
           address: "10 Main Street",
           city: "Bairnsdale",
           country: "Australia",
+          customerGroup: "Sale",
           email: "help@wildlife.example",
           name: "Wildlife Rescue",
           phone: "51520000",
@@ -172,6 +174,7 @@ describe("MSP Central lookup route", () => {
     await expect(response.json()).resolves.toEqual({
       customer: {
         address: "10 Main Street, Bairnsdale VIC 3875",
+        customerGroup: "Sale",
         id: "customer-new-1",
         name: "Wildlife Rescue",
         phone: "51520000",
@@ -181,6 +184,7 @@ describe("MSP Central lookup route", () => {
       address: "10 Main Street",
       city: "Bairnsdale",
       country: "Australia",
+      customerGroup: "Sale",
       email: "help@wildlife.example",
       name: "Wildlife Rescue",
       phone: "51520000",

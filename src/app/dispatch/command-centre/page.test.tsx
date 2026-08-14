@@ -603,6 +603,7 @@ test("offers to create a customer when customer search has no matches", async ()
             customer: {
               address: "10 Main Street, Bairnsdale, VIC, 3875",
               city: "Bairnsdale",
+              customerGroup: "Sale",
               id: "customer-new-1",
               name: "Wildlife Rescue",
             },
@@ -634,6 +635,9 @@ test("offers to create a customer when customer search has no matches", async ()
   fireEvent.change(within(customerDialog).getByLabelText("City"), {
     target: { value: "Bairnsdale" },
   });
+  fireEvent.change(within(customerDialog).getByLabelText("Customer group"), {
+    target: { value: "Sale" },
+  });
   fireEvent.change(within(customerDialog).getByLabelText("State"), {
     target: { value: "VIC" },
   });
@@ -658,6 +662,7 @@ test("offers to create a customer when customer search has no matches", async ()
   expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
     address: "10 Main Street",
     city: "Bairnsdale",
+    customerGroup: "Sale",
     name: "Wildlife Rescue",
     postalCode: "3875",
     state: "VIC",

@@ -177,6 +177,9 @@ function createMspCentralFixtureClient(config: DispatchConfig): MspCentralClient
         address: input.address,
         city: input.city,
         country: input.country,
+        customer_group: input.customerGroup
+          ? [{ name: input.customerGroup }]
+          : undefined,
         email_id: input.email,
         name: input.name,
         phone: input.phone,
@@ -1460,6 +1463,7 @@ function customerLookupFromRaw(raw: Partial<MspCentralRawCustomer>) {
     ...(cleanText(raw.city ?? raw.shipping_city ?? raw.billing_city)
       ? { city: cleanText(raw.city ?? raw.shipping_city ?? raw.billing_city) }
       : {}),
+    ...(customerGroupName(raw) ? { customerGroup: customerGroupName(raw) } : {}),
     ...(cleanEmail(raw.email_id ?? raw.email)
       ? { email: cleanEmail(raw.email_id ?? raw.email) }
       : {}),
@@ -1476,12 +1480,25 @@ function createCustomerPayload(input: MspCentralCreateCustomerInput) {
     address: cleanText(input.address),
     city: cleanText(input.city),
     country: cleanText(input.country),
+    customer_group: input.customerGroup
+      ? [{ name: cleanText(input.customerGroup) }]
+      : undefined,
     email_id: cleanEmail(input.email),
     name: cleanText(input.name),
     phone: cleanText(input.phone),
     postal_code: cleanText(input.postalCode),
     state: cleanText(input.state),
   });
+}
+
+function customerGroupName(raw: Partial<MspCentralRawCustomer>) {
+  if (Array.isArray(raw.customer_group)) {
+    return cleanText(raw.customer_group.map((group) => group.name).join(", "));
+  }
+  if (typeof raw.customer_group === "object" && raw.customer_group) {
+    return cleanText(raw.customer_group.name);
+  }
+  return cleanText(raw.customer_group) ?? cleanText(raw.customer_group_name);
 }
 
 function removeUndefined<T extends Record<string, unknown>>(value: T) {

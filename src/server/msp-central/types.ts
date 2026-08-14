@@ -135,6 +135,12 @@ export type MspCentralRawCustomer = NonNullable<
   MspCentralRawRequest["account"]
 > & {
   account_name?: string | null;
+  customer_group?:
+    | string
+    | Array<{ id?: string | number | null; name?: string | null }>
+    | { id?: string | number | null; name?: string | null }
+    | null;
+  customer_group_name?: string | null;
   display_name?: string | null;
   email?: string | null;
   email_id?: string | null;
@@ -172,6 +178,7 @@ export type MspCentralRawContact = {
 export type MspCentralCustomerLookup = {
   address?: string;
   city?: string;
+  customerGroup?: string;
   email?: string;
   id: string;
   name: string;
@@ -182,6 +189,7 @@ export type MspCentralCreateCustomerInput = {
   address?: string;
   city?: string;
   country?: string;
+  customerGroup?: string;
   email?: string;
   name: string;
   phone?: string;

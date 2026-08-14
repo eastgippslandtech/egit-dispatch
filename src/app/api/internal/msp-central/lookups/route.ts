@@ -75,6 +75,7 @@ export async function POST(request: Request) {
           address?: string;
           city?: string;
           country?: string;
+          customerGroup?: string;
           email?: string;
           name?: string;
           phone?: string;
@@ -102,6 +103,7 @@ export async function POST(request: Request) {
       address: cleanOptional(body.address),
       city: cleanOptional(body.city),
       country: cleanOptional(body.country),
+      customerGroup: cleanOptional(body.customerGroup),
       email: cleanOptional(body.email),
       name,
       phone: cleanOptional(body.phone),

@@ -3231,6 +3231,7 @@ async function publishMspCentralRequest(input: {
 type RequestLookupCustomer = {
   address?: string;
   city?: string;
+  customerGroup?: string;
   email?: string;
   id: string;
   name: string;
@@ -3241,6 +3242,7 @@ type CreateCustomerInput = {
   address?: string;
   city?: string;
   country?: string;
+  customerGroup?: string;
   email?: string;
   name: string;
   phone?: string;
@@ -4335,6 +4337,11 @@ export function CreateRequestModal({
                       {option.address}
                     </span>
                   ) : null}
+                  {option.customerGroup ? (
+                    <span className="mt-0.5 block text-slate-500">
+                      {option.customerGroup}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -4581,6 +4588,7 @@ function CreateCustomerDialog({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
+  const [customerGroup, setCustomerGroup] = useState("");
   const [state, setState] = useState("VIC");
   const [postalCode, setPostalCode] = useState("");
   const [country, setCountry] = useState("Australia");
@@ -4597,6 +4605,7 @@ function CreateCustomerDialog({
         address: address.trim() || undefined,
         city: city.trim() || undefined,
         country: country.trim() || undefined,
+        customerGroup: customerGroup.trim() || undefined,
         email: email.trim() || undefined,
         name: name.trim(),
         phone: phone.trim() || undefined,
@@ -4648,6 +4657,21 @@ function CreateCustomerDialog({
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
+          </label>
+          <label className="text-sm font-semibold">
+            Customer group
+            <input
+              className="mt-2 w-full rounded-md border border-white/10 bg-[#111d30] px-3 py-2 font-normal"
+              list="create-customer-group-options"
+              placeholder="Bairnsdale, Sale..."
+              value={customerGroup}
+              onChange={(event) => setCustomerGroup(event.target.value)}
+            />
+            <datalist id="create-customer-group-options">
+              <option value="Bairnsdale" />
+              <option value="Bairnsdale 2" />
+              <option value="Sale" />
+            </datalist>
           </label>
           <label className="text-sm font-semibold">
             Email

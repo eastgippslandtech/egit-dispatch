@@ -97,6 +97,7 @@ export interface MobileDatabase {
     staffId: string;
   }): Promise<DatabaseJobRow | null>;
   findStaffByZohoEmail(zohoEmail: string): Promise<DatabaseStaffRow | null>;
+  getActiveTimerForStaff(input: { staffId: string }): Promise<ActiveTimer | null>;
   listJobsForStaff(input: {
     from: string;
     staffId: string;
@@ -161,6 +162,37 @@ export function createPostgresMobileDatabase({
         `,
         staffId,
       });
+    },
+
+    async getActiveTimerForStaff({ staffId }) {
+      const rows = await sql<
+        Array<{
+          action: "mobile_timer_start" | "mobile_timer_stop";
+          payloadSummary: unknown;
+        }>
+      >`
+        select
+          action,
+          payload_summary as "payloadSummary"
+        from public.dispatch_sync_logs
+        where technician_id in (
+          select t.id
+          from public.technicians t
+          join public.staff_profiles sp
+            on lower(sp.outlook_email) = lower(t.outlook_email)
+            or (
+              sp.msp_central_technician_id is not null
+              and t.sdp_technician_id is not null
+              and sp.msp_central_technician_id = t.sdp_technician_id
+            )
+          where sp.id = ${staffId}::uuid
+        )
+          and action in ('mobile_timer_start', 'mobile_timer_stop')
+        order by created_at desc
+        limit 100
+      `;
+
+      return activeTimerFromEvents(rows);
     },
 
     async saveWorklog(input) {
@@ -404,4 +436,55 @@ function timerEventPayload(timer: ActiveTimer | StoppedTimer) {
     stoppedAt: "stoppedAt" in timer ? timer.stoppedAt : undefined,
     technicianId: timer.technicianId,
   };
+}
+
+export function activeTimerFromEvents(
+  events: ReadonlyArray<{
+    action: "mobile_timer_start" | "mobile_timer_stop";
+    payloadSummary: unknown;
+  }>,
+): ActiveTimer | null {
+  const stoppedTimerIds = new Set<string>();
+
+  for (const event of events) {
+    const payload = asRecord(event.payloadSummary);
+    const timer = asRecord(payload.timer);
+    const timerId = stringValue(timer.id);
+    if (!timerId) continue;
+
+    if (event.action === "mobile_timer_stop") {
+      stoppedTimerIds.add(timerId);
+      continue;
+    }
+
+    if (stoppedTimerIds.has(timerId)) continue;
+
+    const jobId = stringValue(timer.jobId);
+    const startedAt = stringValue(timer.startedAt);
+    const technicianId = stringValue(timer.technicianId);
+    if (!jobId || !startedAt || !technicianId) continue;
+
+    return {
+      accumulatedPausedSeconds: numberValue(timer.accumulatedPausedSeconds) ?? 0,
+      id: timerId,
+      jobId,
+      pausedAt: stringValue(timer.pausedAt) ?? null,
+      startedAt,
+      technicianId,
+    };
+  }
+
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }

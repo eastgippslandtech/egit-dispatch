@@ -3,6 +3,33 @@ import { describe, expect, it, vi } from "vitest";
 import { createApiClient, MobileApiError } from "./client";
 
 describe("mobile API client", () => {
+  it("sends queued timer starts to the nested timer API route", async () => {
+    const fetcher = vi.fn(async () => Response.json({ data: { timer: {} } }));
+    const api = createApiClient({
+      accessToken: "access-token",
+      baseUrl: "https://command.egit.com.au/api/mobile/v1",
+      fetcher,
+      requestId: () => "request-1",
+    });
+
+    await api.sendMutation({
+      actionType: "timer-start",
+      attemptCount: 0,
+      createdAt: "2026-08-14T01:00:00.000Z",
+      dependsOn: [],
+      id: "timer-start-job-1",
+      jobId: "job-1",
+      lastError: null,
+      payload: { jobId: "job-1" },
+      state: "pending",
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://command.egit.com.au/api/mobile/v1/jobs/job-1/timer/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("refreshes the access token and retries once when a request is unauthorized", async () => {
     const fetcher = vi
       .fn()

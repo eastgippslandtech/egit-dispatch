@@ -584,12 +584,14 @@ describe("technician navigation", () => {
     ).toHaveBeenCalledWith({
       mode: "existing-permission",
       mobileSession: liveSession,
+      refreshAccessToken: expect.any(Function),
     });
     expect(
       notificationRegistrationMock.registerCurrentDeviceNotifications,
     ).not.toHaveBeenCalledWith({
       mode: "manual",
       mobileSession: liveSession,
+      refreshAccessToken: expect.any(Function),
     });
 
     await pressButtonAsync(rendered, "Enable notifications");
@@ -602,6 +604,7 @@ describe("technician navigation", () => {
     ).toHaveBeenCalledWith({
       mode: "manual",
       mobileSession: liveSession,
+      refreshAccessToken: expect.any(Function),
     });
   });
 

@@ -33,6 +33,17 @@ describe("timer service", () => {
     expect(restored?.elapsedSeconds).toBe(2537);
   });
 
+  it("retains the server-compatible timer id while offline", async () => {
+    const active = await timer.startLocalTimer({
+      jobId: "job-1",
+      now: at("09:00:00"),
+      technicianId,
+      timerId: "timer-timer-start-job-1-123",
+    });
+
+    expect(active.id).toBe("timer-timer-start-job-1-123");
+  });
+
   it.each([
     [1, 15],
     [15, 15],

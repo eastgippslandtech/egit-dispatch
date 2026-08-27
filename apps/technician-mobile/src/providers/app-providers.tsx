@@ -346,6 +346,7 @@ function createUnavailableRepository(error?: unknown): TechnicianRepository {
     addPart: reject,
     attachEvidence: reject,
     completeJob: reject,
+    getActiveTimer: reject,
     getCurrentStaff: reject,
     getJob: reject,
     listSchedule: reject,

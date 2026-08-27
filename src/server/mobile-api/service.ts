@@ -102,6 +102,23 @@ export async function getMobileMe({ auth }: { auth: MobileAuthContext }) {
   return { staff: cloneMobileFixture(staff) };
 }
 
+export async function getMobileActiveTimer({
+  auth,
+  database = getConfiguredMobileDatabase(),
+}: {
+  auth: MobileAuthContext;
+  database?: MobileDatabase | null;
+}): Promise<{ timer: ActiveTimer | null }> {
+  if (!database) {
+    return { timer: null };
+  }
+
+  const staff = await requireDatabaseStaff(database, auth.email);
+  return {
+    timer: await database.getActiveTimerForStaff({ staffId: staff.id }),
+  };
+}
+
 export async function listMobileJobs({
   auth,
   database = getConfiguredMobileDatabase(),
@@ -429,6 +446,18 @@ export async function startMobileTimer({
     );
   }
 
+  if (database) {
+    const activeTimer = await database.getActiveTimerForStaff({
+      staffId: job.technician.id,
+    });
+    if (activeTimer) {
+      throw Object.assign(
+        new Error("A timer is already running for this technician."),
+        { code: "BAD_REQUEST", status: 409 },
+      );
+    }
+  }
+
   const startedAt = requireIsoTimestamp(command.occurredAt, "Timer start time");
   const timer: ActiveTimer = {
     accumulatedPausedSeconds: 0,
@@ -483,6 +512,22 @@ export async function stopMobileTimer({
       new Error(job.permissions.readOnlyReason ?? "A timer cannot be stopped for this job."),
       { code: "READ_ONLY_SOURCE", status: 409 },
     );
+  }
+
+  if (database) {
+    const activeTimer = await database.getActiveTimerForStaff({
+      staffId: job.technician.id,
+    });
+    if (
+      !activeTimer ||
+      activeTimer.id !== command.timerId ||
+      activeTimer.jobId !== jobId
+    ) {
+      throw Object.assign(
+        new Error("The active timer does not match this stop command."),
+        { code: "BAD_REQUEST", status: 409 },
+      );
+    }
   }
 
   const startedAt = requireIsoTimestamp(command.startedAt, "Timer start time");

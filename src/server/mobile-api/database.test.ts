@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPostgresMobileDatabase } from "./database";
+import {
+  activeTimerFromEvents,
+  createPostgresMobileDatabase,
+} from "./database";
 
 describe("mobile database crew access", () => {
   it("loads jobs from both lead and crew assignments for the signed-in technician", async () => {
@@ -45,5 +48,59 @@ describe("mobile database crew access", () => {
     const statement = statements.join("\n");
     expect(statement).toContain("and assignments.assignment_id = ?::uuid");
     expect(statement).not.toContain("and dl.id = ?::uuid");
+  });
+
+  it("finds timer logs through the technician mapped to the signed-in staff profile", async () => {
+    const statements: string[] = [];
+    const sql = vi.fn(async (strings: TemplateStringsArray) => {
+      statements.push(strings.join("?"));
+      return [];
+    }) as unknown as {
+      (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]>;
+      json: (value: unknown) => unknown;
+    };
+    sql.json = (value) => value;
+    const database = createPostgresMobileDatabase({ sql: sql as never });
+
+    await database.getActiveTimerForStaff({
+      staffId: "00000000-0000-0000-0000-000000000001",
+    });
+
+    const statement = statements.join("\n");
+    expect(statement).toContain("from public.technicians t");
+    expect(statement).toContain("join public.staff_profiles sp");
+  });
+
+  it("keeps the most recent un-stopped timer from audit events", () => {
+    expect(
+      activeTimerFromEvents([
+        {
+          action: "mobile_timer_stop",
+          payloadSummary: { timer: { id: "timer-finished" } },
+        },
+        {
+          action: "mobile_timer_start",
+          payloadSummary: {
+            timer: {
+              id: "timer-finished",
+              jobId: "job-finished",
+              startedAt: "2026-08-14T01:00:00.000Z",
+              technicianId: "staff-riley",
+            },
+          },
+        },
+        {
+          action: "mobile_timer_start",
+          payloadSummary: {
+            timer: {
+              id: "timer-live",
+              jobId: "job-live",
+              startedAt: "2026-08-14T02:00:00.000Z",
+              technicianId: "staff-riley",
+            },
+          },
+        },
+      ]),
+    ).toMatchObject({ id: "timer-live", jobId: "job-live" });
   });
 });

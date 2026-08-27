@@ -55,6 +55,10 @@ export class MockTechnicianRepository implements TechnicianRepository {
     return cloneMobileFixture(this.requireStaff());
   }
 
+  async getActiveTimer(): Promise<ActiveTimer | null> {
+    return this.activeTimer ? cloneMobileFixture(this.activeTimer) : null;
+  }
+
   async listSchedule(range: DateRange): Promise<MobileJob[]> {
     validateRange(range);
     const staff = this.requireStaff();

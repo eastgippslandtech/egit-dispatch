@@ -6,6 +6,7 @@ import {
 } from "@/server/dispatch/test-sync";
 import {
   completeMobileJob,
+  getMobileActiveTimer,
   listMobileJobs,
   getMobileJob,
   registerMobilePushToken,
@@ -133,6 +134,9 @@ function createDatabase(overrides: Partial<MobileDatabase> = {}): MobileDatabase
     async findStaffByZohoEmail() {
       return dbStaff;
     },
+    async getActiveTimerForStaff() {
+      return null;
+    },
     async findJobForStaff() {
       return dbJob;
     },
@@ -194,6 +198,28 @@ describe("mobile API service", () => {
       pushToken: "ExponentPushToken[riley]",
       staffEmail: "riley@egit.com.au",
     });
+  });
+
+  it("returns the live timer recorded for the signed-in technician", async () => {
+    const timer = {
+      accumulatedPausedSeconds: 0,
+      id: "timer-live-riley",
+      jobId: dbJobId,
+      pausedAt: null,
+      startedAt: "2026-07-14T01:30:00.000Z",
+      technicianId: dbStaff.id,
+    };
+    const getActiveTimerForStaff = vi.fn(async () => timer);
+
+    const response = await getMobileActiveTimer({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        getActiveTimerForStaff,
+      } as unknown as Partial<MobileDatabase>),
+    });
+
+    expect(getActiveTimerForStaff).toHaveBeenCalledWith({ staffId: dbStaff.id });
+    expect(response).toEqual({ timer });
   });
 
   it("rejects a write to an Outlook-only event", async () => {
@@ -912,11 +938,21 @@ describe("mobile API service", () => {
   });
 
   it("starts and stops native timers for real database jobs", async () => {
-    const saveTimerEvent = vi.fn(async () => ({
-      recordedAt: "2026-07-14T01:30:00.000Z",
-      resourceId: "timer-log-1",
-      resourceVersion: `db-${dbJobId}-timer-log-1`,
-    }));
+    let activeTimer: Awaited<
+      ReturnType<MobileDatabase["getActiveTimerForStaff"]>
+    > = null;
+    const getActiveTimerForStaff = vi.fn(async () => activeTimer);
+    const saveTimerEvent = vi.fn(async (input: Parameters<MobileDatabase["saveTimerEvent"]>[0]) => {
+      activeTimer =
+        input.action === "mobile_timer_start"
+          ? input.timer
+          : null;
+      return {
+        recordedAt: "2026-07-14T01:30:00.000Z",
+        resourceId: "timer-log-1",
+        resourceVersion: `db-${dbJobId}-timer-log-1`,
+      };
+    });
     const started = await startMobileTimer({
       auth: rileyMobileAuth,
       command: {
@@ -927,6 +963,7 @@ describe("mobile API service", () => {
         occurredAt: "2026-07-14T01:30:00.000Z",
       },
       database: createDatabase({
+        getActiveTimerForStaff,
         saveTimerEvent,
       } as unknown as Partial<MobileDatabase>),
       jobId: dbJobId,
@@ -962,6 +999,7 @@ describe("mobile API service", () => {
         timerId: "timer-timer-start-1",
       },
       database: createDatabase({
+        getActiveTimerForStaff,
         saveTimerEvent,
       } as unknown as Partial<MobileDatabase>),
       jobId: dbJobId,

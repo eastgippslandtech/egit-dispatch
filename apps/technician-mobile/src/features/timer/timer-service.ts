@@ -5,6 +5,7 @@ interface StartLocalTimerInput {
   jobId: string;
   now: Date;
   technicianId: string;
+  timerId?: string;
 }
 
 interface RestoreTimerInput {
@@ -38,6 +39,7 @@ export function createTimerService(database: CommandCentreDatabase) {
       jobId,
       now,
       technicianId,
+      timerId,
     }: StartLocalTimerInput): Promise<ActiveTimer> {
       const existing = await database.getActiveTimer(technicianId);
       if (existing) {
@@ -45,7 +47,7 @@ export function createTimerService(database: CommandCentreDatabase) {
       }
       const timer: ActiveTimer = {
         accumulatedPausedSeconds: 0,
-        id: `timer-${technicianId}-${now.getTime()}`,
+        id: timerId ?? `timer-${technicianId}-${now.getTime()}`,
         jobId,
         pausedAt: null,
         startedAt: now.toISOString(),

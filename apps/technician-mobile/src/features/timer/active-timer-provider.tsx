@@ -48,15 +48,17 @@ export function ActiveTimerProvider({
 
   useEffect(() => {
     let cancelled = false;
-    void restoreActiveTimerSnapshot().then((snapshot) => {
-      if (!cancelled && snapshot) {
-        setActiveSnapshot(snapshot);
-      }
+
+    void restoreTimerSnapshot({ repository }).then((snapshot) => {
+      if (cancelled || !snapshot) return;
+      setActiveSnapshot((current) => current ?? snapshot);
+      void saveActiveTimerSnapshot(snapshot);
     });
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [repository]);
 
   const value = useMemo<ActiveTimerContextValue>(
     () => ({
@@ -198,6 +200,31 @@ async function restoreActiveTimerSnapshot(): Promise<ActiveTimerSnapshot | null>
   } catch {
     await clearActiveTimerSnapshot();
     return null;
+  }
+}
+
+async function restoreTimerSnapshot({
+  repository,
+}: {
+  repository: TechnicianRepository;
+}): Promise<ActiveTimerSnapshot | null> {
+  const stored = await restoreActiveTimerSnapshot();
+
+  try {
+    const timer = repository.getActiveTimer
+      ? await repository.getActiveTimer()
+      : null;
+    if (!timer) return stored;
+
+    const job = await repository.getJob(timer.jobId).catch(() => null);
+    return {
+      baseVersion: job?.version ?? stored?.baseVersion ?? "live-timer",
+      jobId: timer.jobId,
+      jobTitle: job?.title ?? stored?.jobTitle ?? "Active job",
+      timer,
+    };
+  } catch {
+    return stored;
   }
 }
 

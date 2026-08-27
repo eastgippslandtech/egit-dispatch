@@ -15,9 +15,11 @@ type RegistrationMode = "automatic" | "existing-permission" | "manual";
 export async function registerCurrentDeviceNotifications({
   mobileSession,
   mode,
+  refreshAccessToken,
 }: {
   mobileSession: MobileSession;
   mode: RegistrationMode;
+  refreshAccessToken?: () => Promise<string | null>;
 }) {
   if (!Device.isDevice || Platform.OS === "web") {
     return { status: "not-device" as const };
@@ -35,6 +37,7 @@ export async function registerCurrentDeviceNotifications({
   const api = createApiClient({
     accessToken: mobileSession.accessToken,
     baseUrl: config.mobileApiBaseUrl,
+    refreshAccessToken,
   });
   const registration = createPushRegistration({
     notifications: Notifications,

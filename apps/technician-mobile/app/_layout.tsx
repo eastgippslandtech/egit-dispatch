@@ -28,7 +28,7 @@ Notifications.setNotificationHandler({
 });
 
 export function RootNavigator() {
-  const { session } = useSession();
+  const { refreshAccessToken, session } = useSession();
   const isApproved = session.status === "approved";
 
   useEffect(() => {
@@ -41,10 +41,11 @@ export function RootNavigator() {
     void registerCurrentDeviceNotifications({
       mode: "existing-permission",
       mobileSession,
+      refreshAccessToken,
     }).catch(() => {
       // The Profile button remains available for manual retry and user-facing status.
     });
-  }, [session]);
+  }, [refreshAccessToken, session]);
 
   return (
     <View style={styles.shell}>
@@ -55,7 +56,7 @@ export function RootNavigator() {
       {isApproved ? <GlobalTimerBanner /> : null}
       <FirstLoginPermissionGate
         enableLocation={enableWhileUsingLocation}
-        enableNotifications={() => enableJobNotifications(session)}
+        enableNotifications={() => enableJobNotifications(session, refreshAccessToken)}
         enabled={isApproved}
       >
         <Stack
@@ -84,6 +85,7 @@ export function RootNavigator() {
 
 async function enableJobNotifications(
   session: ReturnType<typeof useSession>["session"],
+  refreshAccessToken: ReturnType<typeof useSession>["refreshAccessToken"],
 ): Promise<string> {
   const mobileSession =
     session.status === "approved" ? session.mobileSession : undefined;
@@ -94,6 +96,7 @@ async function enableJobNotifications(
   const result = await registerCurrentDeviceNotifications({
     mode: "manual",
     mobileSession,
+    refreshAccessToken,
   });
 
   return result.status === "registered"

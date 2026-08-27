@@ -126,20 +126,27 @@ export default function ProfileRoute() {
       return;
     }
 
-    const result = await registerCurrentDeviceNotifications({
-      mode: "manual",
-      mobileSession,
-    });
-    setNotificationStatus(
-      result.status === "registered"
-        ? `Enabled (${result.tokenPreview})`
-        : result.status === "settings-required"
-          ? "Open phone settings to enable notifications"
-        : result.status === "not-device"
-          ? "Use a physical phone to enable notifications"
-          : "Permission not granted. Enable it in phone settings.",
-    );
-    await refreshPermissionStatuses();
+    try {
+      const result = await registerCurrentDeviceNotifications({
+        mode: "manual",
+        mobileSession,
+        refreshAccessToken,
+      });
+      setNotificationStatus(
+        result.status === "registered"
+          ? `Enabled (${result.tokenPreview})`
+          : result.status === "settings-required"
+            ? "Open phone settings to enable notifications"
+          : result.status === "not-device"
+            ? "Use a physical phone to enable notifications"
+            : "Permission not granted. Enable it in phone settings.",
+      );
+      await refreshPermissionStatuses();
+    } catch {
+      setNotificationStatus(
+        "Notifications are enabled on this phone, but registration could not be completed. Please try again.",
+      );
+    }
   };
   const enableLocation = async () => {
     setLocationStatus(

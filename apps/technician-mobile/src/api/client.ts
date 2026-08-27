@@ -81,9 +81,7 @@ export function createApiClient({
       mutation: QueuedMutation,
     ): Promise<TResponse> {
       return this.request<TResponse>(
-        `/jobs/${encodeURIComponent(mutation.jobId)}/${encodeURIComponent(
-          mutation.actionType,
-        )}`,
+        mutationPath(mutation),
         {
           body: mutation.payload,
           idempotencyKey: mutation.id,
@@ -92,6 +90,18 @@ export function createApiClient({
       );
     },
   };
+}
+
+function mutationPath(mutation: QueuedMutation): string {
+  const jobPath = `/jobs/${encodeURIComponent(mutation.jobId)}`;
+  switch (mutation.actionType) {
+    case "timer-start":
+      return `${jobPath}/timer/start`;
+    case "timer-stop":
+      return `${jobPath}/timer/stop`;
+    default:
+      return `${jobPath}/${encodeURIComponent(mutation.actionType)}`;
+  }
 }
 
 function buildRequestInit({

@@ -64,11 +64,12 @@ export function createOfflineTechnicianRepository({
   async function queueCommand(
     actionType: string,
     command: MutationEnvelope,
+    dependsOn: string[] = [],
   ): Promise<MutationReceipt> {
     await queue.enqueue({
       actionType,
       createdAt: command.occurredAt,
-      dependsOn: [],
+      dependsOn,
       id: command.clientMutationId,
       jobId: command.jobId,
       payload: command,
@@ -85,6 +86,22 @@ export function createOfflineTechnicianRepository({
   }
 
   return {
+    async getActiveTimer(): Promise<ActiveTimer | null> {
+      if (remote?.getActiveTimer) {
+        try {
+          return await remote.getActiveTimer();
+        } catch {
+          // Fall through to a timer retained locally for offline continuity.
+        }
+      }
+
+      const [cachedJob] = await database.listCachedJobs();
+      return timers.restoreActiveTimer({
+        now: new Date(),
+        technicianId: cachedJob?.technician.id,
+      });
+    },
+
     async getCurrentStaff(): Promise<MobileStaff> {
       if (remote) {
         return remote.getCurrentStaff();
@@ -150,6 +167,7 @@ export function createOfflineTechnicianRepository({
         jobId: command.jobId,
         now: new Date(command.occurredAt),
         technicianId: await staffIdFor(command.jobId, database),
+        timerId: `timer-${command.clientMutationId}`,
       });
     },
 
@@ -157,7 +175,7 @@ export function createOfflineTechnicianRepository({
       if (remote?.stopTimer) {
         return remote.stopTimer(command);
       }
-      await queueCommand("timer-stop", command);
+      await queueCommand("timer-stop", command, [startMutationId(command.timerId)]);
       return timers.stopLocalTimer({
         now: new Date(command.occurredAt),
         technicianId: await staffIdFor(command.jobId, database),
@@ -219,28 +237,41 @@ export function createOfflineTechnicianRepository({
       }
 
       await queue.resetAbandonedSyncing();
-      const runnable = await queue.listRunnable();
       let failed = 0;
       let synced = 0;
+      const attempted = new Set<string>();
 
-      for (const mutation of runnable) {
-        try {
-          await queue.markSyncing(mutation.id);
-          await api.sendMutation(mutation);
-          await queue.markSynced(mutation.id);
-          synced += 1;
-        } catch (error) {
-          await queue.markFailed(
-            mutation.id,
-            error instanceof Error ? error.message : "Sync failed.",
-          );
-          failed += 1;
+      while (true) {
+        const runnable = (await queue.listRunnable()).filter(
+          (mutation) => !attempted.has(mutation.id),
+        );
+        if (runnable.length === 0) break;
+
+        for (const mutation of runnable) {
+          attempted.add(mutation.id);
+          try {
+            await queue.markSyncing(mutation.id);
+            await api.sendMutation(mutation);
+            await queue.markSynced(mutation.id);
+            synced += 1;
+          } catch (error) {
+            await queue.markFailed(
+              mutation.id,
+              error instanceof Error ? error.message : "Sync failed.",
+            );
+            failed += 1;
+          }
         }
       }
 
       return { failed, synced };
     },
   };
+}
+
+function startMutationId(timerId: string): string {
+  const prefix = "timer-";
+  return timerId.startsWith(prefix) ? timerId.slice(prefix.length) : timerId;
 }
 
 function filterJobsForRange(

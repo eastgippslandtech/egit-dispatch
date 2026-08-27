@@ -107,6 +107,33 @@ describe("active timer provider", () => {
     expect(textValues(rendered)).toContain("Timer stopped: 15 minutes queued");
   });
 
+  it("restores the server timer when the app opens on another device", async () => {
+    const repository = {
+      getActiveTimer: vi.fn(async () => ({
+        accumulatedPausedSeconds: 0,
+        id: "timer-server-riley",
+        jobId: job.id,
+        pausedAt: null,
+        startedAt: "2026-07-14T02:00:00.000Z",
+        technicianId: job.technician.id,
+      })),
+      getJob: vi.fn(async () => job),
+      startTimer: vi.fn(),
+      stopTimer: vi.fn(),
+    } as unknown as TechnicianRepository;
+
+    const rendered = await renderWithProvider(repository);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(textValues(rendered)).toEqual(
+      expect.arrayContaining(["Timer running", job.title, "5:00"]),
+    );
+  });
+
   it("shows a visible message when starting a timer fails", async () => {
     const repository = {
       startTimer: vi.fn(async () => {

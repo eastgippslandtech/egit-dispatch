@@ -1,4 +1,5 @@
 import type {
+  ActiveTimer,
   AddPartCommand,
   AttachEvidenceCommand,
   CompleteJobCommand,
@@ -26,6 +27,13 @@ export function createApiTechnicianRepository(
   api: ApiClient,
 ): TechnicianRepository {
   return {
+    async getActiveTimer(): Promise<ActiveTimer | null> {
+      const response = await api.request<DataEnvelope<{ timer: ActiveTimer | null }>>(
+        "/timer",
+      );
+      return response.data.timer;
+    },
+
     async getCurrentStaff(): Promise<MobileStaff> {
       const response = await api.request<DataEnvelope<{ staff: MobileStaff }>>(
         "/me",

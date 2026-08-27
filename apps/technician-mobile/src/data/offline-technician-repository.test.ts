@@ -213,6 +213,55 @@ describe("offline technician repository", () => {
     );
   });
 
+  it("syncs an offline timer start before its matching stop", async () => {
+    await database.saveCachedJob(firewallJob, firewallJob.updatedAt);
+    const paths: string[] = [];
+    const api = createApiClient({
+      accessToken: "mobile-token",
+      baseUrl: "https://command.egit.com.au/api/mobile/v1",
+      fetcher: async (url) => {
+        paths.push(String(url));
+        return Response.json({ data: { timer: {} } });
+      },
+      requestId: () => "req-timer",
+    });
+    const repository = createOfflineTechnicianRepository({
+      api,
+      database,
+      queue,
+      remote: null,
+    });
+    const started = await repository.startTimer({
+      baseVersion: firewallJob.version,
+      clientMutationId: "timer-start-firewall-1",
+      installationId: "phone-1",
+      jobId: firewallJob.id,
+      occurredAt: "2026-08-14T01:00:00.000Z",
+    });
+    expect(started.id).toBe("timer-timer-start-firewall-1");
+    await repository.stopTimer({
+      baseVersion: firewallJob.version,
+      clientMutationId: "timer-stop-firewall-1",
+      installationId: "phone-1",
+      jobId: firewallJob.id,
+      occurredAt: "2026-08-14T01:16:00.000Z",
+      startedAt: started.startedAt,
+      timerId: started.id,
+    });
+
+    expect((await queue.listRunnable()).map((mutation) => mutation.id)).toEqual([
+      "timer-start-firewall-1",
+    ]);
+
+    await repository.syncNow();
+
+    expect(paths).toEqual([
+      "https://command.egit.com.au/api/mobile/v1/jobs/firewall-riley/timer/start",
+      "https://command.egit.com.au/api/mobile/v1/jobs/firewall-riley/timer/stop",
+    ]);
+    expect(await queue.listRunnable()).toEqual([]);
+  });
+
   it("queues the complete Work Log outcome unchanged when the remote save fails", async () => {
     const remoteSave = vi.fn(async () => {
       throw new Error("offline");

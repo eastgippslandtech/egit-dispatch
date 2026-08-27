@@ -16,6 +16,7 @@ import type {
 } from "../contracts/mobile";
 
 export interface TechnicianRepository {
+  getActiveTimer?(): Promise<ActiveTimer | null>;
   getCurrentStaff(): Promise<MobileStaff>;
   listCachedSchedule?(range: DateRange): Promise<MobileJob[]>;
   listSchedule(range: DateRange): Promise<MobileJob[]>;

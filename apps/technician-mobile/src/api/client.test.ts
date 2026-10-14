@@ -3,6 +3,38 @@ import { describe, expect, it, vi } from "vitest";
 import { createApiClient, MobileApiError } from "./client";
 
 describe("mobile API client", () => {
+  it("fails with a timeout instead of waiting forever for a response", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | null | undefined;
+      const fetcher = vi.fn((
+        _url: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        signal = init?.signal;
+        return new Promise<Response>(() => undefined);
+      });
+      const api = createApiClient({
+        accessToken: "access-token",
+        baseUrl: "https://command.egit.com.au/api/mobile/v1",
+        fetcher: fetcher as typeof fetch,
+        requestTimeoutMs: 1_000,
+      });
+
+      const request = api.request("/unassigned");
+      const rejection = expect(request).rejects.toMatchObject({
+        message: expect.stringContaining("respond in time"),
+        status: 408,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejection;
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends queued timer starts to the nested timer API route", async () => {
     const fetcher = vi.fn(async () => Response.json({ data: { timer: {} } }));
     const api = createApiClient({

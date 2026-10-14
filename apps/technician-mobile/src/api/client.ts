@@ -5,6 +5,7 @@ export interface ApiClientOptions {
   baseUrl: string;
   fetcher?: typeof fetch;
   requestId?: () => string;
+  requestTimeoutMs?: number;
   refreshAccessToken?: () => Promise<string | null>;
 }
 
@@ -29,6 +30,7 @@ export function createApiClient({
   baseUrl,
   fetcher = fetch,
   requestId = createRequestId,
+  requestTimeoutMs = 30_000,
   refreshAccessToken,
 }: ApiClientOptions): ApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -40,21 +42,34 @@ export function createApiClient({
       options: ApiRequestOptions = {},
     ): Promise<TResponse> {
       const url = `${normalizedBaseUrl}${normalizePath(path)}`;
-      const response = await fetcher(url, buildRequestInit({
-        accessToken: currentAccessToken,
-        options,
-        requestId: requestId(),
-      }));
+      const response = await fetchWithTimeout(
+        fetcher,
+        url,
+        buildRequestInit({
+          accessToken: currentAccessToken,
+          options,
+          requestId: requestId(),
+        }),
+        requestTimeoutMs,
+      );
 
       if (response.status === 401 && refreshAccessToken) {
-        const refreshedAccessToken = await refreshAccessToken();
+        const refreshedAccessToken = await withTimeout(
+          refreshAccessToken,
+          requestTimeoutMs,
+        );
         if (refreshedAccessToken) {
           currentAccessToken = refreshedAccessToken;
-          const retryResponse = await fetcher(url, buildRequestInit({
-            accessToken: currentAccessToken,
-            options,
-            requestId: requestId(),
-          }));
+          const retryResponse = await fetchWithTimeout(
+            fetcher,
+            url,
+            buildRequestInit({
+              accessToken: currentAccessToken,
+              options,
+              requestId: requestId(),
+            }),
+            requestTimeoutMs,
+          );
 
           if (retryResponse.ok) {
             return (await retryResponse.json()) as TResponse;
@@ -90,6 +105,43 @@ export function createApiClient({
       );
     },
   };
+}
+
+function fetchWithTimeout(
+  fetcher: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  return withTimeout(
+    () => fetcher(url, { ...init, signal: controller.signal }),
+    timeoutMs,
+    () => controller.abort(),
+  );
+}
+
+function withTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+  onTimeout?: () => void,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      onTimeout?.();
+      reject(
+        new MobileApiError(
+          "Command Centre did not respond in time. Check your connection and try again.",
+          408,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  return Promise.race([operation(), timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
 }
 
 function mutationPath(mutation: QueuedMutation): string {

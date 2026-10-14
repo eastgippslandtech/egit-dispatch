@@ -152,18 +152,17 @@ export function useSchedule(range: DateRange): ScheduleState {
   }, [refresh]);
 
   const hasSettledCurrentRange = settledRangeKey === rangeKey;
-  const effectiveLoading = loading || !hasSettledCurrentRange;
 
   return {
     connectionState: error
       ? "error"
-      : effectiveLoading || refreshing
+      : loading || refreshing
         ? "connecting"
         : "connected",
     error,
     jobs: hasSettledCurrentRange ? jobs : [],
     lastSyncedAt,
-    loading: effectiveLoading,
+    loading,
     refresh,
     refreshing,
   };

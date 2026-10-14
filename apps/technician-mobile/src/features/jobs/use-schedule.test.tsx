@@ -6,6 +6,8 @@ import type { TechnicianRepository } from "../../data/technician-repository";
 import { AppProviders, type TechnicianSession } from "../../providers/app-providers";
 import { MOBILE_JOB_FIXTURES, MOBILE_STAFF_FIXTURES } from "../../testing/fixtures";
 
+import type { MobileJob } from "../../contracts/mobile";
+
 import { type ScheduleState, useSchedule } from "./use-schedule";
 
 vi.mock("react-native", () => ({
@@ -54,6 +56,32 @@ describe("useSchedule", () => {
     expect(state?.jobs).toEqual([job]);
     expect(state?.loading).toBe(false);
     expect(state?.connectionState).toBe("connecting");
+  });
+
+  it("stops showing the initial loading state when the live schedule request fails", async () => {
+    let rejectSchedule: ((error: Error) => void) | undefined;
+    const repository = createRepository({
+      listSchedule: vi.fn(
+        () =>
+          new Promise<MobileJob[]>((_resolve, reject) => {
+            rejectSchedule = reject;
+          }),
+      ),
+    });
+    let state: ScheduleState | undefined;
+
+    await renderProbe(repository, (nextState) => {
+      state = nextState;
+    });
+
+    await act(async () => {
+      rejectSchedule?.(new Error("Mobile API request failed with 401."));
+      await Promise.resolve();
+    });
+
+    expect(state?.loading).toBe(false);
+    expect(state?.connectionState).toBe("error");
+    expect(state?.error).toBe("Mobile API request failed with 401.");
   });
 
   it("deduplicates refreshes and keeps the current schedule after an error", async () => {

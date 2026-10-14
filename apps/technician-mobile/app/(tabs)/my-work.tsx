@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { MobileJob } from "../../src/contracts/mobile";
 import { JobCard } from "../../src/features/jobs/job-card";
 import { useSchedule } from "../../src/features/jobs/use-schedule";
-import { todayDateKey } from "../../src/features/schedule/date-keys";
+import { shiftDateKey, todayDateKey } from "../../src/features/schedule/date-keys";
 import { colours } from "../../src/theme/tokens";
 
 export default function MyWorkRoute() {
@@ -21,7 +21,10 @@ export default function MyWorkRoute() {
   const [selectedSectionTitle, setSelectedSectionTitle] = useState<string | null>(
     null,
   );
-  const schedule = useSchedule({ from: today, to: "2026-08-31" });
+  const schedule = useSchedule({
+    from: shiftDateKey(today, -30),
+    to: shiftDateKey(today, 90),
+  });
   const sections = buildMyWorkSections(schedule.jobs, today);
   const selectedSection = useMemo(
     () =>

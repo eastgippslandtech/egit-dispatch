@@ -311,6 +311,18 @@ describe("native schedule screens", () => {
     expect(drilldownTexts).not.toContain("File server disk expansion");
   });
 
+  it("requests a date range based on today instead of a stale fixed cutoff", async () => {
+    vi.setSystemTime(new Date("2026-07-12T01:00:00.000Z"));
+    const listSchedule = vi.fn(async () => []);
+
+    await renderScreen("my-work", createScheduleOnlyRepository(listSchedule));
+
+    expect(listSchedule).toHaveBeenCalledWith({
+      from: "2026-06-12",
+      to: "2026-10-10",
+    });
+  });
+
   it("makes My Work section counts large and obvious inside each section", async () => {
     vi.setSystemTime(new Date("2026-07-08T23:30:00.000Z"));
     const rendered = await renderScreen("my-work");

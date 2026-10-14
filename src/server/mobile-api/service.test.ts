@@ -8,6 +8,7 @@ import {
   completeMobileJob,
   getMobileActiveTimer,
   listMobileJobs,
+  listMobileUnassignedJobs,
   getMobileJob,
   registerMobilePushToken,
   rileyMobileAuth,
@@ -165,6 +166,48 @@ describe("mobile API service", () => {
   beforeEach(() => {
     listDispatchTestSyncEventsMock.mockResolvedValue([]);
     recordDispatchTestSyncEventMock.mockReset();
+  });
+
+  it("lists only live, open, unassigned requests not already claimed in Command Centre", async () => {
+    const baseRequest = getDispatchDesignMockData().requests[0];
+    if (!baseRequest) throw new Error("Dispatch request fixture is required.");
+    const unassigned = {
+      ...baseRequest,
+      id: "msp-100301",
+      requestNumber: "REQ-100301",
+      status: "Open" as const,
+      technicianId: undefined,
+      scheduledStart: undefined,
+      updatedAt: "2026-10-13T22:00:00.000Z",
+      subject: "Printer offline",
+    };
+    const response = await listMobileUnassignedJobs({
+      auth: rileyMobileAuth,
+      database: createDatabase({
+        async listClaimedRequestIds() {
+          return ["claimed-request"];
+        },
+      }),
+      mspClient: {
+        async listRequests() {
+          return [
+            unassigned,
+            { ...unassigned, id: "assigned-request", technicianId: "tech-riley" },
+            { ...unassigned, id: "scheduled-request", scheduledStart: "2026-10-15T09:00:00+11:00" },
+            { ...unassigned, id: "claimed-request" },
+            { ...unassigned, id: "resolved-request", status: "Resolved" as const },
+          ];
+        },
+      } as never,
+    });
+
+    expect(response.jobs).toHaveLength(1);
+    expect(response.jobs[0]).toMatchObject({
+      id: "msp-100301",
+      requestNumber: "REQ-100301",
+      title: "Printer offline",
+      permissions: { canStartTimer: false, canWriteWorklog: false },
+    });
   });
 
   it("returns only jobs for the authenticated staff profile", async () => {

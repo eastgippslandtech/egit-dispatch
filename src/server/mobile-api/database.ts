@@ -27,6 +27,7 @@ export interface DatabaseStaffRow {
   outlookEmail: string;
   outlookUserPrincipalName: string;
   role: string;
+  technicianId?: string | null;
   zohoEmail: string;
 }
 
@@ -103,6 +104,7 @@ export interface MobileDatabase {
     staffId: string;
     to: string;
   }): Promise<DatabaseJobRow[]>;
+  listClaimedRequestIds?(): Promise<string[]>;
   saveTimerEvent(input: SaveDatabaseTimerEventInput): Promise<SaveDatabaseWorklogResult>;
   saveWorklog(input: SaveDatabaseWorklogInput): Promise<SaveDatabaseWorklogResult>;
 }
@@ -124,8 +126,8 @@ export function createPostgresMobileDatabase({
     async findStaffByZohoEmail(zohoEmail) {
       const rows = await sql<DatabaseStaffRow[]>`
         select
-          id::text as "id",
-          display_name as "displayName",
+          staff_profiles.id::text as "id",
+          staff_profiles.display_name as "displayName",
           role::text as "role",
           base_office as "baseOffice",
           zoho_email as "zohoEmail",
@@ -133,12 +135,19 @@ export function createPostgresMobileDatabase({
           outlook_user_principal_name as "outlookUserPrincipalName",
           msp_central_email as "mspCentralEmail",
           msp_central_technician_id as "mspCentralTechnicianId",
-          active,
-          dispatch_enabled as "dispatchEnabled"
+          staff_profiles.active,
+          staff_profiles.dispatch_enabled as "dispatchEnabled",
+          t.id::text as "technicianId"
         from public.staff_profiles
-        where lower(zoho_email) = lower(${zohoEmail})
-          and active = true
-          and dispatch_enabled = true
+        left join public.technicians t on lower(staff_profiles.outlook_email) = lower(t.outlook_email)
+          or (
+            staff_profiles.msp_central_technician_id is not null
+            and t.sdp_technician_id is not null
+            and staff_profiles.msp_central_technician_id = t.sdp_technician_id
+          )
+        where lower(staff_profiles.zoho_email) = lower(${zohoEmail})
+          and staff_profiles.active = true
+          and staff_profiles.dispatch_enabled = true
         limit 1
       `;
 
@@ -162,6 +171,23 @@ export function createPostgresMobileDatabase({
         `,
         staffId,
       });
+    },
+
+    async listClaimedRequestIds() {
+      const rows = await sql<Array<{ requestId: string }>>`
+        select request_id as "requestId"
+        from public.mobile_dispatch_claims
+        union
+        select request_id as "requestId"
+        from (
+          select distinct on (request_id) request_id, event_type
+          from public.dispatch_test_schedule_events
+          where request_id is not null
+          order by request_id, created_at desc
+        ) latest_schedule_state
+        where event_type in ('scheduled', 'rescheduled')
+      `;
+      return rows.map((row) => row.requestId);
     },
 
     async getActiveTimerForStaff({ staffId }) {

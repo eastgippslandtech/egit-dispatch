@@ -9,6 +9,7 @@ import type {
   MutationReceipt,
   SaveSignOffCommand,
   SaveWorklogCommand,
+  ScheduleUnassignedJobCommand,
   StartTimerCommand,
   StopTimerCommand,
   UpdateStatusCommand,
@@ -58,6 +59,21 @@ export function createApiTechnicianRepository(
           }),
         )
         .sort((left, right) => left.startAt.localeCompare(right.startAt));
+    },
+
+    async listUnassignedJobs(): Promise<MobileJob[]> {
+      const response = await api.request<DataEnvelope<{ jobs: MobileJob[] }>>(
+        "/unassigned",
+      );
+      return response.data.jobs;
+    },
+
+    async scheduleUnassignedJob(command: ScheduleUnassignedJobCommand) {
+      const response = await api.request<DataEnvelope<{ receipt: MutationReceipt }>>(
+        `/unassigned/${encodeURIComponent(command.jobId)}/schedule`,
+        { body: command, idempotencyKey: command.clientMutationId },
+      );
+      return response.data.receipt;
     },
 
     async getJob(jobId: string): Promise<MobileJob> {

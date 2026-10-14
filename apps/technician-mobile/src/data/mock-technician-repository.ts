@@ -10,6 +10,7 @@ import type {
   MutationReceipt,
   SaveSignOffCommand,
   SaveWorklogCommand,
+  ScheduleUnassignedJobCommand,
   StartTimerCommand,
   StoppedTimer,
   StopTimerCommand,
@@ -25,11 +26,13 @@ import type { TechnicianRepository } from "./technician-repository";
 
 interface MockTechnicianRepositoryOptions {
   jobs?: readonly MobileJob[];
+  unassignedJobs?: readonly MobileJob[];
   staffEmail: string;
 }
 
 export class MockTechnicianRepository implements TechnicianRepository {
   private readonly jobs: MobileJob[];
+  private readonly unassignedJobs: MobileJob[];
   private readonly staff: MobileStaff | undefined;
   private activeTimer: ActiveTimer | null = null;
   private readonly receipts = new Map<string, MutationReceipt>();
@@ -41,9 +44,11 @@ export class MockTechnicianRepository implements TechnicianRepository {
 
   constructor({
     jobs = MOBILE_JOB_FIXTURES,
+    unassignedJobs = [],
     staffEmail,
   }: MockTechnicianRepositoryOptions) {
     this.jobs = jobs.map(cloneMobileFixture);
+    this.unassignedJobs = unassignedJobs.map(cloneMobileFixture);
     const normalizedEmail = staffEmail.trim().toLowerCase();
     const staff = MOBILE_STAFF_FIXTURES.find(
       (candidate) => candidate.email.toLowerCase() === normalizedEmail,
@@ -71,6 +76,35 @@ export class MockTechnicianRepository implements TechnicianRepository {
       })
       .sort((left, right) => left.startAt.localeCompare(right.startAt))
       .map(cloneMobileFixture);
+  }
+
+  async listUnassignedJobs(): Promise<MobileJob[]> {
+    return this.unassignedJobs.map(cloneMobileFixture);
+  }
+
+  async scheduleUnassignedJob(
+    command: ScheduleUnassignedJobCommand,
+  ): Promise<MutationReceipt> {
+    const index = this.unassignedJobs.findIndex(
+      (job) => job.requestNumber === command.jobId || job.id === command.jobId,
+    );
+    if (index < 0) throw new Error("This request is no longer unassigned.");
+    const [job] = this.unassignedJobs.splice(index, 1);
+    const staff = this.requireStaff();
+    job.technician = cloneMobileFixture(staff);
+    job.bookingType = command.bookingType;
+    job.startAt = `${command.date}T${command.start}:00+11:00`;
+    job.endAt = `${command.date}T${command.end}:00+11:00`;
+    job.status = "Scheduled";
+    this.jobs.push(job);
+    return {
+      clientMutationId: command.clientMutationId,
+      mode: "mock",
+      recordedAt: new Date().toISOString(),
+      resourceId: job.id,
+      resourceVersion: `${job.version}-scheduled`,
+      status: "applied",
+    };
   }
 
   async getJob(jobId: string): Promise<MobileJob> {

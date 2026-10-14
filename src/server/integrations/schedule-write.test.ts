@@ -70,6 +70,43 @@ describe("atomic schedule writer", () => {
     expect(enqueue).toHaveBeenCalledWith(operation);
   });
 
+  it("reserves an unassigned request in the same transaction before writing its schedule", async () => {
+    const order: string[] = [];
+    const writer = createAtomicScheduleWriter({
+      transaction: async (callback) =>
+        callback({
+          claim: async (claim) => {
+            order.push(`claim:${claim.requestId}:${claim.staffId}`);
+          },
+          enqueue: async () => {
+            order.push("enqueue");
+            return { operation: { id: "operation-1", state: "queued" as const }, replayed: false };
+          },
+          record: async () => {
+            order.push("record");
+          },
+          removeObsolete: async () => undefined,
+        }),
+    });
+
+    await writer.persist({
+      claim: {
+        idempotencyKey: "claim-request-123",
+        requestId: "request-123",
+        staffId: "00000000-0000-4000-8000-000000000001",
+      },
+      createdBy: "simeon@egit.com.au",
+      events: [events[0]],
+      operation,
+    });
+
+    expect(order).toEqual([
+      "claim:request-123:00000000-0000-4000-8000-000000000001",
+      "record",
+      "enqueue",
+    ]);
+  });
+
   it("removes an obsolete crew assignment inside the schedule transaction", async () => {
     const record = vi.fn(async () => undefined);
     const removeObsolete = vi.fn(async () => undefined);

@@ -57,6 +57,8 @@ import {
   type MobileOutlookCalendar,
 } from "./outlook";
 import { createMspCentralClient } from "@/server/msp-central/client";
+import { scheduleOperation } from "@/server/integrations/operations";
+import { createPostgresAtomicScheduleWriter } from "@/server/integrations/schedule-write";
 import type {
   MspCentralClient,
   MspCentralRequestContext,
@@ -222,6 +224,167 @@ export async function listMobileJobs({
       })
       .sort((left, right) => left.startAt.localeCompare(right.startAt))
       .map(cloneMobileFixture),
+  };
+}
+
+export async function listMobileUnassignedJobs({
+  auth,
+  database = getConfiguredMobileDatabase(),
+  mspClient = getConfiguredMobileMspClient(),
+}: {
+  auth: MobileAuthContext;
+  database?: MobileDatabase | null;
+  mspClient?: MspCentralClient | null;
+}): Promise<{ jobs: MobileJob[] }> {
+  if (!database) {
+    throw mobileQueueError("The live unassigned queue is not configured.", 503);
+  }
+  if (!mspClient) {
+    throw mobileQueueError("The Helpdesk request source is not configured.", 503);
+  }
+
+  const staff = await requireDatabaseStaff(database, auth.email);
+  const [requests, claimedIds] = await Promise.all([
+    mspClient.listRequests(),
+    database.listClaimedRequestIds?.() ?? Promise.resolve([]),
+  ]);
+  const claimed = new Set(claimedIds);
+  const jobs = requests
+    .filter(isUnassignedRequest)
+    .filter((request) => !claimed.has(request.id))
+    .map((request) => mapUnassignedRequest(request, mapDatabaseStaff(staff)))
+    .sort((left, right) => {
+      const priorityOrder = priorityRank(left.priority) - priorityRank(right.priority);
+      return priorityOrder || (left.slaDueAt ?? "9999").localeCompare(right.slaDueAt ?? "9999");
+    });
+
+  return { jobs };
+}
+
+export async function scheduleMobileUnassignedJob({
+  auth,
+  bookingType,
+  clientMutationId,
+  date,
+  end,
+  jobId,
+  start,
+  database = getConfiguredMobileDatabase(),
+  mspClient = getConfiguredMobileMspClient(),
+}: {
+  auth: MobileAuthContext;
+  bookingType: BookingType;
+  clientMutationId: string;
+  date: string;
+  end: string;
+  jobId: string;
+  start: string;
+  database?: MobileDatabase | null;
+  mspClient?: MspCentralClient | null;
+}): Promise<{ appointmentId: string; operationId: string; status: string }> {
+  if (!database || !mspClient) {
+    throw mobileQueueError("Scheduling from the unassigned queue is unavailable.", 503);
+  }
+  validateMobileScheduleWindow({ bookingType, clientMutationId, date, end, jobId, start });
+  const staff = await requireDatabaseStaff(database, auth.email);
+  if (!staff.mspCentralTechnicianId || !staff.technicianId || !staff.outlookUserPrincipalName) {
+    throw mobileQueueError("Your technician and Outlook calendar profiles need to be linked before scheduling.", 409);
+  }
+
+  const requests = await mspClient.listRequests({ forceRefresh: true });
+  const request = requests.find((candidate) => candidate.id === jobId);
+  if (!request || !isUnassignedRequest(request)) {
+    throw mobileQueueError("This request is no longer unassigned. Refresh the queue.", 409);
+  }
+
+  const { jobs: existingJobs } = await listMobileJobs({
+    auth,
+    database,
+    from: date,
+    linkStore: null,
+    mspClient,
+    outlookCalendar: getConfiguredMobileOutlookCalendar(),
+    to: date,
+  });
+  const scheduleStart = new Date(melbourneIsoTime(date, start)).getTime();
+  const scheduleEnd = new Date(melbourneIsoTime(date, end)).getTime();
+  const overlaps = existingJobs.some((job) => {
+    const existingStart = new Date(job.startAt).getTime();
+    const existingEnd = new Date(job.endAt).getTime();
+    if (!Number.isFinite(existingStart) || !Number.isFinite(existingEnd)) return false;
+    return scheduleStart < existingEnd && scheduleEnd > existingStart;
+  });
+  if (overlaps) {
+    throw mobileQueueError("That time overlaps another assigned job. Choose a different time.", 409);
+  }
+
+  const appointmentId = `mobile-claim-${request.id}`;
+  const operation = scheduleOperation({
+    actorEmail: auth.email,
+    appointmentId,
+    bookingType,
+    customer: request.customer,
+    date,
+    description: request.notes,
+    end,
+    helpdeskUrl: request.helpdeskUrl,
+    idempotencyKey: `mobile-claim:${request.id}:${clientMutationId}`,
+    latestUpdate: request.updatedAt,
+    lead: {
+      mspCentralTechnicianId: staff.mspCentralTechnicianId,
+      technicianEmail: staff.mspCentralEmail,
+      technicianId: staff.technicianId,
+      technicianName: staff.displayName,
+      userPrincipalName: staff.outlookUserPrincipalName,
+    },
+    location: request.siteAddress ?? request.site,
+    priority: request.priority,
+    requestId: request.id,
+    requestNumber: request.requestNumber,
+    scheduleAction: "scheduled",
+    sourceVersion: request.updatedAt,
+    start,
+    subject: request.subject,
+  });
+  const event = {
+    appointmentId,
+    bookingType,
+    date,
+    end,
+    eventType: "scheduled" as const,
+    id: `mobile-claim-schedule-${request.id}`,
+    payload: {
+      liveSync: { status: "pending" as const },
+      scheduleAssignment: {
+        assignmentKey: `${appointmentId}:${staff.technicianId}`,
+        groupId: appointmentId,
+        role: "lead" as const,
+      },
+      scheduleRoster: {
+        assignments: [{ appointmentId, role: "lead" as const, technicianId: staff.technicianId }],
+        groupId: appointmentId,
+      },
+    },
+    requestId: request.id,
+    start,
+    technicianId: staff.technicianId,
+  };
+  const persisted = await createPostgresAtomicScheduleWriter({
+    databaseUrl: readDispatchConfig().databaseUrl,
+  }).persist({
+    claim: {
+      idempotencyKey: clientMutationId,
+      requestId: request.id,
+      staffId: staff.id,
+    },
+    createdBy: auth.email,
+    events: [event],
+    operation,
+  });
+  return {
+    appointmentId,
+    operationId: persisted.operation.id,
+    status: persisted.operation.state,
   };
 }
 
@@ -965,7 +1128,8 @@ async function processMobileDisposition({
 
 function getConfiguredMobileMspClient() {
   const config = readDispatchConfig();
-  return config.dispatchDataSource === "msp-central"
+  return config.dispatchDataSource === "msp-central-fixture" ||
+    config.mspCentral.baseUrl
     ? createMspCentralClient(config)
     : null;
 }
@@ -1304,6 +1468,17 @@ function melbourneIsoTime(dateKey: string, time: string) {
   return `${dateKey}T${time}:00${offset}`;
 }
 
+function melbourneDateKey(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function safeError(error: unknown) {
   return error instanceof Error ? { message: error.message } : { message: "Unknown error" };
 }
@@ -1600,6 +1775,128 @@ function mapDatabaseJob(row: DatabaseJobRow): MobileJob {
     syncState: syncStateFrom(row.lastSyncStatus),
     updatedAt: toIsoString(row.updatedAt),
   };
+}
+
+const UNASSIGNED_PERMISSIONS: MobileJobPermissions = {
+  canWriteWorklog: false,
+  canStartTimer: false,
+  canUpdateStatus: false,
+  canAttachEvidence: false,
+  canAddPart: false,
+  canSignOff: false,
+  canComplete: false,
+  readOnlyReason: "Take and schedule this request before recording work.",
+};
+
+function isUnassignedRequest(request: DispatchRequest) {
+  return (
+    !request.technicianId &&
+    !request.scheduledStart &&
+    request.status !== "Resolved" &&
+    request.status !== "Cancelled"
+  );
+}
+
+function mapUnassignedRequest(request: DispatchRequest, technician: MobileStaff): MobileJob {
+  const date = melbourneDateKey(new Date());
+  const startAt = melbourneIsoTime(date, "09:00");
+  const endAt = melbourneIsoTime(date, "10:00");
+  return {
+    activityWarning: null,
+    attachments: (request.attachments ?? []).map((attachment) => ({
+      id: attachment.id,
+      localUri: null,
+      remoteUrl: attachment.url ?? null,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType ?? "application/octet-stream",
+      byteLength: attachment.byteLength ?? 0,
+      sha256: "",
+      category: "document",
+      uploadProgress: 0,
+      syncState: "synced",
+    })),
+    bookingType: request.bookingType ?? (request.onsite === false ? "Remote" : "Onsite"),
+    contactEmail: request.contactEmail ?? null,
+    contactName: request.requester ?? null,
+    contactPhone: request.contactPhone ?? null,
+    customerName: request.customer ?? null,
+    customerSignOff: null,
+    description: request.notes ?? null,
+    endAt,
+    id: request.id,
+    isAllDay: false,
+    outlookEventId: null,
+    outlookWebLink: null,
+    parts: [],
+    permissions: UNASSIGNED_PERMISSIONS,
+    previousNotes: [],
+    priority: request.priority ?? null,
+    requestNumber: request.requestNumber ?? null,
+    siteAddress: request.siteAddress ?? null,
+    siteName: request.siteName ?? request.site ?? null,
+    siteTown: request.siteTown ?? null,
+    slaDueAt: request.dueAt || null,
+    source: "msp_central",
+    startAt,
+    status: request.status === "Open" ? "Needs Follow-up" : "Scheduled",
+    syncState: "synced",
+    tags: [...request.warnings],
+    technician,
+    timezone: "Australia/Melbourne",
+    title: request.subject,
+    travel: null,
+    updatedAt: request.updatedAt ?? new Date().toISOString(),
+    version: `unassigned-${request.id}-${request.updatedAt ?? "current"}`,
+  };
+}
+
+function priorityRank(priority: MobilePriority | null) {
+  return priority === "Critical" ? 0 : priority === "High" ? 1 : priority === "Medium" ? 2 : priority === "Low" ? 3 : 4;
+}
+
+function validateMobileScheduleWindow({
+  bookingType,
+  clientMutationId,
+  date,
+  end,
+  jobId,
+  start,
+}: {
+  bookingType: BookingType;
+  clientMutationId: string;
+  date: string;
+  end: string;
+  jobId: string;
+  start: string;
+}) {
+  const timeMinutes = (value: string) => {
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+  };
+  const startMinutes = timeMinutes(start);
+  const endMinutes = timeMinutes(end);
+  const parsedDate = new Date(`${date}T00:00:00.000Z`);
+  if (
+    !jobId.trim() ||
+    !clientMutationId.trim() ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+    Number.isNaN(parsedDate.getTime()) ||
+    parsedDate.toISOString().slice(0, 10) !== date ||
+    startMinutes === null ||
+    endMinutes === null ||
+    endMinutes <= startMinutes ||
+    !["Remote", "Onsite", "In house"].includes(bookingType)
+  ) {
+    throw mobileQueueError("Enter a valid date, start and end time, and booking type.", 400);
+  }
+}
+
+function mobileQueueError(message: string, status: number) {
+  return Object.assign(new Error(message), {
+    code: status === 401 ? "UNAUTHORIZED" : "BAD_REQUEST",
+    status,
+  });
 }
 
 function mapDatabaseStaff(row: DatabaseStaffRow): MobileStaff {

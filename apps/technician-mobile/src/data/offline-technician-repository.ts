@@ -130,6 +130,16 @@ export function createOfflineTechnicianRepository({
       return filterJobsForRange(cachedJobs, range);
     },
 
+    async listUnassignedJobs(): Promise<MobileJob[]> {
+      if (!remote?.listUnassignedJobs) throw new Error("The unassigned queue is unavailable offline.");
+      return remote.listUnassignedJobs();
+    },
+
+    async scheduleUnassignedJob(command) {
+      if (!remote?.scheduleUnassignedJob) throw new Error("Connect to schedule a queued request.");
+      return remote.scheduleUnassignedJob(command);
+    },
+
     async listCachedSchedule(range: DateRange): Promise<MobileJob[]> {
       return filterJobsForRange(await database.listCachedJobs(), range);
     },

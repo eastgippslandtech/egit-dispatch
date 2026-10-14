@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MyWorkRoute, {
   buildMyWorkSections,
 } from "../../../app/(tabs)/my-work";
+import UnassignedRoute from "../../../app/(tabs)/unassigned";
 import TodayRoute from "../../../app/(tabs)/today";
 import {
   AppProviders,
@@ -17,6 +18,7 @@ import {
 } from "../../providers/app-providers";
 import type { MobileJob } from "../../contracts/mobile";
 import type { TechnicianRepository } from "../../data/technician-repository";
+import { MockTechnicianRepository } from "../../data/mock-technician-repository";
 import {
   MOBILE_JOB_FIXTURES,
   MOBILE_STAFF_FIXTURES,
@@ -51,6 +53,7 @@ vi.mock("react-native", () => ({
     createElement(Fragment, null, children),
   StyleSheet: { create: (styles: unknown) => styles },
   Text: "Text",
+  TextInput: "TextInput",
   View: "View",
 }));
 
@@ -78,7 +81,7 @@ const approvedRileySession: TechnicianSession = {
 };
 
 async function renderScreen(
-  screen: "today" | "my-work",
+  screen: "today" | "my-work" | "unassigned",
   repository?: TechnicianRepository,
 ) {
   let rendered: ReactTestRenderer | undefined;
@@ -99,7 +102,13 @@ async function renderScreen(
           initialSession={approvedRileySession}
           repository={repository}
         >
-          {screen === "today" ? <TodayRoute /> : <MyWorkRoute />}
+          {screen === "today" ? (
+            <TodayRoute />
+          ) : screen === "my-work" ? (
+            <MyWorkRoute />
+          ) : (
+            <UnassignedRoute />
+          )}
         </AppProviders>,
       );
       await Promise.resolve();
@@ -352,6 +361,37 @@ describe("native schedule screens", () => {
 
     expect(assigned?.jobs).toEqual([helpdeskJob]);
   });
+
+  it("offers an explicit take-and-schedule flow for an unassigned request", async () => {
+    const source = MOBILE_JOB_FIXTURES.find((job) => job.id === "firewall-riley");
+    if (!source) throw new Error("Unassigned request fixture is required.");
+    const request = { ...source, id: "unassigned-request-301", requestNumber: "REQ-100301" };
+    const repository = new MockTechnicianRepository({
+      staffEmail: riley.email,
+      unassignedJobs: [request],
+    });
+    const rendered = await renderScreen("unassigned", repository);
+
+    expect(textValues(rendered)).toContain("Unassigned");
+    expect(textValues(rendered)).toContain("REQ-100301");
+    const takeButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Take and schedule REQ-100301",
+    );
+    await act(async () => {
+      takeButton.props.onPress();
+    });
+    expect(textValues(rendered)).toContain("Take job and confirm schedule");
+
+    const confirmButton = rendered.root.find(
+      (node) => node.props.accessibilityLabel === "Confirm schedule for REQ-100301",
+    );
+    await act(async () => {
+      confirmButton.props.onPress();
+      await Promise.resolve();
+    });
+    expect(textValues(rendered)).toContain("REQ-100301 scheduled to your work.");
+    expect(textValues(rendered)).toContain("Queue is clear");
+  });
 });
 
 function createScheduleOnlyRepository(
@@ -368,6 +408,8 @@ function createScheduleOnlyRepository(
     getCurrentStaff: async () => riley,
     getJob: unavailable,
     listSchedule,
+    listUnassignedJobs: async () => [],
+    scheduleUnassignedJob: unavailable,
     saveSignOff: unavailable,
     saveWorklog: unavailable,
     startTimer: unavailable,

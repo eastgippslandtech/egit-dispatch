@@ -54,4 +54,28 @@ describe("createApiTechnicianRepository", () => {
     expect(api.request).toHaveBeenCalledWith("/jobs?from=2026-07-09&to=2026-07-09");
     expect(jobs.map((job) => job.id)).toEqual(["firewall-riley"]);
   });
+
+  it("loads the live unassigned queue and sends an explicit take-and-schedule command", async () => {
+    const job = MOBILE_JOB_FIXTURES.find((item) => item.id === "firewall-riley");
+    const api = {
+      request: vi.fn(async () => ({ data: { jobs: [job], receipt: { status: "applied" } } })),
+    } as unknown as ApiClient;
+    const repository = createApiTechnicianRepository(api);
+
+    await expect(repository.listUnassignedJobs()).resolves.toEqual([job]);
+    await repository.scheduleUnassignedJob({
+      bookingType: "Onsite",
+      clientMutationId: "claim-001",
+      date: "2026-10-15",
+      end: "11:00",
+      jobId: "REQ-100301",
+      start: "10:00",
+    });
+
+    expect(api.request).toHaveBeenNthCalledWith(1, "/unassigned");
+    expect(api.request).toHaveBeenNthCalledWith(2, "/unassigned/REQ-100301/schedule", {
+      body: expect.objectContaining({ clientMutationId: "claim-001", date: "2026-10-15" }),
+      idempotencyKey: "claim-001",
+    });
+  });
 });

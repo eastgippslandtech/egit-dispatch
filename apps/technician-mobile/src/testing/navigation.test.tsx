@@ -533,7 +533,7 @@ describe("technician navigation", () => {
     pressButton(rendered, "Open reviewer demo");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Unassigned", "Profile & Settings"]),
     );
     expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
@@ -558,7 +558,7 @@ describe("technician navigation", () => {
     const labels = textValues(rendered.root);
 
     expect(labels).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Unassigned", "Profile & Settings"]),
     );
     expect(labels).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
@@ -622,7 +622,7 @@ describe("technician navigation", () => {
     await pressButtonAsync(rendered, "Sign in with Zoho");
 
     expect(textValues(rendered.root)).toEqual(
-      expect.arrayContaining(["Today", "My Work", "Profile & Settings"]),
+      expect.arrayContaining(["Today", "My Work", "Unassigned", "Profile & Settings"]),
     );
     expect(textValues(rendered.root)).not.toContain("Sync");
     expect(buttonsNamed(rendered.root, "Sign in with Zoho")).toHaveLength(0);
@@ -971,8 +971,9 @@ describe("technician navigation", () => {
   it("uses native tab icons with navigator-provided size and colour", () => {
     renderTechnicianRouter(approvedRileySession);
 
-    expect(navigationHarness.tabIcons).toHaveLength(3);
+    expect(navigationHarness.tabIcons).toHaveLength(4);
     expect(navigationHarness.tabIcons.map((icon) => icon.type)).toEqual([
+      "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",
       "MaterialCommunityIcons",

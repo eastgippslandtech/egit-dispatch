@@ -33,6 +33,15 @@ export interface MobileForwardBooking {
   technicianName: string;
 }
 
+export interface ScheduleUnassignedJobCommand {
+  bookingType: BookingType;
+  clientMutationId: string;
+  date: string;
+  end: string;
+  jobId: string;
+  start: string;
+}
+
 export interface MobileWorklogTransfer {
   reason: string;
   targetEmail: string;

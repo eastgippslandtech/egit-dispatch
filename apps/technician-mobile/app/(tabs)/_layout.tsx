@@ -53,6 +53,22 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="unassigned"
+        options={{
+          tabBarAccessibilityLabel: "Unassigned jobs tab",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              accessibilityElementsHidden
+              color={color}
+              importantForAccessibility="no-hide-descendants"
+              name="inbox-arrow-down-outline"
+              size={size}
+            />
+          ),
+          title: "Unassigned",
+        }}
+      />
+      <Tabs.Screen
         name="sync"
         options={{
           href: null,

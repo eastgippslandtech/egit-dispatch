@@ -9,6 +9,7 @@ import type {
   MutationReceipt,
   SaveSignOffCommand,
   SaveWorklogCommand,
+  ScheduleUnassignedJobCommand,
   StartTimerCommand,
   StoppedTimer,
   StopTimerCommand,
@@ -20,6 +21,8 @@ export interface TechnicianRepository {
   getCurrentStaff(): Promise<MobileStaff>;
   listCachedSchedule?(range: DateRange): Promise<MobileJob[]>;
   listSchedule(range: DateRange): Promise<MobileJob[]>;
+  listUnassignedJobs(): Promise<MobileJob[]>;
+  scheduleUnassignedJob(command: ScheduleUnassignedJobCommand): Promise<MutationReceipt>;
   getJob(jobId: string): Promise<MobileJob>;
   startTimer(command: StartTimerCommand): Promise<ActiveTimer>;
   stopTimer(command: StopTimerCommand): Promise<StoppedTimer>;

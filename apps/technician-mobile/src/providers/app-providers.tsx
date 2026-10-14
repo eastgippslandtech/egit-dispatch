@@ -350,6 +350,8 @@ function createUnavailableRepository(error?: unknown): TechnicianRepository {
     getCurrentStaff: reject,
     getJob: reject,
     listSchedule: reject,
+    listUnassignedJobs: reject,
+    scheduleUnassignedJob: reject,
     saveSignOff: reject,
     saveWorklog: reject,
     startTimer: reject,

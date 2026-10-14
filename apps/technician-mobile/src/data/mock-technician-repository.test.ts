@@ -6,7 +6,7 @@ import type {
   StartTimerCommand,
   StopTimerCommand,
 } from "@/contracts/mobile";
-import { MOBILE_STAFF_FIXTURES } from "../testing/fixtures";
+import { MOBILE_JOB_FIXTURES, MOBILE_STAFF_FIXTURES } from "../testing/fixtures";
 
 import { MockTechnicianRepository } from "./mock-technician-repository";
 
@@ -58,6 +58,30 @@ describe("MockTechnicianRepository", () => {
       "firewall-riley",
       "outlook-block-riley",
       "remote-support-riley",
+    ]);
+  });
+
+  it("takes a queued request and adds it to the signed-in technician's schedule", async () => {
+    const fixture = MOBILE_JOB_FIXTURES.find((job) => job.id === "server-expansion-matt");
+    if (!fixture) throw new Error("Unassigned job fixture is required.");
+    const queued = { ...fixture, id: "unassigned-100301", requestNumber: "REQ-100301" };
+    const repository = new MockTechnicianRepository({
+      staffEmail: "riley@egit.com.au",
+      unassignedJobs: [queued],
+    });
+
+    await repository.scheduleUnassignedJob({
+      bookingType: "Onsite",
+      clientMutationId: "mobile-claim-test-01",
+      date: "2026-10-15",
+      end: "11:00",
+      jobId: queued.id,
+      start: "10:00",
+    });
+
+    await expect(repository.listUnassignedJobs()).resolves.toEqual([]);
+    await expect(repository.listSchedule({ from: "2026-10-15", to: "2026-10-15" })).resolves.toMatchObject([
+      { id: queued.id, requestNumber: "REQ-100301", technician: { email: "riley@egit.com.au" } },
     ]);
   });
 

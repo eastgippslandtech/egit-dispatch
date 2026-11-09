@@ -11,6 +11,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { getCommandCentreAccess } from "@/server/auth/session";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
+import { getConfiguredRequestNicknameRepository } from "@/server/dispatch/request-nickname-repository";
 import type { DispatchRequest } from "@/server/dispatch/types";
 
 import CommandCentrePage from "./page";
@@ -42,6 +43,9 @@ vi.mock("@/server/auth/session", async (importOriginal) => ({
 vi.mock("@/server/dispatch/test-sync-dashboard", () => ({
   getTestSyncedDispatchDashboardData: vi.fn(),
 }));
+vi.mock("@/server/dispatch/request-nickname-repository", () => ({
+  getConfiguredRequestNicknameRepository: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((target: string) => {
@@ -54,6 +58,7 @@ const getCommandCentreAccessMock = vi.mocked(getCommandCentreAccess);
 const getTestSyncedDispatchDashboardDataMock = vi.mocked(
   getTestSyncedDispatchDashboardData,
 );
+const getNicknameRepositoryMock = vi.mocked(getConfiguredRequestNicknameRepository);
 
 beforeEach(() => {
   routerRefreshMock.mockReset();
@@ -68,6 +73,7 @@ beforeEach(() => {
   getTestSyncedDispatchDashboardDataMock.mockResolvedValue(
     getDispatchDesignMockData(),
   );
+  getNicknameRepositoryMock.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -115,6 +121,34 @@ test("renders the locked Command Centre prototype with shared mock data", async 
   );
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   expect(screen.getByTestId("timeline-viewport")).toHaveClass("overflow-y-auto");
+});
+
+test("loads shared ticket nicknames from storage on page refresh", async () => {
+  const request = getDispatchDesignMockData().requests[0];
+  getNicknameRepositoryMock.mockReturnValue({
+    list: vi.fn().mockResolvedValue({ [request.id]: "Front counter printer" }),
+    set: vi.fn(),
+  });
+
+  render(await CommandCentrePage());
+
+  expect(within(screen.getByTestId("request-queue")).getByText("Front counter printer")).toBeInTheDocument();
+});
+
+test("shows a scheduled ticket nickname on the timeline", () => {
+  const data = getDispatchDesignMockData();
+  const appointment = data.appointments.find((candidate) => candidate.id === "appt-1");
+  const request = data.requests.find((candidate) => candidate.id === appointment?.requestId);
+  if (!request) throw new Error("Expected linked request fixture.");
+
+  render(<CommandCentrePrototype data={{
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Server upgrade" }
+      : candidate),
+  }} />);
+
+  expect(within(screen.getByTestId("timeline-appointment-appt-1")).getByText("Server upgrade")).toBeInTheDocument();
 });
 
 test("renders a provider warning only once", () => {
@@ -3045,6 +3079,110 @@ test("filters the request queue with request search", async () => {
 
   fireEvent.change(search, { target: { value: "zzzz-not-real" } });
   expect(within(queue).getByText("No matching requests")).toBeInTheDocument();
+});
+
+test("shows a shared nickname, finds it in search, and saves edits from the ticket workspace", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const updatedRequest = { ...request, nickname: "Front counter printer" };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ nickname: "Front counter scanner" }),
+    { headers: { "Content-Type": "application/json" }, status: 200 },
+  ));
+  vi.stubGlobal("fetch", fetchMock);
+  render(<CommandCentrePrototype data={{
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id ? updatedRequest : candidate),
+  }} />);
+
+  const queue = screen.getByTestId("request-queue");
+  expect(within(screen.getByTestId("command-centre-drawer")).getByText("Front counter printer")).toBeInTheDocument();
+  const linkedAppointment = data.appointments.find((appointment) => appointment.requestId === request.id);
+  if (linkedAppointment) {
+    expect(within(screen.getByTestId(`timeline-appointment-${linkedAppointment.id}`)).getByText("Front counter printer")).toBeInTheDocument();
+  }
+  fireEvent.change(screen.getByPlaceholderText("Search requests"), {
+    target: { value: "Front counter printer" },
+  });
+  expect(within(queue).getByText("Front counter printer")).toBeInTheDocument();
+  expect(within(queue).getByText(request.subject)).toBeInTheDocument();
+
+  fireEvent.click(within(queue).getByRole("button", {
+    name: `Open ${request.requestNumber} ticket workspace`,
+  }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.change(within(workspace).getByRole("textbox", { name: "Ticket nickname" }), {
+    target: { value: "Front counter scanner" },
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Save nickname" }));
+
+  fireEvent.change(screen.getByPlaceholderText("Search requests"), {
+    target: { value: "Front counter scanner" },
+  });
+  await waitFor(() => expect(within(queue).getByText("Front counter scanner")).toBeInTheDocument());
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/internal/dispatch/requests/${encodeURIComponent(request.id)}/nickname`,
+    expect.objectContaining({ method: "PUT" }),
+  );
+});
+
+test("clears a nickname and restores the original ticket subject", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ nickname: null }),
+    { headers: { "Content-Type": "application/json" }, status: 200 },
+  )));
+  render(<CommandCentrePrototype data={{
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  }} />);
+
+  const queue = screen.getByTestId("request-queue");
+  fireEvent.click(within(queue).getByRole("button", {
+    name: `Open ${request.requestNumber} ticket workspace`,
+  }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.click(within(workspace).getByRole("button", { name: "Clear nickname" }));
+
+  await waitFor(() => expect(within(queue).queryByText("Front counter printer")).not.toBeInTheDocument());
+  expect(within(queue).getByText(request.subject)).toBeInTheDocument();
+});
+
+test("keeps the prior nickname when saving fails", async () => {
+  vi.useRealTimers();
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ error: "Database unavailable" }),
+    { headers: { "Content-Type": "application/json" }, status: 500 },
+  )));
+  render(<CommandCentrePrototype data={{
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  }} />);
+
+  const queue = screen.getByTestId("request-queue");
+  fireEvent.click(within(queue).getByRole("button", {
+    name: `Open ${request.requestNumber} ticket workspace`,
+  }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.change(within(workspace).getByRole("textbox", { name: "Ticket nickname" }), {
+    target: { value: "Front counter scanner" },
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Save nickname" }));
+
+  expect(await within(workspace).findByRole("alert")).toHaveTextContent("Database unavailable");
+  expect(within(queue).getByText("Front counter printer")).toBeInTheDocument();
 });
 
 test("filters the queue with top search and dims nonmatching appointments", async () => {

@@ -53,6 +53,7 @@ export type DispatchRequest = {
   id: string;
   requestNumber: string;
   subject: string;
+  nickname?: string;
   attachments?: DispatchRequestAttachment[];
   sourceSystem?: "mock" | "msp-central-fixture" | "msp-central" | "command-centre-db";
   helpdeskUrl?: string;

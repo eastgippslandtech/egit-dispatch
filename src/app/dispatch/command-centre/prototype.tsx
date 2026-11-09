@@ -810,6 +810,31 @@ export function CommandCentrePrototype({
     markTicketUpdateSeen(requestId);
   }
 
+  async function saveTicketNickname(requestId: string, nickname: string | null) {
+    const response = await fetch(
+      `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/nickname`,
+      {
+        body: JSON.stringify({ nickname }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      },
+    );
+    const body = await response.json().catch(() => null) as
+      | { error?: string; nickname?: string | null }
+      | null;
+    if (!response.ok || !body || !("nickname" in body)) {
+      throw new Error(body?.error ?? "Ticket nickname could not be saved.");
+    }
+    setDashboard((current) => ({
+      ...current,
+      requests: current.requests.map((request) =>
+        request.id === requestId
+          ? { ...request, nickname: body.nickname ?? undefined }
+          : request,
+      ),
+    }));
+  }
+
   function selectAppointment(appointment: Appointment) {
     setSelection({
       kind: "appointment",
@@ -2803,6 +2828,7 @@ export function CommandCentrePrototype({
             )}
             technicians={dashboard.technicians}
             onClose={() => setTicketWorkspaceTarget(undefined)}
+            onNicknameSaved={saveTicketNickname}
             onSaveWorkLog={(input) =>
               saveWorkLogForTarget(ticketWorkspaceTarget, input)
             }
@@ -5001,6 +5027,7 @@ export function TicketWorkspaceModal({
   initialTab = "details",
   liveWriteback,
   onClose,
+  onNicknameSaved,
   onSchedule,
   onSaveWorkLog,
   onSaved,
@@ -5012,6 +5039,7 @@ export function TicketWorkspaceModal({
   initialTab?: TicketWorkspaceTab;
   liveWriteback: boolean;
   onClose: () => void;
+  onNicknameSaved?: (requestId: string, nickname: string | null) => Promise<void>;
   onSchedule?: (requestId: string) => void;
   onSaveWorkLog: (input: WorkLogSaveInput) => Promise<void>;
   onSaved: (result: IntegrationOperationReceipt) => void;
@@ -5038,6 +5066,10 @@ export function TicketWorkspaceModal({
   const [trackReasons, setTrackReasons] = useState<Record<string, string>>({});
   const [trackValues, setTrackValues] = useState<Record<string, string>>({});
   const [bookingChoiceId, setBookingChoiceId] = useState(appointment?.id ?? "");
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState(request?.nickname ?? "");
+  const [nicknameSaving, setNicknameSaving] = useState(false);
+  const [nicknameError, setNicknameError] = useState<string>();
   const pendingCommunication = useRef<{
     idempotencyKey: string;
     message: string;
@@ -5139,6 +5171,22 @@ export function TicketWorkspaceModal({
       ? `${formatTime(latestRequest.scheduledStart)}-${formatTime(latestRequest.scheduledEnd ?? latestRequest.scheduledStart)}`
       : "Not scheduled";
   const suggestedClassification = classifyTicketTemplate(latestRequest);
+
+  async function saveNickname(nextNickname: string | null) {
+    if (!onNicknameSaved || nicknameSaving) return;
+    setNicknameSaving(true);
+    setNicknameError(undefined);
+    try {
+      await onNicknameSaved(latestRequest.id, nextNickname);
+      setEditingNickname(false);
+    } catch (saveError) {
+      setNicknameError(
+        saveError instanceof Error ? saveError.message : "Ticket nickname could not be saved.",
+      );
+    } finally {
+      setNicknameSaving(false);
+    }
+  }
 
   async function applySelectedTemplate() {
     const template = serviceTicketTemplates.find(
@@ -5265,7 +5313,72 @@ export function TicketWorkspaceModal({
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div className="min-w-0">
             <p className="font-mono text-xs text-cc-orange">{latestRequest.requestNumber}</p>
-            <h2 className="mt-1 truncate text-xl font-semibold">{latestRequest.subject}</h2>
+            <div className="mt-1 flex items-center gap-2">
+              <h2 className="truncate text-xl font-semibold">
+                {request.nickname ?? latestRequest.subject}
+              </h2>
+              {onNicknameSaved ? (
+                <button
+                  aria-label="Edit nickname"
+                  className="shrink-0 rounded border border-white/15 px-2 py-1 text-xs font-semibold text-slate-300 hover:text-cc-orange"
+                  type="button"
+                  onClick={() => {
+                    setNicknameDraft(request.nickname ?? "");
+                    setNicknameError(undefined);
+                    setEditingNickname(true);
+                  }}
+                >
+                  {request.nickname ? "Edit nickname" : "Add nickname"}
+                </button>
+              ) : null}
+            </div>
+            {request.nickname ? (
+              <p className="mt-0.5 truncate text-xs text-slate-400">{latestRequest.subject}</p>
+            ) : null}
+            {editingNickname ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label="Ticket nickname"
+                  autoFocus
+                  className="min-w-48 rounded border border-white/20 bg-[#111d30] px-2 py-1 text-sm text-slate-100"
+                  maxLength={80}
+                  placeholder="Short team name for this ticket"
+                  value={nicknameDraft}
+                  onChange={(event) => setNicknameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void saveNickname(nicknameDraft);
+                    if (event.key === "Escape") setEditingNickname(false);
+                  }}
+                />
+                <button
+                  className="rounded bg-cc-orange px-2 py-1 text-xs font-semibold text-cc-surface-1 disabled:opacity-50"
+                  disabled={nicknameSaving}
+                  type="button"
+                  onClick={() => void saveNickname(nicknameDraft)}
+                >
+                  {nicknameSaving ? "Saving..." : "Save nickname"}
+                </button>
+                {request.nickname ? (
+                  <button
+                    className="rounded border border-white/15 px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
+                    disabled={nicknameSaving}
+                    type="button"
+                    onClick={() => void saveNickname(null)}
+                  >
+                    Clear nickname
+                  </button>
+                ) : null}
+                <button
+                  className="rounded px-2 py-1 text-xs text-slate-400"
+                  disabled={nicknameSaving}
+                  type="button"
+                  onClick={() => setEditingNickname(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : null}
+            {nicknameError ? <p className="mt-1 text-xs text-rose-300" role="alert">{nicknameError}</p> : null}
             <p className="mt-1 text-sm text-slate-400">
               {latestRequest.customer} / {latestRequest.site}
             </p>
@@ -7044,7 +7157,7 @@ function RequestQueueCard({
       }}
     >
       <button
-        aria-label={`${request.requestNumber} ${request.subject}`}
+        aria-label={`${request.requestNumber} ${request.nickname ?? request.subject}`}
         className="w-full p-2.5 text-left"
         type="button"
         onClick={onSelect}
@@ -7056,8 +7169,13 @@ function RequestQueueCard({
               {request.requestNumber}
             </div>
             <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-slate-50">
-              {request.subject}
+              {request.nickname ?? request.subject}
             </div>
+            {request.nickname ? (
+              <div className="mt-0.5 line-clamp-1 text-[11px] text-slate-400">
+                {request.subject}
+              </div>
+            ) : null}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <PriorityChip priority={request.priority} />
@@ -7772,7 +7890,7 @@ function WeekAppointmentCard({
 
   return (
     <button
-      aria-label={`${appointment.title} ${appointment.customer}`}
+      aria-label={`${request?.nickname ?? appointment.title} ${appointment.customer}`}
       aria-pressed={active}
       data-testid={dataTestId}
       draggable={!appointment.readOnly}
@@ -7819,7 +7937,9 @@ function WeekAppointmentCard({
       <div className="mt-1 line-clamp-2 font-semibold leading-snug">
         {appointment.customer}
       </div>
-      <div className="mt-1 truncate opacity-90">{appointment.title}</div>
+      <div className="mt-1 truncate opacity-90" title={appointment.title}>
+        {request?.nickname ?? appointment.title}
+      </div>
       {appointment.activityType === "external_call" ? (
         <div className="mt-1 text-[10px] font-semibold text-cyan-100">
           {formatTalkTime(appointment.externalTalkSeconds ?? 0)} external talk
@@ -8043,7 +8163,7 @@ function TimelineOverlapGroup({
               return (
                 <button
                   key={appointment.id}
-                  aria-label={`${appointment.title} ${appointment.customer}`}
+                  aria-label={`${request?.nickname ?? appointment.title} ${appointment.customer}`}
                   className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-cc-orange/60 hover:bg-cc-orange/10 ${
                     selected
                       ? "border-cc-orange/70 bg-cc-orange/14"
@@ -8064,7 +8184,7 @@ function TimelineOverlapGroup({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span className="line-clamp-2 font-semibold leading-snug text-slate-50">
-                      {appointment.title}
+                      {request?.nickname ?? appointment.title}
                     </span>
                     <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-cc-orange">
                       <SentimentIcon sentiment={request?.sentiment} />
@@ -8142,12 +8262,12 @@ function TimelineAppointment({
         trackWidth={trackWidth}
       />
       <button
-        aria-label={`${appointment.title} ${appointment.customer}`}
+        aria-label={`${request?.nickname ?? appointment.title} ${appointment.customer}`}
         aria-pressed={active}
         data-search-state={searchState}
         data-testid={`timeline-appointment-${appointment.id}`}
         draggable={!appointment.readOnly}
-        title={`${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
+        title={`${request?.nickname ? `${request.nickname} | ` : ""}${appointment.title} | ${appointment.start}-${appointment.end} | ${appointment.customer}${request ? ` | ${request.requestNumber}` : ""}`}
         className={`absolute cursor-pointer overflow-hidden rounded-md border px-2 py-1 text-left shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 ${
           active
             ? "z-20 border-cc-orange bg-cc-orange/22 text-cc-orange ring-2 ring-cc-orange shadow-[0_0_0_1px_rgba(255,130,58,0.34),0_18px_42px_rgba(255,130,58,0.22)]"
@@ -8180,7 +8300,7 @@ function TimelineAppointment({
             {appointment.activityType === "external_call" ? (
               <PhoneCall className="h-3 w-3 shrink-0" />
             ) : null}
-            {appointment.title}
+            {request?.nickname ?? appointment.title}
           </span>
           <span className="flex shrink-0 items-center gap-1">
             <SentimentIcon sentiment={request?.sentiment} />
@@ -8376,7 +8496,7 @@ function DetailDrawer({
   const isOutlookOnly = appointment?.source === "outlook" && !request;
   const title = isOutlookOnly
     ? appointment.title
-    : request?.subject ?? appointment?.title ?? "No selection";
+    : request?.nickname ?? request?.subject ?? appointment?.title ?? "No selection";
   const eyebrow = isOutlookOnly
     ? "Outlook"
     : request?.requestNumber ?? appointment?.outlookLinkedRequestNumber ?? "Calendar";
@@ -8407,6 +8527,9 @@ function DetailDrawer({
             <h2 className="mt-0.5 text-base font-semibold leading-snug text-slate-50">
               {title}
             </h2>
+            {request?.nickname ? (
+              <p className="mt-0.5 text-xs text-slate-400">{request.subject}</p>
+            ) : null}
           </div>
           {request ? <PriorityChip priority={request.priority} /> : null}
         </div>
@@ -9078,6 +9201,7 @@ function requestSearchFields(
 ) {
   return [
     request.requestNumber,
+    request.nickname,
     request.subject,
     request.customer,
     request.site,

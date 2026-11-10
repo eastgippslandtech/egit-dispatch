@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AccessNotApproved } from "@/app/auth/auth-screen";
 import { getCommandCentreAccess, isApprovedStaffAccess } from "@/server/auth/session";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
+import { withStoredRequestNicknames } from "@/server/dispatch/request-nickname-dashboard";
 import {
   findStaffForZohoLogin,
   isAdminStaffEmail,
@@ -24,7 +25,9 @@ export async function ProtectedDispatchQueueScreen() {
     return <AccessNotApproved email={access.email} name={access.name} />;
   }
 
-  const data = await getTestSyncedDispatchDashboardData();
+  const data = await withStoredRequestNicknames(
+    await getTestSyncedDispatchDashboardData(),
+  );
   const profile = findStaffForZohoLogin(access.email);
   const canManageIntegrations = Boolean(
     access.authDisabled || profile?.dispatchEnabled || isAdminStaffEmail(access.email),

@@ -335,9 +335,13 @@ export function reconcileDashboardWithPendingWritebacks(
     (appointment) =>
       appointment.requestId && pendingRequestIds.has(appointment.requestId),
   );
-  const requests = incoming.requests.map(
-    (request) => pendingRequests.get(request.id) ?? request,
-  );
+  const requests = incoming.requests.map((request) => {
+    const pending = pendingRequests.get(request.id);
+    if (!pending) return request;
+    return pending.nickname === request.nickname
+      ? pending
+      : { ...pending, nickname: request.nickname };
+  });
   for (const request of pendingRequests.values()) {
     if (!requests.some((candidate) => candidate.id === request.id)) {
       requests.push(request);
@@ -811,25 +815,12 @@ export function CommandCentrePrototype({
   }
 
   async function saveTicketNickname(requestId: string, nickname: string | null) {
-    const response = await fetch(
-      `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/nickname`,
-      {
-        body: JSON.stringify({ nickname }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      },
-    );
-    const body = await response.json().catch(() => null) as
-      | { error?: string; nickname?: string | null }
-      | null;
-    if (!response.ok || !body || !("nickname" in body)) {
-      throw new Error(body?.error ?? "Ticket nickname could not be saved.");
-    }
+    const savedNickname = await publishRequestNickname(requestId, nickname);
     setDashboard((current) => ({
       ...current,
       requests: current.requests.map((request) =>
         request.id === requestId
-          ? { ...request, nickname: body.nickname ?? undefined }
+          ? { ...request, nickname: savedNickname ?? undefined }
           : request,
       ),
     }));
@@ -3180,6 +3171,27 @@ async function publishRequestWorkflowAction(
   return body.workflow;
 }
 
+export async function publishRequestNickname(
+  requestId: string,
+  nickname: string | null,
+): Promise<string | null> {
+  const response = await fetch(
+    `/api/internal/dispatch/requests/${encodeURIComponent(requestId)}/nickname`,
+    {
+      body: JSON.stringify({ nickname }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+    },
+  );
+  const body = await response.json().catch(() => null) as
+    | { error?: string; nickname?: string | null }
+    | null;
+  if (!response.ok || !body || !("nickname" in body)) {
+    throw new Error(body?.error ?? "Ticket nickname could not be saved.");
+  }
+  return body.nickname ?? null;
+}
+
 async function publishMspCentralCommunication(input: {
   idempotencyKey: string;
   message: string;
@@ -3815,8 +3827,11 @@ export function ScheduleConfirmModal({
               {request?.requestNumber ?? "Outlook-only"}
             </div>
             <div className="mt-1 text-base font-semibold">
-              {request?.subject ?? "Calendar appointment"}
+              {request?.nickname ?? request?.subject ?? "Calendar appointment"}
             </div>
+            {request?.nickname ? (
+              <div className="mt-0.5 text-xs text-slate-400">{request.subject}</div>
+            ) : null}
             {request ? (
               <div className="mt-1 text-sm text-slate-300">
                 {request.customer} / {request.site}
@@ -6303,6 +6318,7 @@ export function WorkLogModal({
           </h3>
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
             <DetailInline label="Request number" value={latestRequest.requestNumber} />
+            {request?.nickname ? <DetailInline label="Nickname" value={request.nickname} /> : null}
             <DetailInline label="Subject" value={latestRequest.subject} />
             <DetailInline
               label="Customer/site"

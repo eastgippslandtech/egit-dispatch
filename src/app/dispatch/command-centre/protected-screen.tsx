@@ -6,7 +6,7 @@ import {
   isApprovedStaffAccess,
 } from "@/server/auth/session";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
-import { getConfiguredRequestNicknameRepository } from "@/server/dispatch/request-nickname-repository";
+import { withStoredRequestNicknames } from "@/server/dispatch/request-nickname-dashboard";
 import {
   findStaffForZohoLogin,
   isAdminStaffEmail,
@@ -33,30 +33,19 @@ export async function ProtectedCommandCentreScreen({
     return <AccessNotApproved email={access.email} name={access.name} />;
   }
 
-  const data = await getTestSyncedDispatchDashboardData();
-  let nicknames: Record<string, string> = {};
-  const nicknameRepository = getConfiguredRequestNicknameRepository();
-  if (nicknameRepository) {
-    try {
-      nicknames = await nicknameRepository.list(data.requests.map((request) => request.id));
-    } catch (error) {
-      console.error("Ticket nicknames could not be loaded", error);
-    }
-  }
-  const requests = data.requests.map((request) => ({
-    ...request,
-    nickname: nicknames[request.id],
-  }));
+  const data = await withStoredRequestNicknames(
+    await getTestSyncedDispatchDashboardData(),
+  );
   const profile = findStaffForZohoLogin(access.email);
   const canManageIntegrations = Boolean(
     access.authDisabled || profile?.dispatchEnabled || isAdminStaffEmail(access.email),
   );
   const requestedSelection = selectedRequestId
-    ? requests.find((request) => request.id === selectedRequestId)
+    ? data.requests.find((request) => request.id === selectedRequestId)
     : undefined;
   const selectedData = requestedSelection
-    ? { ...data, requests, selectedRequestId: requestedSelection.id }
-    : { ...data, requests };
+    ? { ...data, selectedRequestId: requestedSelection.id }
+    : data;
 
   return (
     <CommandCentrePrototype

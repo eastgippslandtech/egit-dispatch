@@ -4,8 +4,10 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { getCommandCentreAccess } from "@/server/auth/session";
 import { getDispatchDesignMockData } from "@/server/dispatch/mock-data";
 import { getTestSyncedDispatchDashboardData } from "@/server/dispatch/test-sync-dashboard";
+import { getConfiguredRequestNicknameRepository } from "@/server/dispatch/request-nickname-repository";
 
 import DispatchQueuePage from "./page";
+import { DispatchQueueScreen } from "./queue-screen";
 import { QueueScheduleModal } from "./queue-schedule-modal";
 
 const routerRefresh = vi.fn();
@@ -19,6 +21,9 @@ vi.mock("@/server/auth/session", async (importOriginal) => ({
 vi.mock("@/server/dispatch/test-sync-dashboard", () => ({
   getTestSyncedDispatchDashboardData: vi.fn(),
 }));
+vi.mock("@/server/dispatch/request-nickname-repository", () => ({
+  getConfiguredRequestNicknameRepository: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((target: string) => {
@@ -29,6 +34,7 @@ vi.mock("next/navigation", () => ({
 
 const getAccess = vi.mocked(getCommandCentreAccess);
 const getDashboard = vi.mocked(getTestSyncedDispatchDashboardData);
+const getNicknameRepository = vi.mocked(getConfiguredRequestNicknameRepository);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,6 +45,7 @@ beforeEach(() => {
     status: "approved",
   });
   getDashboard.mockResolvedValue(getDispatchDesignMockData());
+  getNicknameRepository.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -54,6 +61,174 @@ test("renders the separate operational queue with board navigation", async () =>
   expect(screen.getByRole("button", { name: /My Queue/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Updated/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Failed Sync/ })).toBeInTheDocument();
+});
+
+test("loads the shared nickname in queue rows, preview, search, and ticket workspace", async () => {
+  const request = getDispatchDesignMockData().requests.find(
+    (candidate) => candidate.subject === "Packhouse label printer offline",
+  );
+  if (!request) throw new Error("Expected queue request fixture.");
+  getNicknameRepository.mockReturnValue({
+    list: vi.fn().mockResolvedValue({ [request.id]: "Front counter printer" }),
+    set: vi.fn(),
+  });
+
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Front counter printer/ });
+  expect(within(row).getByText("Front counter printer")).toBeInTheDocument();
+  expect(within(row).getByText(request.subject)).toBeInTheDocument();
+  expect(within(screen.getAllByRole("complementary").at(-1)!).getByText("Front counter printer")).toBeInTheDocument();
+  fireEvent.change(screen.getByPlaceholderText("Search requests"), {
+    target: { value: "Front counter printer" },
+  });
+  expect(screen.getAllByRole("article")).toHaveLength(1);
+  fireEvent.click(within(row).getByRole("button", { name: "Open workspace" }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  expect(within(workspace).getByRole("heading", { name: "Front counter printer" })).toBeInTheDocument();
+  expect(within(workspace).getByRole("button", { name: "Edit nickname" })).toBeInTheDocument();
+});
+
+test("saves a nickname from Dispatch Queue and updates the queue immediately", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests.find(
+    (candidate) => candidate.subject === "Packhouse label printer offline",
+  );
+  if (!request) throw new Error("Expected queue request fixture.");
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+    JSON.stringify({ nickname: "Front counter printer" }),
+    { headers: { "Content-Type": "application/json" }, status: 200 },
+  ));
+  const { rerender } = render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Packhouse label printer offline/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Open workspace" }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.change(within(workspace).getByRole("textbox", { name: "Ticket nickname" }), {
+    target: { value: "Front counter printer" },
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Save nickname" }));
+
+  await waitFor(() => expect(within(row).getByText("Front counter printer")).toBeInTheDocument());
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/internal/dispatch/requests/${encodeURIComponent(request.id)}/nickname`,
+    expect.objectContaining({ method: "PUT" }),
+  );
+  expect(routerRefresh).toHaveBeenCalled();
+
+  getDashboard.mockResolvedValue({
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  });
+  rerender(await DispatchQueuePage());
+  await waitFor(() => expect(within(screen.getByRole("article", { name: /Front counter printer/ })).getByText("Front counter printer")).toBeInTheDocument());
+
+  getDashboard.mockResolvedValue({
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Updated on Dispatch Board" }
+      : candidate),
+  });
+  rerender(await DispatchQueuePage());
+  await waitFor(() => expect(within(screen.getByRole("article", { name: /Updated on Dispatch Board/ })).getByText("Updated on Dispatch Board")).toBeInTheDocument());
+  fetchMock.mockRestore();
+});
+
+test("accepts a nickname changed on the Dispatch Board when queue data refreshes", () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests.find((candidate) => candidate.subject === "Packhouse label printer offline");
+  if (!request) throw new Error("Expected queue request fixture.");
+  const props = { authDisabled: true, currentTechnicianId: undefined, showIntegrations: false };
+  const { rerender } = render(<DispatchQueueScreen {...props} data={data} />);
+
+  rerender(<DispatchQueueScreen {...props} data={{
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Board nickname" }
+      : candidate),
+  }} />);
+
+  expect(within(screen.getByRole("article", { name: /Board nickname/ })).getByText("Board nickname")).toBeInTheDocument();
+});
+
+test("shows the nickname in the queue scheduling screen", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests.find((candidate) => candidate.subject === "Packhouse label printer offline");
+  if (!request) throw new Error("Expected queue request fixture.");
+  getDashboard.mockResolvedValue({
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  });
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Front counter printer/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Schedule" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Schedule request" });
+  expect(within(dialog).getByText("Front counter printer")).toBeInTheDocument();
+  expect(within(dialog).getByText(request.subject)).toBeInTheDocument();
+});
+
+test("clears a queue nickname and restores the original subject", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests.find((candidate) => candidate.subject === "Packhouse label printer offline");
+  if (!request) throw new Error("Expected queue request fixture.");
+  getDashboard.mockResolvedValue({
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  });
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+    JSON.stringify({ nickname: null }),
+    { headers: { "Content-Type": "application/json" }, status: 200 },
+  ));
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Front counter printer/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Open workspace" }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.click(within(workspace).getByRole("button", { name: "Clear nickname" }));
+
+  await waitFor(() => expect(within(row).queryByText("Front counter printer")).not.toBeInTheDocument());
+  expect(within(row).getByText(request.subject)).toBeInTheDocument();
+  fetchMock.mockRestore();
+});
+
+test("retains the queue nickname when the save fails", async () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests.find((candidate) => candidate.subject === "Packhouse label printer offline");
+  if (!request) throw new Error("Expected queue request fixture.");
+  getDashboard.mockResolvedValue({
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Front counter printer" }
+      : candidate),
+  });
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+    JSON.stringify({ error: "Database unavailable" }),
+    { headers: { "Content-Type": "application/json" }, status: 500 },
+  ));
+  render(await DispatchQueuePage());
+
+  const row = screen.getByRole("article", { name: /Front counter printer/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Open workspace" }));
+  const workspace = screen.getByRole("dialog", { name: "Ticket workspace" });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Edit nickname" }));
+  fireEvent.change(within(workspace).getByRole("textbox", { name: "Ticket nickname" }), {
+    target: { value: "Front counter scanner" },
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Save nickname" }));
+
+  expect(await within(workspace).findByRole("alert")).toHaveTextContent("Database unavailable");
+  expect(within(row).getByText("Front counter printer")).toBeInTheDocument();
+  fetchMock.mockRestore();
 });
 
 test("switches to the signed-in technician queue", async () => {

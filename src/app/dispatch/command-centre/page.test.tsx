@@ -2145,6 +2145,34 @@ test("preserves optimistic schedules while refreshed server data is still stale"
   ).toEqual(optimisticRequest);
 });
 
+test("keeps a nickname saved from Dispatch Queue during a pending Board schedule", () => {
+  const data = getDispatchDesignMockData();
+  const request = data.requests[0];
+  const current = {
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, scheduledStart: "2026-07-08T10:00:00.000Z" }
+      : candidate),
+  };
+  const incoming = {
+    ...data,
+    requests: data.requests.map((candidate) => candidate.id === request.id
+      ? { ...candidate, nickname: "Saved in Dispatch Queue" }
+      : candidate),
+  };
+
+  const reconciled = reconcileDashboardWithPendingWritebacks(
+    current,
+    incoming,
+    new Set([request.id]),
+  );
+
+  expect(reconciled.requests.find((candidate) => candidate.id === request.id)).toMatchObject({
+    nickname: "Saved in Dispatch Queue",
+    scheduledStart: "2026-07-08T10:00:00.000Z",
+  });
+});
+
 test("preserves a dragged reschedule without keeping the stale old booking", () => {
   const incoming = getDispatchDesignMockData();
   const request = {

@@ -31,6 +31,7 @@ import {
   MergeRequestModal,
   publishMspCentralRequestMerge,
   publishMspCentralWorklog,
+  publishRequestNickname,
   resolveWorkLogAppointment,
   TicketWorkspaceModal,
   WorkLogModal,
@@ -79,10 +80,22 @@ export function DispatchQueueScreen({
 }) {
   const router = useRouter();
   const cachedDashboard = useCachedDispatchDashboard();
-  const dashboard = useMemo(
+  const [nicknameOverrides, setNicknameOverrides] = useState<Record<string, string | null>>({});
+  const baseDashboard = useMemo(
     () => resolveDashboardWithCache(data, cachedDashboard),
     [cachedDashboard, data],
   );
+  const dashboard = useMemo(() => {
+    if (Object.keys(nicknameOverrides).length === 0) return baseDashboard;
+    return {
+      ...baseDashboard,
+      requests: baseDashboard.requests.map((request) =>
+        Object.hasOwn(nicknameOverrides, request.id)
+          ? { ...request, nickname: nicknameOverrides[request.id] ?? undefined }
+          : request,
+      ),
+    };
+  }, [baseDashboard, nicknameOverrides]);
   const [view, setView] = useState<DispatchQueueView>("new");
   const [search, setSearch] = useState("");
   const [technicianId, setTechnicianId] = useState("all");
@@ -113,6 +126,20 @@ export function DispatchQueueScreen({
       writeCachedDashboard(window.localStorage, data);
       window.dispatchEvent(new Event(DASHBOARD_CACHE_UPDATED_EVENT));
     }
+    const reconciliationTimer = window.setTimeout(() => {
+      setNicknameOverrides((current) => {
+        const reconciled = Object.entries(current).filter(([requestId, nickname]) =>
+          data.requests.some((request) =>
+            request.id === requestId && (request.nickname ?? null) === nickname,
+          ),
+        );
+        if (reconciled.length === 0) return current;
+        const next = { ...current };
+        for (const [requestId] of reconciled) delete next[requestId];
+        return next;
+      });
+    }, 0);
+    return () => window.clearTimeout(reconciliationTimer);
   }, [data]);
 
   useEffect(() => {
@@ -221,6 +248,15 @@ export function DispatchQueueScreen({
     setWorkspaceAppointmentId(undefined);
     setWorkspaceInitialTab("details");
     setScheduleRequestId(requestId);
+  }
+
+  async function saveTicketNickname(requestId: string, nickname: string | null) {
+    const savedNickname = await publishRequestNickname(requestId, nickname);
+    setNicknameOverrides((current) => ({
+      ...current,
+      [requestId]: savedNickname,
+    }));
+    router.refresh();
   }
 
   async function mergeInto(parentRequestId: string, idempotencyKey: string) {
@@ -510,6 +546,7 @@ export function DispatchQueueScreen({
             setWorkspaceAppointmentId(undefined);
             setWorkspaceInitialTab("details");
           }}
+          onNicknameSaved={saveTicketNickname}
           onSaveWorkLog={(input) =>
             saveWorkLogForTarget(
               { appointmentId: workspaceAppointmentId, requestId: workspaceRequest.id },
@@ -604,7 +641,7 @@ function RequestRow({
 }) {
   return (
     <article
-      aria-label={`${request.requestNumber} ${request.subject}`}
+      aria-label={`${request.requestNumber} ${request.nickname ?? request.subject}`}
       className={`grid grid-cols-[minmax(260px,1.7fr)_130px_120px_160px_210px] gap-3 border-b border-white/[0.06] px-3 py-2.5 text-sm transition ${
         isSelected ? "bg-cc-orange/[0.08] shadow-[inset_3px_0_0_#ff7a2f]" : "hover:bg-white/[0.035]"
       }`}
@@ -617,7 +654,8 @@ function RequestRow({
           <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${priorityClass(request.priority)}`}>{request.priority}</span>
           {unread ? <span className="rounded-full bg-sky-400 px-1.5 py-0.5 text-[9px] font-bold text-[#071423]">UPDATED</span> : null}
         </div>
-        <p className="mt-1 truncate font-semibold text-slate-100">{request.subject}</p>
+        <p className="mt-1 truncate font-semibold text-slate-100">{request.nickname ?? request.subject}</p>
+        {request.nickname ? <p className="mt-0.5 truncate text-xs text-slate-400">{request.subject}</p> : null}
         <p className="mt-0.5 truncate text-xs text-slate-400">{request.requester}</p>
       </div>
       <div className="min-w-0 self-center">
@@ -672,7 +710,8 @@ function RequestPreview({
       {!request ? <p className="mt-8 text-center text-sm text-slate-400">Select a request</p> : (
         <>
           <p className="mt-2 font-mono text-xs text-cc-orange">{request.requestNumber}</p>
-          <h2 className="mt-1 text-lg font-semibold leading-6">{request.subject}</h2>
+          <h2 className="mt-1 text-lg font-semibold leading-6">{request.nickname ?? request.subject}</h2>
+          {request.nickname ? <p className="mt-0.5 text-xs text-slate-400">{request.subject}</p> : null}
           <div className="mt-3 h-1 rounded-full bg-gradient-to-r from-cc-orange via-cc-orange to-transparent" />
           <div className="mt-4 grid gap-3 rounded-md border border-white/10 bg-white/[0.025] p-3 text-sm">
             <PreviewDetail label="Customer" value={request.customer} />
@@ -793,7 +832,7 @@ function melbourneDateTime(value: string) {
 }
 
 function requestSearchText(request: DispatchRequest) {
-  return [request.requestNumber, request.subject, request.customer, request.site, request.requester, request.contact, request.status, request.priority, request.notes, request.category, request.subcategory, request.item, ...request.warnings]
+  return [request.requestNumber, request.nickname, request.subject, request.customer, request.site, request.requester, request.contact, request.status, request.priority, request.notes, request.category, request.subcategory, request.item, ...request.warnings]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();

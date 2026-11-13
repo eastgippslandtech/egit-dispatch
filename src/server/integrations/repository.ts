@@ -170,6 +170,12 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       return rows[0] ?? { pending: 0, reviewRequired: 0 };
     },
 
+    async findOperationByIdempotencyKey(idempotencyKey: string) {
+      const rows = (await sql.query("findOperationByKey", [
+        idempotencyKey,
+      ])) as IntegrationOperation[];
+      return rows[0];
+    },
     async getOperation(operationId: string) {
       return requiredRow<IntegrationOperation>(
         await sql.query("getOperation", [operationId]),

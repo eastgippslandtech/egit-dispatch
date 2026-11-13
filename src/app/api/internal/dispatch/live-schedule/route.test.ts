@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCommandCentreAccess } from "@/server/auth/session";
+import { readDispatchConfig } from "@/server/dispatch/env";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 import { createPostgresAtomicScheduleWriter } from "@/server/integrations/schedule-write";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
+import { createMspCentralClient } from "@/server/msp-central/client";
+import { MspCentralConfigurationError } from "@/server/msp-central/errors";
 
 import { POST } from "./route";
 
@@ -22,6 +26,18 @@ vi.mock("@/server/auth/session", async (importOriginal) => ({
   getCommandCentreAccess: vi.fn(),
 }));
 
+vi.mock("@/server/dispatch/env", () => ({
+  readDispatchConfig: vi.fn(),
+}));
+
+vi.mock("@/server/msp-central/client", () => ({
+  createMspCentralClient: vi.fn(),
+}));
+
+vi.mock("@/server/integrations/repository", () => ({
+  createPostgresIntegrationRepository: vi.fn(),
+}));
+
 vi.mock("@/server/integrations/schedule-write", () => ({
   createPostgresAtomicScheduleWriter: vi.fn(),
 }));
@@ -31,9 +47,14 @@ vi.mock("@/server/integrations/wake", () => ({
 }));
 
 const getAccessMock = vi.mocked(getCommandCentreAccess);
+const configMock = vi.mocked(readDispatchConfig);
+const createMspClientMock = vi.mocked(createMspCentralClient);
+const createRepositoryMock = vi.mocked(createPostgresIntegrationRepository);
 const createScheduleWriterMock = vi.mocked(createPostgresAtomicScheduleWriter);
 const wakeMock = vi.mocked(wakeIntegrationProcessor);
 const persist = vi.fn();
+const getRequest = vi.fn();
+const findOperationByIdempotencyKey = vi.fn();
 
 describe("live dispatch schedule route", () => {
   beforeEach(() => {
@@ -45,6 +66,11 @@ describe("live dispatch schedule route", () => {
       name: "Simeon",
       status: "approved",
     });
+    configMock.mockReturnValue({ dispatchDataSource: "mock" } as never);
+    createMspClientMock.mockReturnValue({ getRequest } as never);
+    getRequest.mockResolvedValue({ id: "123", requestNumber: "REQ-123", status: "Open" });
+    findOperationByIdempotencyKey.mockResolvedValue(undefined);
+    createRepositoryMock.mockReturnValue({ findOperationByIdempotencyKey } as never);
     persist.mockResolvedValue({
       operation: { id: "operation-schedule-1", state: "queued" },
       replayed: false,
@@ -279,6 +305,132 @@ describe("live dispatch schedule route", () => {
 
     expect(response.status).toBe(400);
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("rejects a merged MSP Central request before recording or notifying", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    getRequest.mockRejectedValueOnce(new MspCentralConfigurationError(
+      "MSP Central API request failed with status 404: Invalid URL accessed.",
+      { status: 404 },
+    ));
+
+    const response = await POST(requestWith(validCommand({ requestNumber: "24193" })));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/24193.*merged|merged.*24193/i),
+    });
+    expect(getRequest).toHaveBeenCalledWith("123");
+    expect(persist).not.toHaveBeenCalled();
+    expect(afterTasks).toHaveLength(0);
+  });
+
+  it("confirms the live request ID before persisting a schedule", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    getRequest.mockResolvedValueOnce({ id: "different-id", requestNumber: "REQ-123" });
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(409);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cancelled MSP Central request before recording or notifying", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    getRequest.mockResolvedValueOnce({ id: "123", requestNumber: "REQ-123", status: "Cancelled" });
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/REQ-123.*cancelled/i),
+      ok: false,
+    });
+    expect(persist).not.toHaveBeenCalled();
+    expect(afterTasks).toHaveLength(0);
+  });
+
+  it("rejects a resolved or closed MSP Central request before recording", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    getRequest.mockResolvedValueOnce({ id: "123", requestNumber: "REQ-123", status: "Resolved" });
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/resolved or closed/i),
+    });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with 503 when MSP Central cannot be read", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    getRequest.mockRejectedValueOnce(new MspCentralConfigurationError(
+      "MSP Central API request failed with status 502: Bad gateway.",
+      { status: 502 },
+    ));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/could not confirm ticket REQ-123.*nothing was scheduled or sent/i),
+    });
+    expect(persist).not.toHaveBeenCalled();
+    expect(afterTasks).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  it("fails closed when the MSP Central read exceeds the preflight timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+      getRequest.mockReturnValueOnce(new Promise(() => undefined));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      const pending = POST(requestWith(validCommand()));
+      await vi.advanceTimersByTimeAsync(6_000);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(persist).not.toHaveBeenCalled();
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("queues an open live request after confirming it", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(202);
+    expect(findOperationByIdempotencyKey).toHaveBeenCalledWith("schedule-command-123");
+    expect(getRequest).toHaveBeenCalledWith("123");
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an accepted replay without re-checking a since-merged request", async () => {
+    configMock.mockReturnValue({ dispatchDataSource: "msp-central" } as never);
+    findOperationByIdempotencyKey.mockResolvedValueOnce({
+      id: "operation-schedule-1",
+      state: "synced",
+    });
+    persist.mockResolvedValueOnce({
+      operation: { id: "operation-schedule-1", state: "synced" },
+      replayed: true,
+    });
+
+    const response = await POST(requestWith(validCommand()));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      operationId: "operation-schedule-1",
+      status: "synced",
+    });
+    expect(getRequest).not.toHaveBeenCalled();
   });
 });
 

@@ -13,8 +13,11 @@ import {
   requireIdempotencyKey,
 } from "@/server/integrations/http";
 import { scheduleOperation } from "@/server/integrations/operations";
+import { createPostgresIntegrationRepository } from "@/server/integrations/repository";
 import { createPostgresAtomicScheduleWriter } from "@/server/integrations/schedule-write";
 import { wakeIntegrationProcessor } from "@/server/integrations/wake";
+import { createMspCentralClient } from "@/server/msp-central/client";
+import { MspCentralConfigurationError } from "@/server/msp-central/errors";
 
 type LiveScheduleCommand = {
   appointmentId?: string;
@@ -76,6 +79,18 @@ export async function POST(request: Request) {
       (await request.json()) as LiveScheduleCommand,
       request,
     );
+    const config = readDispatchConfig();
+    if (config.dispatchDataSource === "msp-central") {
+      const replayed = await createPostgresIntegrationRepository({
+        databaseUrl: config.databaseUrl,
+      }).findOperationByIdempotencyKey(command.idempotencyKey);
+      // An exact replay of an accepted schedule returns the existing operation
+      // below; only new intent must be checked against the live request.
+      if (!replayed) {
+        const rejection = await preflightLiveRequest(config, command);
+        if (rejection) return rejection;
+      }
+    }
     const queuedWork = scheduleOperation({
         actorEmail: access.email,
         appointmentId: command.appointmentId,
@@ -121,7 +136,7 @@ export async function POST(request: Request) {
 
     const localEvents = localScheduleEvents(localCommand);
     const writer = createPostgresAtomicScheduleWriter({
-      databaseUrl: readDispatchConfig().databaseUrl,
+      databaseUrl: config.databaseUrl,
     });
     const { operation } = await writer.persist({
       createdBy: access.email,
@@ -153,6 +168,81 @@ export async function POST(request: Request) {
       { status: integrationRouteErrorStatus(error) },
     );
   }
+}
+
+// Kept well inside the browser's 15-second schedule confirmation timeout so a
+// slow read cannot leave the client unsure whether the schedule was recorded.
+const LIVE_REQUEST_PREFLIGHT_TIMEOUT_MS = 6_000;
+
+/**
+ * Confirms the target request is still live and schedulable in MSP Central
+ * before any local placeholder, notification or provider step is queued.
+ * Returns a response to send when scheduling must not proceed.
+ *
+ * A merge or cancellation after this check is still possible; the queued MSP
+ * step will then fail into review, as before.
+ */
+async function preflightLiveRequest(
+  config: ReturnType<typeof readDispatchConfig>,
+  command: ValidLiveScheduleCommand,
+) {
+  let liveRequest: Awaited<ReturnType<ReturnType<typeof createMspCentralClient>["getRequest"]>>;
+  try {
+    liveRequest = await withPreflightTimeout(
+      createMspCentralClient(config).getRequest(command.requestId),
+    );
+  } catch (error) {
+    if (error instanceof MspCentralConfigurationError && error.status === 404) {
+      return unavailableRequestResponse(command.requestNumber);
+    }
+    console.warn("Live schedule preflight could not read MSP Central request.", {
+      message: error instanceof Error ? error.message : "Unknown MSP Central read error.",
+      requestId: command.requestId,
+    });
+    return preflightRejection(
+      `Command Centre could not confirm ticket ${command.requestNumber} with MSP Central, so nothing was scheduled or sent. Try again shortly.`,
+      503,
+    );
+  }
+
+  if (!liveRequest || liveRequest.id !== command.requestId) {
+    return unavailableRequestResponse(command.requestNumber);
+  }
+  if (liveRequest.status === "Cancelled") {
+    return preflightRejection(
+      `Ticket ${command.requestNumber} has been cancelled in MSP Central, so it cannot be scheduled. Refresh Dispatch.`,
+      409,
+    );
+  }
+  if (liveRequest.status === "Resolved") {
+    return preflightRejection(
+      `Ticket ${command.requestNumber} is resolved or closed in MSP Central. Reopen it in MSP Central before scheduling, then refresh Dispatch.`,
+      409,
+    );
+  }
+  return undefined;
+}
+
+function withPreflightTimeout<T>(promise: Promise<T>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`MSP Central request preflight timed out after ${LIVE_REQUEST_PREFLIGHT_TIMEOUT_MS}ms.`)),
+      LIVE_REQUEST_PREFLIGHT_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function unavailableRequestResponse(requestNumber: string) {
+  return preflightRejection(
+    `Ticket ${requestNumber} is no longer available in MSP Central. It may have been merged. Refresh Dispatch and schedule the surviving ticket.`,
+    409,
+  );
+}
+
+function preflightRejection(error: string, status: 409 | 503) {
+  return noStoreJson({ error, ok: false }, { status });
 }
 
 function requiredPayloadString(

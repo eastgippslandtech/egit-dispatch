@@ -428,6 +428,19 @@ describe("integration repository", () => {
     ]);
   });
 
+  it("finds an existing operation by idempotency key without enqueueing", async () => {
+    const fake = fakeSql();
+    const repository = createIntegrationRepository(fake.sql);
+
+    await expect(repository.findOperationByIdempotencyKey(operation().idempotencyKey))
+      .resolves.toBeUndefined();
+    const { operation: created } = await repository.enqueue(operation());
+
+    await expect(repository.findOperationByIdempotencyKey(operation().idempotencyKey))
+      .resolves.toMatchObject({ id: created.id });
+    expect(fake.operations).toHaveLength(1);
+  });
+
   it("can enqueue inside a caller-owned transaction without nesting another transaction", async () => {
     const fake = fakeSql();
     const transaction = vi.fn(fake.sql.transaction);

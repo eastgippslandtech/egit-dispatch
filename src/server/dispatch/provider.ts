@@ -35,6 +35,9 @@ type ZohoCrmAccountsClient = Pick<ZohoCrmClient, "listAccounts">;
 type OutlookLoader = typeof buildOutlookCalendarDashboardData;
 type IntegrationOperationRepository = {
   enqueue(input: EnqueueIntegrationOperation): Promise<unknown>;
+  findCommandCreatedOutlookEventIds?(
+    eventIds: readonly string[],
+  ): Promise<ReadonlySet<string>>;
 };
 
 const OUTLOOK_DASHBOARD_TIMEOUT_MS = 12_000;
@@ -42,6 +45,7 @@ const CRM_ENRICHMENT_TIMEOUT_MS = 8_000;
 const MSP_REQUESTS_TIMEOUT_MS = 7_000;
 const MSP_TECHNICIANS_TIMEOUT_MS = 2_500;
 const CANCELLED_OUTLOOK_CLEANUP_TIMEOUT_MS = 1_500;
+const OUTLOOK_OWNERSHIP_TIMEOUT_MS = 1_500;
 
 let crmAccountCache:
   | { accounts: ZohoCrmAccountRecord[]; expiresAt: number }
@@ -197,10 +201,23 @@ export async function getDispatchDashboardData(
               calendarStatusLabel:
                 config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
             };
+      const pruneOrphanedOutlookEvents = requestsResult.status === "fulfilled";
+      const ownedOutlookEventIds = await loadCommandCreatedOutlookEventIds(
+        cleanupCandidateEventIds(
+          mergeMspCentralScheduleWithOutlook(requests, outlookData.appointments, {
+            isCommandCentreOutlookEvent: () => true,
+            pruneOrphanedOutlookEvents,
+          }),
+        ),
+        { config, repository: integrationRepository },
+      );
       const linkedSchedule = mergeMspCentralScheduleWithOutlook(
         requests,
         outlookData.appointments,
-        { pruneOrphanedOutlookEvents: requestsResult.status === "fulfilled" },
+        {
+          isCommandCentreOutlookEvent: (eventId) => ownedOutlookEventIds.has(eventId),
+          pruneOrphanedOutlookEvents,
+        },
       );
       await queueCancelledOutlookCleanup(linkedSchedule.cancelledOutlookEvents, {
         config,
@@ -252,6 +269,49 @@ export async function getDispatchDashboardData(
     selectedRequestId: "",
     dispatchDataSource: "mock",
   }, config);
+}
+
+function cleanupCandidateEventIds(
+  schedule: ReturnType<typeof mergeMspCentralScheduleWithOutlook>,
+) {
+  return [
+    ...schedule.orphanedOutlookEvents.map((event) => event.eventId),
+    ...schedule.cancelledOutlookEvents.map((event) => event.eventId),
+  ];
+}
+
+/**
+ * Automatic Outlook cleanup may only delete events Command Centre created.
+ * Any lookup failure yields an empty set, so nothing is deleted.
+ */
+async function loadCommandCreatedOutlookEventIds(
+  eventIds: string[],
+  {
+    config,
+    repository,
+  }: {
+    config: DispatchConfig;
+    repository?: IntegrationOperationRepository | null;
+  },
+): Promise<ReadonlySet<string>> {
+  if (config.mode !== "live" || eventIds.length === 0) return new Set();
+  const resolvedRepository =
+    repository ??
+    (config.databaseUrl
+      ? createPostgresIntegrationRepository({ databaseUrl: config.databaseUrl })
+      : null);
+  if (!resolvedRepository?.findCommandCreatedOutlookEventIds) return new Set();
+
+  try {
+    return await withProviderTimeout(
+      resolvedRepository.findCommandCreatedOutlookEventIds(eventIds),
+      OUTLOOK_OWNERSHIP_TIMEOUT_MS,
+      "Outlook event ownership lookup timed out.",
+    );
+  } catch (error) {
+    console.error("Outlook event ownership lookup failed", safeError(error));
+    return new Set();
+  }
 }
 
 async function queueOrphanedOutlookCleanup(

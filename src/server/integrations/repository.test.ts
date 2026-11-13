@@ -428,6 +428,23 @@ describe("integration repository", () => {
     ]);
   });
 
+  it("looks up Command Centre-created Outlook events only when there are candidates", async () => {
+    const query = vi.fn(async () => [{ eventId: "event-ours" }]);
+    const repository = createIntegrationRepository({
+      query,
+      transaction: vi.fn(),
+    } as never);
+
+    await expect(repository.findCommandCreatedOutlookEventIds([])).resolves.toEqual(new Set());
+    expect(query).not.toHaveBeenCalled();
+    await expect(
+      repository.findCommandCreatedOutlookEventIds(["event-ours", "event-not-ours", "event-ours"]),
+    ).resolves.toEqual(new Set(["event-ours"]));
+    expect(query).toHaveBeenCalledWith("findCommandCreatedOutlookEventIds", [
+      ["event-ours", "event-not-ours"],
+    ]);
+  });
+
   it("finds an existing operation by idempotency key without enqueueing", async () => {
     const fake = fakeSql();
     const repository = createIntegrationRepository(fake.sql);

@@ -19,6 +19,7 @@ type IntegrationQueryName =
   | "claimDueSteps"
   | "countDueSteps"
   | "expireExpiredLeases"
+  | "findCommandCreatedOutlookEventIds"
   | "findOperationByKey"
   | "getOperation"
   | "getOperationForActor"
@@ -170,6 +171,19 @@ export function createIntegrationRepository(sql: IntegrationSql) {
       return rows[0] ?? { pending: 0, reviewRequired: 0 };
     },
 
+    /**
+     * Returns the subset of the given Outlook event IDs that Command Centre is
+     * on record as having created or managed: a successful Outlook upsert step,
+     * or a current lead/crew dispatch link.
+     */
+    async findCommandCreatedOutlookEventIds(eventIds: readonly string[]) {
+      const unique = [...new Set(eventIds.filter(Boolean))];
+      if (unique.length === 0) return new Set<string>();
+      const rows = (await sql.query("findCommandCreatedOutlookEventIds", [
+        unique,
+      ])) as Array<{ eventId: string }>;
+      return new Set(rows.map((row) => row.eventId));
+    },
     async findOperationByIdempotencyKey(idempotencyKey: string) {
       const rows = (await sql.query("findOperationByKey", [
         idempotencyKey,
@@ -398,6 +412,25 @@ class PostgresIntegrationSql implements IntegrationSql {
     values: readonly unknown[],
   ): Promise<unknown[]> {
     switch (name) {
+      case "findCommandCreatedOutlookEventIds": {
+        const [eventIds] = values as [string[]];
+        return this.sql<Array<{ eventId: string }>>`
+          select result->>'externalId' as "eventId"
+          from public.integration_operation_steps
+          where connector = 'outlook'
+            and action = 'outlook.upsert_event'
+            and state = 'succeeded'
+            and result->>'externalId' = any(${eventIds}::text[])
+          union
+          select outlook_event_id
+          from public.dispatch_links
+          where outlook_event_id = any(${eventIds}::text[])
+          union
+          select outlook_event_id
+          from public.dispatch_link_crew
+          where outlook_event_id = any(${eventIds}::text[])
+        `;
+      }
       case "findOperationByKey": {
         const [idempotencyKey] = values as [string];
         return this.operations(

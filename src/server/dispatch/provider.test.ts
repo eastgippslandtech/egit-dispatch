@@ -245,7 +245,7 @@ describe("dispatch dashboard provider", () => {
       }),
       {
         crmClient: null,
-        integrationRepository: { enqueue } as never,
+        integrationRepository: { enqueue, findCommandCreatedOutlookEventIds: ownsEveryEvent } as never,
         mspClient,
         outlookLoader: vi.fn(async ({ mockData }) => ({
           ...mockData,
@@ -316,7 +316,7 @@ describe("dispatch dashboard provider", () => {
       }),
       {
         crmClient: null,
-        integrationRepository: { enqueue } as never,
+        integrationRepository: { enqueue, findCommandCreatedOutlookEventIds: ownsEveryEvent } as never,
         mspClient,
         outlookLoader: vi.fn(async ({ mockData }) => ({
           ...mockData,
@@ -361,6 +361,74 @@ describe("dispatch dashboard provider", () => {
         ],
       }),
     );
+  });
+
+  it.each([
+    ["is not a Command Centre event", async () => new Set<string>()],
+    ["cannot be confirmed as a Command Centre event", async () => {
+      throw new Error("database unavailable");
+    }],
+  ])("keeps and never deletes an orphan-looking Outlook event that %s", async (_label, lookup) => {
+    const enqueue = vi.fn(async () => ({ operation: { id: "operation-1" } }));
+    const findCommandCreatedOutlookEventIds = vi.fn(lookup);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const mspClient = {
+      listRequests: async () => [],
+      listTechnicians: async () => [],
+    } as unknown as MspCentralClient;
+
+    const data = await getDispatchDashboardData(
+      readDispatchConfig({
+        CALENDAR_DATA_SOURCE: "outlook",
+        DATABASE_URL: "postgresql://example",
+        DISPATCH_DATA_SOURCE: "msp-central",
+        MICROSOFT_CLIENT_ID: "graph-client",
+        MICROSOFT_CLIENT_SECRET: "graph-secret",
+        MICROSOFT_TENANT_ID: "graph-tenant",
+        MOCK_INTEGRATIONS: "false",
+        MSP_CENTRAL_BASE_URL: "https://msp.example",
+        MSP_CENTRAL_CLIENT_ID: "msp-client",
+        MSP_CENTRAL_CLIENT_SECRET: "msp-secret",
+        MSP_CENTRAL_PORTAL: "egit",
+        MSP_CENTRAL_REFRESH_TOKEN: "msp-refresh",
+      }),
+      {
+        crmClient: null,
+        integrationRepository: { enqueue, findCommandCreatedOutlookEventIds } as never,
+        mspClient,
+        outlookLoader: vi.fn(async ({ mockData }) => ({
+          ...mockData,
+          appointments: [
+            {
+              calendarOwnerEmail: "jervy@egit.com.au",
+              customer: "Outlook calendar",
+              date: "2026-08-06",
+              end: "11:00",
+              id: "outlook-jervy-reference",
+              outlookEventId: "event-not-ours",
+              outlookLinkedRequestNumber: "4727154",
+              readOnly: true,
+              requestId: "4727154",
+              source: "outlook",
+              start: "10:00",
+              status: "busy",
+              technicianId: "tech-jervy",
+              title: "Supplier call re order 4727154",
+            },
+          ],
+          calendarDataSource: "outlook" as const,
+          calendarReadOnly: false,
+          calendarStatusLabel: "Outlook Read/Write",
+        })),
+      },
+    );
+
+    expect(findCommandCreatedOutlookEventIds).toHaveBeenCalledWith(["event-not-ours"]);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(data.appointments).toEqual([
+      expect.objectContaining({ outlookEventId: "event-not-ours" }),
+    ]);
+    error.mockRestore();
   });
 
   it("keeps Helpdesk requests visible when Outlook dashboard loading stalls", async () => {
@@ -725,3 +793,7 @@ describe("dispatch dashboard provider", () => {
     });
   });
 });
+
+async function ownsEveryEvent(eventIds: readonly string[]) {
+  return new Set(eventIds);
+}

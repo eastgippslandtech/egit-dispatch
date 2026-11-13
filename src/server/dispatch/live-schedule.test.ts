@@ -94,7 +94,7 @@ describe("live schedule linking", () => {
       title: `${request.requestNumber} stale booking`,
     });
 
-    const result = mergeMspCentralScheduleWithOutlook([request], [outlook]);
+    const result = mergeMspCentralScheduleWithOutlook([request], [outlook], ownedByCommandCentre);
 
     expect(result.appointments).toHaveLength(0);
     expect(result.cancelledOutlookEvents).toEqual([
@@ -144,6 +144,7 @@ describe("live schedule linking", () => {
 
     const result = mergeMspCentralScheduleWithOutlook([], [outlook], {
       pruneOrphanedOutlookEvents: true,
+      isCommandCentreOutlookEvent: () => true,
     });
 
     expect(result.appointments).toEqual([]);
@@ -215,6 +216,7 @@ describe("live schedule linking", () => {
     const result = mergeMspCentralScheduleWithOutlook(
       [request],
       [stale, current],
+      ownedByCommandCentre,
     );
 
     expect(result.appointments).toHaveLength(1);
@@ -268,6 +270,7 @@ describe("live schedule linking", () => {
     const result = mergeMspCentralScheduleWithOutlook(
       [request],
       [stale, current],
+      ownedByCommandCentre,
     );
 
     expect(result.appointments).toHaveLength(1);
@@ -305,7 +308,104 @@ describe("live schedule linking", () => {
     });
     expect(result.requests[0].scheduledStart).toBeUndefined();
   });
+
+  it("never queues deletion of an Outlook event Command Centre did not create", () => {
+    const personal = outlookFixture({
+      calendarOwnerEmail: "jervy@egit.com.au",
+      id: "outlook-personal-reference",
+      outlookEventId: "event-not-ours",
+      outlookLinkedRequestNumber: "4727154",
+      requestId: "4727154",
+      technicianId: "tech-jervy",
+      title: "Supplier call re order 4727154",
+    });
+
+    const result = mergeMspCentralScheduleWithOutlook([], [personal], {
+      isCommandCentreOutlookEvent: (eventId) => eventId === "event-ours",
+      pruneOrphanedOutlookEvents: true,
+    });
+
+    expect(result.orphanedOutlookEvents).toEqual([]);
+    expect(result.appointments).toEqual([
+      expect.objectContaining({ outlookEventId: "event-not-ours" }),
+    ]);
+  });
+
+  it("does not delete orphaned or cancelled Outlook events without ownership evidence", () => {
+    const cancelled = requestFixture({
+      status: "Cancelled" as unknown as DispatchRequest["status"],
+      technicianId: "tech-jervy",
+    });
+    const cancelledEvent = outlookFixture({
+      calendarOwnerEmail: "jervy@egit.com.au",
+      id: "outlook-cancelled",
+      outlookEventId: "event-cancelled",
+      outlookLinkedRequestNumber: cancelled.requestNumber,
+      requestId: cancelled.requestNumber,
+      technicianId: "tech-jervy",
+      title: `${cancelled.requestNumber} booking`,
+    });
+    const orphan = outlookFixture({
+      calendarOwnerEmail: "mattd@egit.com.au",
+      id: "outlook-orphan",
+      outlookEventId: "event-orphan",
+      outlookLinkedRequestNumber: "237692",
+      requestId: "237692",
+      technicianId: "tech-matt",
+      title: "[CW 237692] CD Ripping and Burning",
+    });
+
+    const result = mergeMspCentralScheduleWithOutlook([cancelled], [cancelledEvent, orphan], {
+      pruneOrphanedOutlookEvents: true,
+    });
+
+    expect(result.cancelledOutlookEvents).toEqual([]);
+    expect(result.orphanedOutlookEvents).toEqual([]);
+  });
+
+  it("keeps a stale duplicate it did not create while still showing the canonical booking", () => {
+    const request = requestFixture({
+      id: "6768000001563242",
+      requestNumber: "22401",
+      scheduledEnd: "2026-08-13T12:30:00+10:00",
+      scheduledStart: "2026-08-13T11:15:00+10:00",
+      technicianId: "tech-jervy",
+    });
+    const handMade = outlookFixture({
+      calendarOwnerEmail: "jervy@egit.com.au",
+      date: "2026-08-13",
+      end: "12:15",
+      id: "outlook-hand-made",
+      outlookEventId: "event-hand-made",
+      outlookLinkedRequestNumber: request.requestNumber,
+      requestId: request.requestNumber,
+      start: "11:00",
+      technicianId: "tech-jervy",
+      title: "Network Issues",
+    });
+    const current = outlookFixture({
+      calendarOwnerEmail: "jervy@egit.com.au",
+      date: "2026-08-13",
+      end: "12:30",
+      id: "outlook-current",
+      outlookEventId: "event-current",
+      outlookLinkedRequestNumber: request.requestNumber,
+      requestId: request.requestNumber,
+      start: "11:15",
+      technicianId: "tech-jervy",
+      title: "Network Issues",
+    });
+
+    const result = mergeMspCentralScheduleWithOutlook([request], [handMade, current], {
+      isCommandCentreOutlookEvent: (eventId) => eventId === "event-current",
+    });
+
+    expect(result.appointments).toHaveLength(1);
+    expect(result.orphanedOutlookEvents).toEqual([]);
+  });
 });
+
+const ownedByCommandCentre = { isCommandCentreOutlookEvent: () => true };
 
 function requestFixture(
   overrides: Partial<DispatchRequest> = {},

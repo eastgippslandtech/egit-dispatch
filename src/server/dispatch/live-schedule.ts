@@ -20,8 +20,20 @@ export type OrphanedOutlookEventCleanup = {
 export function mergeMspCentralScheduleWithOutlook(
   requests: DispatchRequest[],
   outlookAppointments: Appointment[],
-  options: { pruneOrphanedOutlookEvents?: boolean } = {},
+  options: {
+    /**
+     * Only Outlook events this returns true for are ever queued for deletion.
+     * Defaults to none: an event must be proven Command Centre-created.
+     */
+    isCommandCentreOutlookEvent?: (eventId: string) => boolean;
+    pruneOrphanedOutlookEvents?: boolean;
+  } = {},
 ) {
+  const isOwned = (appointment: Appointment) =>
+    Boolean(
+      appointment.outlookEventId &&
+        options.isCommandCentreOutlookEvent?.(appointment.outlookEventId),
+    );
   const requestTokens = requests.map((request) => ({
     request,
     tokens: requestLinkTokens(request),
@@ -41,7 +53,9 @@ export function mergeMspCentralScheduleWithOutlook(
       for (const staleOutlookAppointment of staleOutlookAppointments) {
         consumedOutlookAppointmentIds.add(staleOutlookAppointment.id);
         const cleanup = cancelledOutlookCleanup(request, staleOutlookAppointment);
-        if (cleanup) cancelledOutlookEvents.push(cleanup);
+        if (cleanup && isOwned(staleOutlookAppointment)) {
+          cancelledOutlookEvents.push(cleanup);
+        }
       }
       continue;
     }
@@ -52,6 +66,7 @@ export function mergeMspCentralScheduleWithOutlook(
       outlookAppointments,
       requestLinkTokens(request),
       consumedOutlookAppointmentIds,
+      isOwned,
       mspAppointment,
     );
     appointments.push(...linkedOutlook.appointments);
@@ -75,7 +90,7 @@ export function mergeMspCentralScheduleWithOutlook(
       appointmentMatchesTokens(outlookAppointment, tokens),
     )?.request;
     if (request && isCancelledRequest(request)) continue;
-    if (!request && options.pruneOrphanedOutlookEvents) {
+    if (!request && options.pruneOrphanedOutlookEvents && isOwned(outlookAppointment)) {
       const cleanup = orphanedOutlookCleanup(outlookAppointment);
       if (cleanup) {
         orphanedOutlookEvents.push(cleanup);
@@ -260,6 +275,7 @@ function linkMatchingOutlookAppointmentsForRequest(
   outlookAppointments: Appointment[],
   tokens: ReadonlySet<string>,
   consumedAppointmentIds: Set<string>,
+  isOwned: (appointment: Appointment) => boolean,
   mspAppointment?: Appointment,
 ) {
   const candidates = findMatchingOutlookAppointments(
@@ -293,7 +309,7 @@ function linkMatchingOutlookAppointmentsForRequest(
     for (const staleAppointment of group) {
       if (staleAppointment.id === canonical.id) continue;
       const cleanup = orphanedOutlookCleanup(staleAppointment);
-      if (cleanup) orphanedOutlookEvents.push(cleanup);
+      if (cleanup && isOwned(staleAppointment)) orphanedOutlookEvents.push(cleanup);
     }
   }
 

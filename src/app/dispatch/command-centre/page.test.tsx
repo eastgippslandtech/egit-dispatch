@@ -298,11 +298,19 @@ test("live scheduling lets the dispatcher choose the booking type", () => {
   expect(screen.getByText("Includes 15 minutes for onsite notes.")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "15 minutes" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "45 minutes" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "4 hours" })).toHaveValue("240");
+  expect(screen.getByRole("option", { name: "7h 30m" })).toHaveValue("450");
+  expect(screen.getByRole("option", { name: "8 hours" })).toHaveValue("480");
 
   fireEvent.change(screen.getByLabelText("Job duration"), {
     target: { value: "45" },
   });
   expect(onDurationChange).toHaveBeenCalledWith(45);
+
+  fireEvent.change(screen.getByLabelText("Job duration"), {
+    target: { value: "480" },
+  });
+  expect(onDurationChange).toHaveBeenCalledWith(480);
 
   fireEvent.change(screen.getByLabelText("Booking type"), {
     target: { value: "Remote" },

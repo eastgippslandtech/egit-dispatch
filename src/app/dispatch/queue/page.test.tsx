@@ -339,6 +339,40 @@ test("accepts a live queue schedule locally when provider confirmation stalls", 
   fetchMock.mockRestore();
 });
 
+test.each([
+  ["Remote", "17:00"],
+  ["In house", "17:00"],
+  ["Onsite", "17:15"],
+] as const)("saves an eight-hour %s queue booking with its full end time", async (bookingType, end) => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ ok: true, operationId: "eight-hour-booking", status: "queued" }), { status: 202 }),
+  );
+
+  render(
+    <QueueScheduleModal
+      dashboard={{ ...data, appointments: [], calendarDataSource: "outlook", calendarReadOnly: false, dispatchDataSource: "msp-central", requests: [request] }}
+      request={request}
+      onCancel={vi.fn()}
+      onScheduled={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("option", { name: "8 hours" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "09:00" } });
+  fireEvent.change(screen.getByLabelText("Booking type"), { target: { value: bookingType } });
+  fireEvent.change(screen.getByLabelText("Job duration"), { target: { value: "480" } });
+  expect(screen.getByLabelText("Job duration")).toHaveValue("480");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/internal/dispatch/live-schedule", expect.objectContaining({ method: "POST" }),
+  ));
+  const [, init] = fetchMock.mock.calls.find(([url]) => url === "/api/internal/dispatch/live-schedule")!;
+  expect(JSON.parse(String(init?.body))).toMatchObject({ bookingType, start: "09:00", end });
+});
+
 test("opens a queue request workspace on double-click", async () => {
   render(await DispatchQueuePage());
 

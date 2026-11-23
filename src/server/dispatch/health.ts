@@ -13,7 +13,7 @@ type HealthInput = Pick<
 
 export function buildDispatchHealthItems(data: HealthInput): HealthItem[] {
   const unscheduled = data.requests.filter(
-    (request) => !request.scheduledStart,
+    (request) => !request.scheduledStart && request.status !== "Resolved" && request.status !== "Cancelled",
   );
   const readyUnscheduled = unscheduled.filter((request) => request.readyToBook);
   const appointmentIssueCount = (
@@ -68,7 +68,7 @@ export function buildDispatchHealthItems(data: HealthInput): HealthItem[] {
       label: "Past Scheduled Open Jobs",
       count: appointmentIssueCount("past-open"),
       severity: "critical",
-      description: "Scheduled jobs that have ended but remain open.",
+      description: "Open jobs from previous booking days needing rebooking.",
     },
     {
       key: "mapping",

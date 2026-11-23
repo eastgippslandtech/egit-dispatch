@@ -20,6 +20,8 @@ import type {
 } from "./types";
 
 export interface DispatchDashboardDatabase {
+  /** Current saved booking links, without request activity/history enrichment. */
+  getSavedScheduleData?(): Promise<Pick<DispatchDashboardData, "appointments" | "requests" | "technicians">>;
   getDashboardData(): Promise<Pick<
     DispatchDashboardData,
     "appointments" | "requests" | "technicians"
@@ -94,11 +96,10 @@ export function createPostgresDispatchDashboardDatabase({
   databaseUrl?: string;
   sql?: postgres.Sql;
 } = {}): DispatchDashboardDatabase {
-  return {
-    async getDashboardData() {
+  async function loadDashboardData(includeNotes: boolean) {
       const [staffRows, linkRows] = await Promise.all([
         selectStaffRows(sql),
-        selectDispatchRows(sql),
+        selectDispatchRows(sql, includeNotes),
       ]);
       const technicians = staffRows.map(mapTechnician);
       const technicianIdsByStaffId = new Map(
@@ -122,7 +123,10 @@ export function createPostgresDispatchDashboardDatabase({
         );
 
       return { appointments, requests, technicians };
-    },
+  }
+  return {
+    getDashboardData: () => loadDashboardData(true),
+    getSavedScheduleData: () => loadDashboardData(false),
   };
 }
 
@@ -168,7 +172,7 @@ function selectStaffRows(sql: postgres.Sql) {
   `;
 }
 
-function selectDispatchRows(sql: postgres.Sql) {
+function selectDispatchRows(sql: postgres.Sql, includeNotes: boolean) {
   return sql<DispatchLinkRow[]>`
     with assignments as (
       select
@@ -238,10 +242,12 @@ function selectDispatchRows(sql: postgres.Sql) {
         select action, status, message, payload_summary, created_at
         from public.dispatch_sync_logs
         where sdp_request_id = dl.sdp_request_id
+          and ${includeNotes}
         order by created_at desc
         limit 20
       ) latest
     ) logs on true
+    where ${includeNotes} or (dl.scheduled_start is not null and dl.scheduled_end is not null)
     order by coalesce(dl.scheduled_start, dl.updated_at), dl.sdp_request_number
   `;
 }

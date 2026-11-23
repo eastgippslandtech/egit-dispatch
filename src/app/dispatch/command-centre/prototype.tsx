@@ -727,9 +727,9 @@ export function CommandCentrePrototype({
   const unscheduledRequests = dashboard.requests.filter(
     (request) =>
       !request.scheduledStart &&
-      !dashboard.appointments.some((appointment) =>
+      (request.needsRebooking || !dashboard.appointments.some((appointment) =>
         appointmentBelongsToRequest(appointment, request),
-      ) &&
+      )) &&
       request.status !== "Resolved" &&
       request.status !== "Cancelled",
   );

@@ -5,6 +5,11 @@ import { getDispatchDashboardData } from "./provider";
 import type { DispatchDashboardDatabase } from "./database";
 import type { MspCentralClient } from "@/server/msp-central/types";
 
+vi.mock("./database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./database")>()),
+  getConfiguredDispatchDashboardDatabase: () => null,
+}));
+
 describe("dispatch dashboard provider", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -292,7 +297,7 @@ describe("dispatch dashboard provider", () => {
     );
   });
 
-  it("queues Outlook cleanup for Outlook ticket bookings that no longer have active Helpdesk requests", async () => {
+  it("retains owned Outlook bookings absent from the cached Helpdesk list because absence does not prove closure", async () => {
     const enqueue = vi.fn(async () => ({ operation: { id: "operation-1" } }));
     const mspClient = {
       listRequests: async () => [],
@@ -345,22 +350,8 @@ describe("dispatch dashboard provider", () => {
       },
     );
 
-    expect(data.appointments).toEqual([]);
-    expect(enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionType: "dispatch.orphaned_outlook_cleanup",
-        requestId: "outlook-orphan:237692",
-        steps: [
-          expect.objectContaining({
-            action: "outlook.delete_event",
-            payload: expect.objectContaining({
-              eventId: "event-orphan-matt",
-              userPrincipalName: "mattd@egit.com.au",
-            }),
-          }),
-        ],
-      }),
-    );
+    expect(data.appointments).toEqual([expect.objectContaining({ outlookEventId: "event-orphan-matt" })]);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -423,7 +414,7 @@ describe("dispatch dashboard provider", () => {
       },
     );
 
-    expect(findCommandCreatedOutlookEventIds).toHaveBeenCalledWith(["event-not-ours"]);
+    expect(findCommandCreatedOutlookEventIds).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
     expect(data.appointments).toEqual([
       expect.objectContaining({ outlookEventId: "event-not-ours" }),

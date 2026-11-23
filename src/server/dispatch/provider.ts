@@ -3,6 +3,7 @@ import { todayDateKey } from "./date-scope";
 import { readDispatchConfig } from "./env";
 import { buildDispatchHealthItems } from "./health";
 import { mergeMspCentralScheduleWithOutlook } from "./live-schedule";
+import { applyBookingDayRollover, includeSavedBookingPlaceholders, restoreSavedDispatchSchedules } from "./schedule-state";
 import { getDispatchDesignMockData, getEmptyCommandCentreData } from "./mock-data";
 import {
   buildDatabaseDispatchDashboardData,
@@ -121,6 +122,7 @@ export async function getDispatchDashboardData(
       techniciansResult,
       crmAccountsResult,
       outlookResult,
+      savedScheduleResult,
     ] = await Promise.allSettled([
       withProviderTimeout(
         client.listRequests({ cacheOnly: true }),
@@ -140,10 +142,14 @@ export async function getDispatchDashboardData(
           )
         : Promise.resolve([]),
       outlookPromise,
+      database
+        ? withProviderTimeout(database.getSavedScheduleData?.() ?? database.getDashboardData(), MSP_TECHNICIANS_TIMEOUT_MS,
+            "Saved booking read timed out during dashboard load.")
+        : Promise.resolve(undefined),
     ]);
     const rawRequests =
       requestsResult.status === "fulfilled" ? requestsResult.value : [];
-    const requests =
+    const enrichedRequests =
       crmAccountsResult.status === "fulfilled"
         ? enrichRequestsWithZohoCrmAddresses(rawRequests, crmAccountsResult.value)
         : rawRequests;
@@ -151,6 +157,16 @@ export async function getDispatchDashboardData(
       techniciansResult.status === "fulfilled"
         ? techniciansResult.value
         : fallbackTechnicians;
+    const restored = restoreSavedDispatchSchedules(
+      enrichedRequests,
+      outlookResult.status === "fulfilled" ? outlookResult.value?.appointments ?? [] : [],
+      savedScheduleResult.status === "fulfilled" ? savedScheduleResult.value : undefined,
+      technicians,
+    );
+    const requests = restored.requests;
+    const savedScheduleError = savedScheduleResult.status === "rejected"
+      ? "Saved booking read failed. Forward bookings outside the calendar window could not be verified."
+      : undefined;
     const mspCentralError =
       requestsResult.status === "rejected"
         ? "MSP Central is temporarily unavailable. Helpdesk requests could not be loaded."
@@ -172,7 +188,7 @@ export async function getDispatchDashboardData(
     const mspData: DispatchDashboardData = {
       appointments: mspSchedule.appointments,
       calendarDataSource: "mock",
-      calendarError: mspCentralError,
+      calendarError: joinErrors(mspCentralError, savedScheduleError),
       calendarReadOnly: false,
       calendarStatusLabel: "MSP Central",
       dispatchDataSource: "msp-central",
@@ -194,6 +210,7 @@ export async function getDispatchDashboardData(
           ? outlookResult.value
           : {
               ...dashboard,
+              appointments: [],
               calendarDataSource: "outlook" as const,
               calendarError:
                 "Outlook calendar read failed. The last Helpdesk data remains available.",
@@ -201,22 +218,26 @@ export async function getDispatchDashboardData(
               calendarStatusLabel:
                 config.mode === "live" ? "Outlook Read/Write" : "Outlook Read Only",
             };
-      const pruneOrphanedOutlookEvents = requestsResult.status === "fulfilled";
+      // The cached request list can be partial. Absence is not provider-confirmed
+      // cancellation/closure and must not delete a forward booking.
+      const pruneOrphanedOutlookEvents = false;
       const ownedOutlookEventIds = await loadCommandCreatedOutlookEventIds(
         cleanupCandidateEventIds(
-          mergeMspCentralScheduleWithOutlook(requests, outlookData.appointments, {
+          mergeMspCentralScheduleWithOutlook(requests, restored.calendar, {
             isCommandCentreOutlookEvent: () => true,
             pruneOrphanedOutlookEvents,
+            preserveBookingHistory: true,
           }),
         ),
         { config, repository: integrationRepository },
       );
       const linkedSchedule = mergeMspCentralScheduleWithOutlook(
         requests,
-        outlookData.appointments,
+        restored.calendar,
         {
           isCommandCentreOutlookEvent: (eventId) => ownedOutlookEventIds.has(eventId),
           pruneOrphanedOutlookEvents,
+          preserveBookingHistory: true,
         },
       );
       await queueCancelledOutlookCleanup(linkedSchedule.cancelledOutlookEvents, {
@@ -227,14 +248,19 @@ export async function getDispatchDashboardData(
         config,
         repository: integrationRepository,
       });
+      const projectedSchedule = applyBookingDayRollover(
+        linkedSchedule.requests,
+        includeSavedBookingPlaceholders(linkedSchedule.appointments,
+          [...restored.fallbackAppointments, ...mspSchedule.appointments]),
+      );
       const combined = {
         ...dashboard,
-        appointments: linkedSchedule.appointments,
+        appointments: projectedSchedule.appointments,
         calendarDataSource: outlookData.calendarDataSource,
-        calendarError: joinErrors(mspCentralError, outlookData.calendarError),
+        calendarError: joinErrors(joinErrors(mspCentralError, savedScheduleError), outlookData.calendarError),
         calendarReadOnly: outlookData.calendarReadOnly,
         calendarStatusLabel: outlookData.calendarStatusLabel,
-        requests: linkedSchedule.requests,
+        requests: projectedSchedule.requests,
       };
 
       return addTrainingSamples({

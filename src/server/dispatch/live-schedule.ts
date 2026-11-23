@@ -27,6 +27,8 @@ export function mergeMspCentralScheduleWithOutlook(
      */
     isCommandCentreOutlookEvent?: (eventId: string) => boolean;
     pruneOrphanedOutlookEvents?: boolean;
+    /** A dashboard read cannot infer that another booked slot was superseded. */
+    preserveBookingHistory?: boolean;
   } = {},
 ) {
   const isOwned = (appointment: Appointment) =>
@@ -68,6 +70,7 @@ export function mergeMspCentralScheduleWithOutlook(
       consumedOutlookAppointmentIds,
       isOwned,
       mspAppointment,
+      options.preserveBookingHistory,
     );
     appointments.push(...linkedOutlook.appointments);
     orphanedOutlookEvents.push(...linkedOutlook.orphanedOutlookEvents);
@@ -226,13 +229,19 @@ function hydrateRequestsFromAppointments(
         request.scheduledStart ??
         melbourneLocalTimestamp(appointment.date, appointment.start),
       status: request.status === "Resolved" ? request.status : ("Scheduled" as const),
-      technicianId: request.technicianId ?? appointment.technicianId,
+      technicianId: requestBookingTechnicianId(request, appointment.technicianId),
     };
   });
 }
 
 function isCancelledRequest(request: DispatchRequest) {
   return request.status === "Cancelled";
+}
+
+export function requestBookingTechnicianId(request: DispatchRequest, calendarTechnicianId: string) {
+  if (request.technicianId) return request.technicianId;
+  if (request.mspCentralTechnicianId || request.mspCentralTechnicianEmail || request.mspCentralTechnicianName) return undefined;
+  return calendarTechnicianId;
 }
 
 function cancelledOutlookCleanup(
@@ -277,6 +286,7 @@ function linkMatchingOutlookAppointmentsForRequest(
   consumedAppointmentIds: Set<string>,
   isOwned: (appointment: Appointment) => boolean,
   mspAppointment?: Appointment,
+  preserveBookingHistory = false,
 ) {
   const candidates = findMatchingOutlookAppointments(
     outlookAppointments,
@@ -287,6 +297,14 @@ function linkMatchingOutlookAppointmentsForRequest(
   const orphanedOutlookEvents: OrphanedOutlookEventCleanup[] = [];
 
   for (const group of groupAppointmentsByTechnician(candidates).values()) {
+    if (preserveBookingHistory) {
+      for (const appointment of group) {
+        consumedAppointmentIds.add(appointment.id);
+        appointments.push(linkAppointmentToRequest(appointment, request,
+          appointment.technicianId === request.technicianId ? mspAppointment : undefined));
+      }
+      continue;
+    }
     const canonical = selectCanonicalOutlookAppointment(
       group,
       request,
@@ -439,7 +457,7 @@ function primaryLinkToken(request: DispatchRequest) {
   return [...requestLinkTokens(request)][0] ?? request.requestNumber;
 }
 
-function melbourneDateTime(value: string) {
+export function melbourneDateTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   const parts = Object.fromEntries(
@@ -462,7 +480,7 @@ function melbourneDateTime(value: string) {
   };
 }
 
-function melbourneLocalTimestamp(dateKey: string, time: string) {
+export function melbourneLocalTimestamp(dateKey: string, time: string) {
   return `${dateKey}T${time.slice(0, 5)}:00${melbourneOffset(dateKey, time)}`;
 }
 

@@ -81,6 +81,7 @@ export function requestAttentionReason(
     failedSyncText(warning),
   );
   if (failedWarning) return failedWarning;
+  if (request.needsRebooking) return "Needs rebooking — previous booking day has passed";
   if (request.slaState === "overdue") return "SLA overdue";
   if (request.slaState === "due-soon") return "SLA due soon";
   if (!request.technicianId) return "Unassigned";

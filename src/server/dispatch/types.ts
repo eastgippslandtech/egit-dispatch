@@ -99,6 +99,8 @@ export type DispatchRequest = {
   ageHours: number;
   billable: boolean;
   readyToBook: boolean;
+  /** An open booking's local calendar day has passed without a forward slot. */
+  needsRebooking?: boolean;
   slaState: SlaState;
   warnings: string[];
   activeTimer?: ActiveDispatchTimer;

@@ -55,6 +55,14 @@ Automated tests use fakes and fixtures. They do not write to MSP Central, Outloo
 
 ## Operations
 
+### Booking persistence and daily rebooking
+
+Board and Queue retain saved future bookings independently of the two-week Outlook read window. A saved slot whose calendar event was not returned remains unconfirmed, rather than becoming unscheduled. Returned Outlook events are matched by event ID and calendar owner, including after title or time changes; private events keep their redacted presentation. Current MSP ownership remains authoritative.
+
+An open ticket returns to **Unscheduled** for rebooking on the next Australia/Melbourne calendar day if it has no current or future booking. Today's elapsed bookings remain scheduled until the next day. Resolved/cancelled tickets do not return. This is a shared read-time projection: calendar history and saved links remain intact, and rollover sends no provider writes or notifications.
+
+Dashboard reads preserve all booked calendar slots. They do not infer deletion from a missing cached Helpdesk request or another slot for the same ticket. Explicit scheduling/outcome operations retain their scoped cleanup and idempotency, and provider-confirmed cancelled requests still use the owned-event cleanup path.
+
 Apply Supabase migrations in timestamp order before enabling the worker. Configure `DATABASE_URL` and `INTEGRATION_CRON_SECRET` in the production server environment, then install and verify the one-minute recovery schedule.
 
 The complete setup, health, retry, token-rotation, emergency-disable, and controlled provider verification procedure is in [Integration Recovery Runbook](docs/integration-recovery-runbook.md).

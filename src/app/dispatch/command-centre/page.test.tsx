@@ -233,6 +233,21 @@ test("opens the request named by the integrations recovery link", async () => {
   ).toBeInTheDocument();
 });
 
+test("keeps an unfinished past-day ticket in the Board rebooking queue alongside its calendar history", () => {
+  const data = getDispatchDesignMockData();
+  const appointment = data.appointments.find((candidate) => candidate.requestId);
+  const request = data.requests.find((candidate) => candidate.id === appointment?.requestId);
+  if (!request || !appointment) throw new Error("Expected a linked booking fixture.");
+  render(<CommandCentrePrototype data={{
+    ...data,
+    requests: [{ ...request, scheduledStart: undefined, scheduledEnd: undefined, readyToBook: true, needsRebooking: true }],
+    appointments: [{ ...appointment, date: "2026-07-07", syncIssue: "past-open" }],
+    selectedRequestId: request.id,
+  }} />);
+  expect(within(screen.getByTestId("request-queue")).getByText(request.subject)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Unscheduled 1" })).toBeInTheDocument();
+});
+
 test("shows a live mobile timer counter in the selected job drawer", () => {
   const data = getDispatchDesignMockData();
   const selectedRequestId = "100284";

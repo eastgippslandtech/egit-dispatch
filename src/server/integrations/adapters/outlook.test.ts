@@ -4,6 +4,36 @@ import type { IntegrationOperationStep } from "../types";
 import { createOutlookAdapters } from "./outlook";
 
 describe("Outlook integration adapters", () => {
+  it("refuses to overwrite a different ticket's calendar event even when their supplier reference matches", async () => {
+    const updateEvent = vi.fn();
+    const getEvent = vi.fn().mockResolvedValue({
+      id: "event-old", subject: "Technician Work Order: 707010883 - old incident",
+      bodyPreview: "Command-Centre-Booking: old-booking\nRequest: 24458",
+    });
+    const adapters = createOutlookAdapters({ graphClient: graphClient({ getEvent, updateEvent }) });
+    await expect(adapters["outlook.upsert_event"].execute(step("outlook.upsert_event", {
+      appointmentId: "new-booking", requestId: "6768000002950168", requestNumber: "24626", eventId: "event-old",
+      start: "2026-11-26T10:30:00", end: "2026-11-26T12:45:00",
+      subject: "Technician Work Order: 707010883 - new incident", userPrincipalName: "jervy@egit.com.au",
+    }))).rejects.toThrow(/another ticket/i);
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("updates a matching event by its Request metadata rather than its supplier title", async () => {
+    const updateEvent = vi.fn().mockResolvedValue({ id: "event-matching" });
+    const getEvent = vi.fn().mockResolvedValue({
+      id: "event-matching", subject: "Technician Work Order: 707010883",
+      bodyPreview: "Command-Centre-Booking: group-id\nRequest: 24626",
+    });
+    const adapters = createOutlookAdapters({ graphClient: graphClient({ getEvent, updateEvent }) });
+    await adapters["outlook.upsert_event"].execute(step("outlook.upsert_event", {
+      appointmentId: "new-booking", requestId: "6768000002950168", requestNumber: "24626", eventId: "event-matching",
+      start: "2026-11-26T10:30:00", end: "2026-11-26T12:45:00",
+      subject: "Technician Work Order: 707010883", userPrincipalName: "jervy@egit.com.au",
+    }));
+    expect(getEvent).toHaveBeenCalledOnce();
+    expect(updateEvent).toHaveBeenCalledOnce();
+  });
   it("creates with a stable Graph transaction ID and returns booking identity", async () => {
     const createEvent = vi.fn().mockResolvedValue({
       id: "event-42",

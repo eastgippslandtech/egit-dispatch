@@ -186,4 +186,17 @@ describe("booking persistence and daily rebooking", () => {
     expect(data.appointments.find((appointment) => appointment.outlookEventId === "saved-event"))
       .toMatchObject({ title: "Personal", customer: "Personal", outlookIssue: "private", readOnly: true, requestId: undefined });
   });
+
+  it.each(["2026-11-23", "2026-11-26", "2026-11-27"])("does not restore a conflicting saved event link dated %s to its old ticket", async (savedDate) => {
+    on("2026-11-26T00:00:00Z");
+    const current = { ...request, id: "6768000002950168", requestNumber: "24626", subject: "New work order" };
+    const data = await dashboard({
+      requests: [request, current],
+      bookings: [{ ...savedBooking, date: savedDate }],
+      calendar: [{ ...savedBooking, date: "2026-11-26", requestId: "24626", outlookLinkedRequestNumber: "24626", title: current.subject, bodyPreview: "Command-Centre-Booking: old-group\nRequest: 24626", technicianId: technician.id }],
+    });
+    expect(data.requests.find((candidate) => candidate.id === request.id)?.scheduledStart).toBeUndefined();
+    expect(data.requests.find((candidate) => candidate.id === current.id)?.scheduledStart).toBe("2026-11-26T09:00:00+11:00");
+    expect(data.appointments.find((appointment) => appointment.outlookEventId === "saved-event")?.requestId).toBe(current.id);
+  });
 });

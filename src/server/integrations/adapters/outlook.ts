@@ -1,4 +1,5 @@
 import { cleanRequestTitle } from "@/server/dispatch/request-title";
+import { extractRequestReference, normalizeRequestReference } from "@/server/dispatch/request-identity";
 import type { MicrosoftGraphEvent } from "@/server/graph/types";
 
 import { PermanentIntegrationError } from "../errors";
@@ -6,6 +7,7 @@ import type { IntegrationStepAdapter } from "../registry";
 import type { IntegrationOperationStep } from "../types";
 
 type OutlookGraphClient = {
+  getEvent(input: { eventId: string; userPrincipalName: string }): Promise<MicrosoftGraphEvent>;
   createEvent(input: GraphWriteInput): Promise<MicrosoftGraphEvent>;
   deleteEvent(input: {
     eventId: string;
@@ -48,6 +50,20 @@ export function createOutlookAdapters({
       async execute(step) {
         const input = graphWriteInput(step);
         const eventId = optionalString(step.payload, "eventId");
+        if (eventId && (step.payload.requestId || step.payload.requestNumber)) {
+          const existing = await graphClient.getEvent({ eventId, userPrincipalName: input.userPrincipalName });
+          const privateEvent = ["personal", "private", "confidential"].includes(existing.sensitivity?.toLowerCase() ?? "") ||
+            existing.categories?.some((category) => category.trim().toLowerCase() === "personal");
+          const reference = privateEvent ? undefined : extractRequestReference(existing.subject, existing.bodyPreview);
+          const expected = [optionalString(step.payload, "requestId"), optionalString(step.payload, "requestNumber")]
+            .map(normalizeRequestReference).filter(Boolean);
+          if (!reference || !expected.includes(normalizeRequestReference(reference))) {
+            throw new PermanentIntegrationError(
+              reference ? "The selected Outlook event belongs to another ticket. Refresh and select this ticket's booking."
+                : "The selected Outlook event's ticket identity could not be verified. Review the calendar link before retrying.",
+            );
+          }
+        }
         const event = eventId
           ? await graphClient.updateEvent({
               ...input,

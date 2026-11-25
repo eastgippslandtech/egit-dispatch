@@ -20,6 +20,17 @@ const events: DispatchTestSyncEventInput[] = [
 ];
 
 describe("atomic schedule writer", () => {
+  it("rejects a conflicting calendar link before accepting local bookings or queuing any provider work", async () => {
+    const record = vi.fn();
+    const enqueue = vi.fn();
+    const validateEventOwnership = vi.fn().mockRejectedValue(Object.assign(new Error("This Outlook event is linked to another ticket."), { status: 409 }));
+    const writer = createAtomicScheduleWriter({
+      transaction: async (callback) => callback({ record, enqueue, removeObsolete: vi.fn(), validateEventOwnership } as never),
+    });
+    await expect(writer.persist({ createdBy: "simeon@egit.com.au", events, operation })).rejects.toThrow(/another ticket/);
+    expect(record).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
   it("rolls back local lead and crew records when enqueue fails", async () => {
     const committedEvents: DispatchTestSyncEventInput[] = [];
     const committedOperations: EnqueueIntegrationOperation[] = [];

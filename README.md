@@ -63,6 +63,8 @@ An open ticket returns to **Unscheduled** for rebooking on the next Australia/Me
 
 Dashboard reads preserve all booked calendar slots. They do not infer deletion from a missing cached Helpdesk request or another slot for the same ticket. Explicit scheduling/outcome operations retain their scoped cleanup and idempotency, and provider-confirmed cancelled requests still use the owned-event cleanup path.
 
+Calendar linking uses the explicit `Request:` field before supplier work orders or booking IDs. Unrelated numbers in subjects/notes do not establish ticket ownership. Reusing an event linked to another request is rejected before queuing a schedule; the worker also verifies the current event's ticket metadata before updating it. A positively conflicting saved link is shown for review instead of reviving a false future booking.
+
 Apply Supabase migrations in timestamp order before enabling the worker. Configure `DATABASE_URL` and `INTEGRATION_CRON_SECRET` in the production server environment, then install and verify the one-minute recovery schedule.
 
 The complete setup, health, retry, token-rotation, emergency-disable, and controlled provider verification procedure is in [Integration Recovery Runbook](docs/integration-recovery-runbook.md).

@@ -14,6 +14,7 @@ type EnqueueResult = {
 };
 
 type AtomicScheduleTransaction = {
+  validateEventOwnership?(input: EnqueueIntegrationOperation): Promise<void>;
   claim?(input: MobileScheduleClaim): Promise<void>;
   enqueue(input: EnqueueIntegrationOperation): Promise<EnqueueResult>;
   record(input: DispatchTestSyncEventInput, createdBy: string): Promise<unknown>;
@@ -47,6 +48,7 @@ export function createAtomicScheduleWriter({
       reconciliation?: ScheduleReconciliation;
     }): Promise<EnqueueResult> {
       return transaction(async (current) => {
+        await current.validateEventOwnership?.(input.operation);
         if (input.claim) {
           if (!current.claim) {
             throw new Error("Atomic request claiming is not configured.");
@@ -78,6 +80,34 @@ export function createPostgresAtomicScheduleWriter({
         const currentSql = transactionSql as unknown as typeof sql;
         const repository = createPostgresIntegrationRepository({ sql: currentSql });
         return callback({
+          validateEventOwnership: async (operation) => {
+            const eventIds = [...new Set(operation.steps
+              .filter((step) => step.connector === "outlook")
+              .map((step) => step.payload.eventId)
+              .filter((id): id is string => typeof id === "string" && Boolean(id)))];
+            if (eventIds.length === 0) return;
+            const requestId = operation.requestId;
+            if (!requestId) throw new Error("A request ID is required to verify calendar event ownership.");
+            // Exact accepted replays retain their original operation identity.
+            if (await repository.findOperationByIdempotencyKey(operation.idempotencyKey)) return;
+            const conflicts = await currentSql<Array<{ requestNumber: string }>>`
+              select dl.sdp_request_number as "requestNumber"
+              from public.dispatch_links dl
+              where dl.outlook_event_id = any(${eventIds}::text[])
+                and dl.sdp_request_id <> ${requestId}
+              union
+              select dl.sdp_request_number as "requestNumber"
+              from public.dispatch_link_crew crew
+              join public.dispatch_links dl on dl.id = crew.dispatch_link_id
+              where crew.outlook_event_id = any(${eventIds}::text[])
+                and dl.sdp_request_id <> ${requestId}
+            `;
+            if (conflicts.length) {
+              throw Object.assign(new Error(
+                `This Outlook event is linked to another ticket (${conflicts[0].requestNumber}). Refresh the board and review the calendar link.`,
+              ), { status: 409 });
+            }
+          },
           claim: async ({ idempotencyKey, requestId, staffId }) => {
             const inserted = await currentSql<Array<{ requestId: string }>>`
               insert into public.mobile_dispatch_claims (

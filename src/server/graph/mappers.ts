@@ -6,18 +6,13 @@ import type {
 import { cleanRequestTitle } from "@/server/dispatch/request-title";
 import type { MicrosoftGraphEvent } from "./types";
 import { buildMspCentralRequestUrl } from "@/server/msp-central/url";
-
-const REQUEST_NUMBER_PATTERN =
-  /\b(?:CW|REQ|SDP|TICKET|REQUEST)?[- #:]*(\d{5,})\b/i;
+import { extractRequestReference } from "@/server/dispatch/request-identity";
 
 export function extractLinkedRequestNumber(
   subject?: string,
   bodyPreview?: string,
 ) {
-  return (
-    subject?.match(REQUEST_NUMBER_PATTERN)?.[1] ??
-    bodyPreview?.match(REQUEST_NUMBER_PATTERN)?.[1]
-  );
+  return extractRequestReference(subject, bodyPreview);
 }
 
 export function mapGraphEventToAppointment(

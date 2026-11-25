@@ -43,6 +43,17 @@ function event(overrides: Partial<MicrosoftGraphEvent> = {}): MicrosoftGraphEven
 }
 
 describe("Graph event mapper", () => {
+  it("uses the Command Centre Request field before a supplier work-order number in the title", () => {
+    expect(extractLinkedRequestNumber(
+      "Technician Work Order: 707010883 - Lakes Entrance Bowls Club - ViridianIT [ID:0698411]",
+      "Command-Centre-Booking: pending-live-6768000002860099-schedule:95af296c\nRequest: 24626\nCompany: Advanced Works",
+    )).toBe("24626");
+  });
+
+  it("does not invent a ticket link from incidental supplier, phone or booking UUID numbers", () => {
+    expect(extractLinkedRequestNumber("Technician Work Order: 707010883 - ViridianIT [ID:0698411]")).toBeUndefined();
+    expect(extractLinkedRequestNumber("Supplier visit", "Command-Centre-Booking: pending-live-6768000002860099-schedule:12345678")).toBeUndefined();
+  });
   it("extracts ServiceDesk request numbers from subject or body preview", () => {
     expect(extractLinkedRequestNumber("[CW 22240] RSS job")).toBe("22240");
     expect(extractLinkedRequestNumber("REQ-100211 Server work")).toBe("100211");

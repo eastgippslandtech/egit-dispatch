@@ -1,6 +1,7 @@
 import { todayDateKey } from "./date-scope";
 import { melbourneDateTime, melbourneLocalTimestamp, requestBookingTechnicianId } from "./live-schedule";
 import type { Appointment, DispatchDashboardData, DispatchRequest, Technician } from "./types";
+import { appointmentRequestReference, requestIdentityKeys } from "./request-identity";
 
 type SavedDashboard = Pick<DispatchDashboardData, "appointments" | "technicians">;
 const REBOOKING_WARNING = "Past scheduled open job — needs rebooking.";
@@ -20,6 +21,7 @@ export function restoreSavedDispatchSchedules(
   const linkedCalendar = [...calendar];
   const leadBookings = new Map<string, Appointment>();
   const originalLeadBookings = new Map<string, Appointment>();
+  const conflictingRequestIds = new Set<string>();
   for (const booking of saved?.appointments ?? []) {
     const request = requests.find((candidate) => candidate.id === booking.requestId && isOpen(candidate));
     if (!request || !booking.date) continue;
@@ -36,6 +38,13 @@ export function restoreSavedDispatchSchedules(
       booking.outlookEventId && candidate.outlookEventId === booking.outlookEventId &&
       candidate.technicianId === technician.id && candidate.outlookIssue !== "private",
     );
+    const liveReference = live && appointmentRequestReference(live);
+    if (liveReference && !requestIdentityKeys(request).has(liveReference)) {
+      // Positive evidence of another ticket is different from a missing calendar
+      // read: never revive this stale link as a current/future placeholder.
+      conflictingRequestIds.add(request.id);
+      continue;
+    }
     const appointment: Appointment = live ? {
       ...live, requestId: request.id, scheduleAssignmentRole: booking.scheduleAssignmentRole,
       scheduleGroupId: booking.scheduleGroupId,
@@ -56,6 +65,12 @@ export function restoreSavedDispatchSchedules(
     fallbackAppointments,
     calendar: linkedCalendar,
     requests: requests.map((request) => {
+      if (conflictingRequestIds.has(request.id)) return {
+        ...request,
+        warnings: [...request.warnings, "Calendar link belongs to another ticket; review required."],
+        readyToBook: request.scheduledStart ? request.readyToBook : true,
+        needsRebooking: !request.scheduledStart,
+      };
       const booking = leadBookings.get(request.id);
       const original = originalLeadBookings.get(request.id);
       const currentSchedule = request.scheduledStart ? melbourneDateTime(request.scheduledStart) : undefined;

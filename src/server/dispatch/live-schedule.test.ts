@@ -4,6 +4,26 @@ import { mergeMspCentralScheduleWithOutlook } from "./live-schedule";
 import type { Appointment, DispatchRequest } from "./types";
 
 describe("live schedule linking", () => {
+  it("does not give a forward booking to another ticket sharing its supplier work-order number", () => {
+    const previous = requestFixture({ id: "6768000002860099", requestNumber: "24458", subject: "Technician Work Order: 707010883 - Lakes Entrance Bowls Club - old incident" });
+    const current = requestFixture({ id: "6768000002950168", requestNumber: "24626", subject: "Technician Work Order: 707010883 - Lakes Entrance Bowls Club - new incident" });
+    const appointment = outlookFixture({
+      date: "2026-11-26", requestId: "24626", outlookLinkedRequestNumber: "24626",
+      title: current.subject, bodyPreview: "Command-Centre-Booking: pending-live-6768000002860099-schedule:12345678\nRequest: 24626\nCompany: Advanced Works",
+    });
+    const result = mergeMspCentralScheduleWithOutlook([previous, current], [appointment], { preserveBookingHistory: true });
+    expect(result.appointments).toEqual([expect.objectContaining({ requestId: current.id })]);
+    expect(result.requests.find((request) => request.id === previous.id)?.scheduledStart).toBeUndefined();
+    expect(result.requests.find((request) => request.id === current.id)?.scheduledStart).toBe("2026-11-26T12:00:00+11:00");
+  });
+
+  it("does not schedule or delete another ticket's event because its number appears in request notes", () => {
+    const unrelated = requestFixture({ id: "6768000002860099", requestNumber: "24458", status: "Cancelled", notes: "Related ticket 24626" });
+    const current = requestFixture({ id: "6768000002950168", requestNumber: "24626" });
+    const result = mergeMspCentralScheduleWithOutlook([unrelated, current], [outlookFixture({ requestId: "24626", outlookLinkedRequestNumber: "24626" })], ownedByCommandCentre);
+    expect(result.cancelledOutlookEvents).toEqual([]);
+    expect(result.appointments[0].requestId).toBe(current.id);
+  });
   it("hydrates an MSP request from a linked Outlook event using the CW ticket number", () => {
     const request = requestFixture({
       id: "6768000001411256",

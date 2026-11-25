@@ -1,6 +1,5 @@
 import type { Appointment, DispatchRequest } from "./types";
-
-const LINK_TOKEN_PATTERN = /\b\d{5,}\b/g;
+import { appointmentRequestReference, requestIdentityKeys } from "./request-identity";
 
 export type CancelledOutlookEventCleanup = {
   eventId: string;
@@ -421,36 +420,12 @@ function appointmentMatchesTokens(
 }
 
 function requestLinkTokens(request: DispatchRequest) {
-  return linkTokens([
-    request.id,
-    request.requestNumber,
-    request.subject,
-    request.notes,
-    request.helpdeskUrl,
-  ]);
+  return requestIdentityKeys(request);
 }
 
 function appointmentLinkTokens(appointment: Appointment) {
-  return linkTokens([
-    appointment.requestId,
-    appointment.outlookLinkedRequestNumber,
-    appointment.title,
-    appointment.bodyPreview,
-    appointment.helpdeskUrl,
-  ]);
-}
-
-function linkTokens(values: Array<string | undefined>) {
-  const tokens = new Set<string>();
-
-  for (const value of values) {
-    if (!value) continue;
-    for (const match of value.matchAll(LINK_TOKEN_PATTERN)) {
-      tokens.add(match[0]);
-    }
-  }
-
-  return tokens;
+  const reference = appointmentRequestReference(appointment);
+  return new Set(reference ? [reference] : []);
 }
 
 function primaryLinkToken(request: DispatchRequest) {

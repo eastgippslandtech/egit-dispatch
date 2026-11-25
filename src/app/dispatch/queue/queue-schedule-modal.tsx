@@ -431,7 +431,9 @@ function requestScheduleAppointments(
   const candidates = appointments.filter(
     (appointment) => appointment.requestId === requestId,
   );
-  if (!anchor) return candidates;
+  // A new booking has no current group to move. Keep past calendar events and
+  // their technicians out of crew selection and provider cleanup references.
+  if (!anchor) return [];
   return candidates.filter((candidate) =>
     anchor.scheduleGroupId
       ? candidate.scheduleGroupId === anchor.scheduleGroupId

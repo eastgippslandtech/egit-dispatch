@@ -270,6 +270,60 @@ test("opens rescheduling inside the queue for an assigned appointment", async ()
   expect(routerPush).not.toHaveBeenCalled();
 });
 
+test("uses the current booking in the queue row and reschedule dialog while retaining history", () => {
+  const data = getDispatchDesignMockData();
+  const original = data.requests.find((request) => request.subject === "File server disk expansion")!;
+  const request = { ...original, scheduledStart: "2026-11-27T13:15:00+11:00", scheduledEnd: "2026-11-27T14:00:00+11:00" };
+  const template = data.appointments.find((appointment) => appointment.requestId === request.id)!;
+  render(<DispatchQueueScreen authDisabled data={{ ...data, requests: [request], appointments: [
+    { ...template, id: "historical", date: "2026-11-25", start: "13:00", end: "15:15" },
+    { ...template, id: "current", date: "2026-11-27", start: "13:15", end: "14:00" },
+  ] }} />);
+  fireEvent.click(screen.getByRole("button", { name: /Assigned/ }));
+  const row = screen.getByRole("article", { name: /File server disk expansion/ });
+  expect(within(row).getByText("Fri 27 November · 13:15–14:00")).toBeInTheDocument();
+  fireEvent.click(within(row).getByRole("button", { name: "Reschedule" }));
+  expect(screen.getByLabelText("Booking date")).toHaveValue("2026-11-27");
+});
+
+test("uses the saved forward slot when only historical calendar events were returned", () => {
+  const data = getDispatchDesignMockData();
+  const original = data.requests.find((request) => request.subject === "File server disk expansion")!;
+  const request = { ...original, scheduledStart: "2026-12-14T09:00:00+11:00", scheduledEnd: "2026-12-14T10:00:00+11:00" };
+  const template = data.appointments.find((appointment) => appointment.requestId === request.id)!;
+  render(<DispatchQueueScreen authDisabled data={{ ...data, requests: [request], appointments: [
+    { ...template, id: "historical", date: "2026-11-25", start: "13:00", end: "15:15" },
+  ] }} />);
+  fireEvent.click(screen.getByRole("button", { name: /Assigned/ }));
+  const row = screen.getByRole("article", { name: /File server disk expansion/ });
+  expect(within(row).getByText("Mon 14 December · 09:00–10:00")).toBeInTheDocument();
+  fireEvent.click(within(row).getByRole("button", { name: "Reschedule" }));
+  expect(screen.getByLabelText("Booking date")).toHaveValue("2026-12-14");
+});
+
+test("rebooks an unfinished job without inheriting historical crew or Outlook events", async () => {
+  const data = getDispatchDesignMockData();
+  const original = data.requests.find((request) => request.subject === "File server disk expansion")!;
+  const request = { ...original, sourceSystem: "msp-central" as const, scheduledStart: undefined, scheduledEnd: undefined, needsRebooking: true };
+  const template = data.appointments.find((appointment) => appointment.requestId === request.id)!;
+  const otherTechnician = data.technicians.find((technician) => technician.id !== request.technicianId)!;
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+  render(<DispatchQueueScreen authDisabled data={{ ...data, dispatchDataSource: "msp-central", calendarDataSource: "outlook", calendarReadOnly: false, requests: [request], appointments: [
+    { ...template, id: "old-lead", date: "2026-01-01", outlookEventId: "historical-lead" },
+    { ...template, id: "old-other-slot", date: "2026-01-02", technicianId: otherTechnician.id, outlookEventId: "historical-other" },
+  ] }} />);
+  const row = screen.getByRole("article", { name: /File server disk expansion/ });
+  fireEvent.click(within(row).getByRole("button", { name: "Schedule" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/internal/dispatch/live-schedule", expect.anything()));
+  const options = fetchMock.mock.calls.find(([url]) => url === "/api/internal/dispatch/live-schedule")![1]!;
+  const payload = JSON.parse(options.body as string);
+  expect(payload.crew).toEqual([]);
+  expect(payload.previousAssignments).toEqual([]);
+  expect(payload.eventId).toBeUndefined();
+  expect(payload.scheduleAction).toBe("scheduled");
+});
+
 test("confirms a schedule from the queue and refreshes it in place", async () => {
   const fetchMock = vi
     .spyOn(globalThis, "fetch")

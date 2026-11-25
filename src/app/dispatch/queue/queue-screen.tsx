@@ -36,7 +36,7 @@ import {
   TicketWorkspaceModal,
   WorkLogModal,
 } from "@/app/dispatch/command-centre/prototype";
-import { mockIsoTime } from "@/server/dispatch/date-scope";
+import { mockIsoTime, todayDateKey } from "@/server/dispatch/date-scope";
 import {
   DISPATCH_QUEUE_VIEWS,
   dispatchQueueCounts,
@@ -212,20 +212,13 @@ export function DispatchQueueScreen({
   const scheduleTargetRequest = dashboard.requests.find(
     (request) => request.id === scheduleRequestId,
   );
-  const scheduleTargetAppointment = requestAppointments(
-    dashboard.appointments,
-    scheduleRequestId,
-  )[0] ??
-    (scheduleTargetRequest
-      ? scheduledRequestFallback(scheduleTargetRequest)
-      : undefined);
-  const selectedAppointment = requestAppointments(
-    dashboard.appointments,
-    selectedRequest?.id,
-  )[0];
-  const selectedScheduleAppointment =
-    selectedAppointment ??
-    (selectedRequest ? scheduledRequestFallback(selectedRequest) : undefined);
+  const scheduleTargetAppointment = scheduleTargetRequest
+    ? requestScheduleAppointment(dashboard.appointments, scheduleTargetRequest)
+    : undefined;
+  const selectedAppointment = selectedRequest
+    ? requestScheduleAppointment(dashboard.appointments, selectedRequest)
+    : undefined;
+  const selectedScheduleAppointment = selectedAppointment;
   const liveWriteback = (request?: DispatchRequest) =>
     dashboard.dispatchDataSource === "msp-central" &&
     request?.sourceSystem === "msp-central";
@@ -749,12 +742,23 @@ function requestScheduleAppointment(
   appointments: Appointment[],
   request: DispatchRequest,
 ) {
+  const scheduled = scheduledRequestFallback(request);
+  const bookings = requestAppointments(appointments, request.id)
+    .filter((appointment) => appointment.date && appointment.scheduleAssignmentRole !== "crew");
+  // The projected request identifies its current slot. Retained calendar history
+  // must not replace it in the row, preview or reschedule dialog.
+  if (scheduled) {
+    return bookings.find((appointment) =>
+      appointment.date === scheduled.date && appointment.start === scheduled.start &&
+      appointment.end === scheduled.end && appointment.technicianId === scheduled.technicianId,
+    ) ?? scheduled;
+  }
   return (
-    requestAppointments(appointments, request.id)
-      .filter((appointment) => appointment.date)
+    bookings
+      .filter((appointment) => appointment.date! >= todayDateKey())
       .sort((first, second) =>
         `${first.date}T${first.start}`.localeCompare(`${second.date}T${second.start}`),
-      )[0] ?? scheduledRequestFallback(request)
+      )[0]
   );
 }
 

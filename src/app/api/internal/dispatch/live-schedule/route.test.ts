@@ -8,7 +8,7 @@ import { wakeIntegrationProcessor } from "@/server/integrations/wake";
 import { createMspCentralClient } from "@/server/msp-central/client";
 import { MspCentralConfigurationError } from "@/server/msp-central/errors";
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const afterTasks = vi.hoisted(
   () => [] as Array<() => Promise<unknown> | unknown>,
@@ -69,7 +69,7 @@ describe("live dispatch schedule route", () => {
     configMock.mockReturnValue({ dispatchDataSource: "mock" } as never);
     createMspClientMock.mockReturnValue({ getRequest } as never);
     getRequest.mockResolvedValue({ id: "123", requestNumber: "REQ-123", status: "Open" });
-    findOperationByIdempotencyKey.mockResolvedValue(undefined);
+    findOperationByIdempotencyKey.mockReset().mockResolvedValue(undefined);
     createRepositoryMock.mockReturnValue({ findOperationByIdempotencyKey } as never);
     persist.mockResolvedValue({
       operation: { id: "operation-schedule-1", state: "queued" },
@@ -77,6 +77,63 @@ describe("live dispatch schedule route", () => {
     });
     createScheduleWriterMock.mockReturnValue({ persist } as never);
     wakeMock.mockResolvedValue(undefined);
+  });
+
+  it("reads only the initiating staff member's accepted schedule receipt without provider writes", async () => {
+    findOperationByIdempotencyKey.mockResolvedValueOnce({ id: "accepted-operation", actionType: "dispatch.schedule", actorEmail: "simeon@egit.com.au", state: "syncing", payload: { appointmentId: "booking-123", secretProviderField: "never-return" } });
+    const response = await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+    await expect(response.json()).resolves.toEqual({ ok: true, operationId: "accepted-operation", status: "syncing" });
+    expect(findOperationByIdempotencyKey).toHaveBeenCalledWith("schedule-receipt-123");
+    expect(persist).not.toHaveBeenCalled();
+    expect(getRequest).not.toHaveBeenCalled();
+    expect(wakeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined,
+    { id: "other", actionType: "dispatch.schedule", actorEmail: "riley@egit.com.au", state: "synced" },
+    { id: "other-action", actionType: "helpdesk.create", actorEmail: "simeon@egit.com.au", state: "synced" },
+  ])("does not confirm a missing, other-actor or different-action receipt", async (operation) => {
+    findOperationByIdempotencyKey.mockResolvedValueOnce(operation);
+    const response = await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"));
+    expect(response.status).toBe(404);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("rejects receipt reads for a wallboard-only account", async () => {
+    getAccessMock.mockResolvedValueOnce({ name: "Wallboard", status: "wallboard-only" });
+    const response = await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"));
+    expect(response.status).toBe(403);
+    expect(findOperationByIdempotencyKey).not.toHaveBeenCalled();
+  });
+
+  it("requires authentication and a bounded key for receipt reads", async () => {
+    getAccessMock.mockResolvedValueOnce({ status: "unauthenticated" });
+    expect((await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"))).status).toBe(401);
+    expect((await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=bad"))).status).toBe(400);
+    expect(findOperationByIdempotencyKey).not.toHaveBeenCalled();
+  });
+
+  it("bounds a stalled receipt lookup without writing or claiming acceptance", async () => {
+    vi.useFakeTimers();
+    try {
+      findOperationByIdempotencyKey.mockReturnValueOnce(new Promise(() => undefined));
+      const pending = GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"));
+      await vi.advanceTimersByTimeAsync(3_001);
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(persist).not.toHaveBeenCalled();
+      expect(wakeMock).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps a receipt read unconfirmed when the database is unavailable", async () => {
+    findOperationByIdempotencyKey.mockRejectedValueOnce(new Error("database unavailable"));
+    const response = await GET(new Request("https://command.egit.com.au/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123"));
+    expect(response.status).toBe(503);
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("rejects a wallboard-only session", async () => {

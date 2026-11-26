@@ -61,6 +61,12 @@ For an ambiguous Work Log:
 
 An expired worker lease also becomes `Review required`; it is never automatically replayed because the provider may have accepted the interrupted write.
 
+### Lost schedule confirmations
+
+Board and Queue show `Saving` until the server acknowledges the durable command. If the response is lost or times out, the client makes one bounded, read-only receipt lookup using the original idempotency key. Receipt reads are restricted to the initiating approved staff account and return only the operation ID and state. They never repeat the schedule POST or wake provider steps.
+
+An unavailable or missing receipt leaves the save **unconfirmed**, not proven absent. Refresh the Board and inspect the existing operation/provider state before retrying. A queued receipt confirms local acceptance only; `Synced` still requires every ordered provider/local step to succeed. A late response for an older command must not confirm a newer move.
+
 ## Manual Retry and Cancel
 
 Use the controls on `https://command.egit.com.au/integrations`.

@@ -531,6 +531,7 @@ export function CommandCentrePrototype({
   const router = useRouter();
   const [dashboard, setDashboard] = useState(data);
   const pendingWritebackRequestIds = useRef(new Set<string>());
+  const latestScheduleCommandKeys = useRef(new Map<string, string>());
   const dashboardRefreshPending = useRef(false);
   const dashboardRefreshSafetyTimer = useRef<number | undefined>(undefined);
   const lastDashboardRefreshAt = useRef(0);
@@ -575,6 +576,13 @@ export function CommandCentrePrototype({
       requestId: target.requestId,
       state: receipt.status,
     });
+  }
+
+  function releaseUnconfirmedSchedule(requestId: string, commandKey: string) {
+    // Do not let an earlier command's late error release a newer booking.
+    if (latestScheduleCommandKeys.current.get(requestId) !== commandKey) return;
+    pendingWritebackRequestIds.current.delete(requestId);
+    router.refresh();
   }
 
   useEffect(() => {
@@ -1831,6 +1839,7 @@ export function CommandCentrePrototype({
 
       if (liveSchedule) {
         pendingWritebackRequestIds.current.add(request.id);
+        latestScheduleCommandKeys.current.set(request.id, idempotencyKey);
       }
 
       const finalAppointmentId = appointmentId;
@@ -1906,7 +1915,7 @@ export function CommandCentrePrototype({
       });
       setToast(
         liveSchedule
-          ? `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`
+          ? `Saving ${request.requestNumber} in Command Centre. Waiting for confirmation.`
           : `${request.requestNumber} scheduled in mock mode.`,
       );
       if (liveSchedule) {
@@ -1960,17 +1969,15 @@ export function CommandCentrePrototype({
               appointmentId,
               requestId: request.id,
             });
-            if (
-              integrationReceiptDisposition(receipt.status).phase ===
-              "review_required"
-            ) {
-              setToast(
-                `${request.requestNumber} was saved locally, but provider sync needs review.`,
-              );
+            if (latestScheduleCommandKeys.current.get(request.id) === idempotencyKey) {
+              setToast(liveScheduleReceiptMessage(request.requestNumber, receipt.status));
             }
           },
           (error) => {
-            setToast(liveScheduleSavedButSyncUnconfirmedMessage(error));
+            releaseUnconfirmedSchedule(request.id, idempotencyKey);
+            if (latestScheduleCommandKeys.current.get(request.id) === idempotencyKey) {
+              setToast(liveScheduleUnconfirmedMessage(error));
+            }
           },
         );
       }
@@ -2066,6 +2073,7 @@ export function CommandCentrePrototype({
 
       if (liveSchedule && request) {
         pendingWritebackRequestIds.current.add(request.id);
+        latestScheduleCommandKeys.current.set(request.id, idempotencyKey);
       }
 
       let movedAppointments = request
@@ -2164,7 +2172,7 @@ export function CommandCentrePrototype({
       setSelectedDateKey(pendingSchedule.date);
       setToast(
         liveSchedule
-          ? "Move saved in Command Centre. Syncing with MSP Central and Outlook."
+          ? "Saving booking move in Command Centre. Waiting for confirmation."
           : "Appointment moved in mock mode.",
       );
       if (liveSchedule && request) {
@@ -2212,17 +2220,15 @@ export function CommandCentrePrototype({
               appointmentId: pendingSchedule.appointmentId,
               requestId: request.id,
             });
-            if (
-              integrationReceiptDisposition(receipt.status).phase ===
-              "review_required"
-            ) {
-              setToast(
-                "The move was saved locally, but provider sync needs review.",
-              );
+            if (latestScheduleCommandKeys.current.get(request.id) === idempotencyKey) {
+              setToast(liveScheduleReceiptMessage(request.requestNumber, receipt.status));
             }
           },
           (error) => {
-            setToast(liveScheduleSavedButSyncUnconfirmedMessage(error));
+            releaseUnconfirmedSchedule(request.id, idempotencyKey);
+            if (latestScheduleCommandKeys.current.get(request.id) === idempotencyKey) {
+              setToast(liveScheduleUnconfirmedMessage(error));
+            }
           },
         );
       }
@@ -2367,7 +2373,7 @@ export function CommandCentrePrototype({
       }
       setToast(manualSyncReceiptMessage(selectedRequest.requestNumber, liveEvent.status));
     } catch (error) {
-      setToast(liveScheduleErrorMessage(error));
+      setToast(liveScheduleUnconfirmedMessage(error));
     }
   }
 
@@ -2989,29 +2995,37 @@ export async function publishLiveSchedule(event: {
   travel?: TravelEstimate;
   userPrincipalName: string;
 }): Promise<LiveScheduleResult> {
-  const response = await fetchWithTimeout(
-    "/api/internal/dispatch/live-schedule",
-    {
-      body: JSON.stringify(event),
-      headers: {
-        "Content-Type": "application/json",
+  let result: { response: Response; body: LiveScheduleReceiptBody | null };
+  try {
+    result = await fetchScheduleResponseWithTimeout(
+      "/api/internal/dispatch/live-schedule",
+      {
+        body: JSON.stringify(event),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
       },
-      method: "POST",
-    },
-    LIVE_SCHEDULE_REQUEST_TIMEOUT_MS,
-    "Live schedule confirmation timed out before Command Centre could confirm the local save. Refresh the board before retrying.",
-  );
-  const body = (await response.json().catch(() => null)) as
-    | {
-        error?: string;
-        event?: LiveScheduleResult;
-        operationId?: string;
-        status?: LiveScheduleResult["status"];
-      }
-    | null;
+      LIVE_SCHEDULE_REQUEST_TIMEOUT_MS,
+      "Live schedule confirmation timed out before Command Centre could confirm the local save. Refresh the board before retrying.",
+    );
+  } catch (error) {
+    // The server may have committed even though the response was lost. Read
+    // the original command's receipt; never POST a replacement automatically.
+    const receipt = await readLiveScheduleReceipt(event.idempotencyKey);
+    if (receipt) return receipt;
+    throw error;
+  }
+  const { response, body } = result;
 
   if (!response.ok) {
     throw new Error(body?.error ?? "Live schedule write failed.");
+  }
+
+  if (typeof body?.operationId !== "string" || !body.operationId || !isScheduleReceiptStatus(body.status)) {
+    const receipt = await readLiveScheduleReceipt(event.idempotencyKey);
+    if (receipt) return receipt;
+    throw new Error("Booking save could not be confirmed. Refresh the board before retrying.");
   }
 
   return {
@@ -3022,20 +3036,56 @@ export async function publishLiveSchedule(event: {
   };
 }
 
-async function fetchWithTimeout(
+async function readLiveScheduleReceipt(idempotencyKey: string): Promise<LiveScheduleResult | undefined> {
+  try {
+    const { response, body } = await fetchScheduleResponseWithTimeout(
+      `/api/internal/dispatch/live-schedule?idempotencyKey=${encodeURIComponent(idempotencyKey)}`,
+      { method: "GET", cache: "no-store" },
+      3_500,
+      "Booking receipt lookup timed out.",
+    );
+    if (!response.ok) return undefined;
+    if (body?.ok !== true || typeof body.operationId !== "string" || !body.operationId || !isScheduleReceiptStatus(body.status)) return undefined;
+    return { operationId: body.operationId, status: body.status, queued: body.status === "queued" || body.status === "syncing" };
+  } catch {
+    return undefined;
+  }
+}
+
+function isScheduleReceiptStatus(status: unknown): status is IntegrationReceiptStatus {
+  return typeof status === "string" && ["queued", "syncing", "retrying", "synced", "review_required"].includes(status);
+}
+
+type LiveScheduleReceiptBody = {
+  error?: string;
+  event?: LiveScheduleResult;
+  ok?: boolean;
+  operationId?: string;
+  status?: IntegrationReceiptStatus;
+};
+
+async function fetchScheduleResponseWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
   timeoutMessage: string,
 ) {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timer: number | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => {
+      controller.abort();
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+  const read = async () => {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    const body = await response.json().catch(() => null) as LiveScheduleReceiptBody | null;
+    return { response, body };
+  };
 
   try {
-    return await fetch(input, {
-      ...init,
-      signal: controller.signal,
-    });
+    return await Promise.race([read(), deadline]);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new Error(timeoutMessage);
@@ -3412,18 +3462,19 @@ function manualSyncReceiptMessage(
   return `${requestNumber} sync queued for MSP Central and Outlook.`;
 }
 
-function liveScheduleErrorMessage(error: unknown) {
+export function liveScheduleUnconfirmedMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Live schedule write failed.";
 
-  return `Live schedule did not save: ${message}`;
+  return `Booking save could not be confirmed. Refresh the board before retrying. ${message}`;
 }
 
-function liveScheduleSavedButSyncUnconfirmedMessage(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : "Live schedule write failed.";
-
-  return `Saved in Command Centre. MSP Central and Outlook sync could not be confirmed: ${message}`;
+export function liveScheduleReceiptMessage(requestNumber: string, status?: IntegrationReceiptStatus) {
+  const phase = integrationReceiptDisposition(status).phase;
+  if (phase === "synced") return `${requestNumber} synced to MSP Central and Outlook.`;
+  if (phase === "review_required") return `${requestNumber} was saved locally, but provider sync needs review.`;
+  if (phase === "retrying") return `${requestNumber} saved in Command Centre. Provider sync is retrying.`;
+  return `${requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`;
 }
 
 function canUseLiveSchedule(

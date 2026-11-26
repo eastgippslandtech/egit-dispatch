@@ -5,6 +5,8 @@ import { useState } from "react";
 import {
   publishDispatchTestSyncEvent,
   publishLiveSchedule,
+  liveScheduleReceiptMessage,
+  liveScheduleUnconfirmedMessage,
   ScheduleConfirmModal,
   type PendingSchedule,
 } from "@/app/dispatch/command-centre/prototype";
@@ -40,12 +42,18 @@ export function QueueScheduleModal({
   dashboard,
   onCancel,
   onScheduled,
+  onStatusChange,
+  onCommandStarted,
+  isCurrentCommand,
   request,
 }: {
   appointment?: Appointment;
   dashboard: DispatchDashboardData;
   onCancel: () => void;
   onScheduled: (message: string) => void;
+  onStatusChange?: (message: string) => void;
+  onCommandStarted?: (commandKey: string) => void;
+  isCurrentCommand?: (commandKey: string) => boolean;
   request: DispatchRequest;
 }) {
   const [pending, setPending] = useState<PendingSchedule | undefined>(() =>
@@ -135,8 +143,9 @@ export function QueueScheduleModal({
       );
 
       if (liveSchedule) {
+        onCommandStarted?.(idempotencyKey);
         onScheduled(
-          `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+          `Saving ${request.requestNumber} in Command Centre. Waiting for confirmation.`,
         );
         void publishLiveSchedule({
           appointmentId,
@@ -179,7 +188,14 @@ export function QueueScheduleModal({
             dashboard.technicians,
             pending.technicianId,
           ),
+        }).then((receipt) => {
+          if (!isCurrentCommand || isCurrentCommand(idempotencyKey)) {
+            onStatusChange?.(liveScheduleReceiptMessage(request.requestNumber, receipt.status));
+          }
         }).catch((scheduleError) => {
+          if (!isCurrentCommand || isCurrentCommand(idempotencyKey)) {
+            onStatusChange?.(liveScheduleUnconfirmedMessage(scheduleError));
+          }
           console.warn("Queue schedule sync could not be confirmed.", {
             message:
               scheduleError instanceof Error

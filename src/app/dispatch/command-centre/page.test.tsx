@@ -516,7 +516,7 @@ test("live schedule publishing times out instead of leaving the modal spinning",
   );
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(18_501);
   });
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -1278,30 +1278,29 @@ test("closes schedule confirmation and leaves persistent review state", async ()
   );
 });
 
-test("accepts a live schedule locally even when provider queue confirmation stalls", async () => {
+test("keeps a timed-out save unconfirmed and lets authoritative refresh replace the optimistic booking", async () => {
   const data = getDispatchDesignMockData();
   const request = data.requests[0];
-  const fetchMock = vi.fn(
-    () => new Promise<Response>(() => undefined),
-  );
+  const fetchMock = vi.fn((_url: string, init?: RequestInit) => init?.method === "POST"
+    ? new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    })
+    : Promise.resolve(new Response("{}", { status: 404 })));
   vi.stubGlobal("fetch", fetchMock);
 
-  render(
-    <CommandCentrePrototype
-      data={{
+  const liveData = {
         ...data,
         appointments: [],
-        calendarDataSource: "outlook",
+        calendarDataSource: "outlook" as const,
         calendarReadOnly: false,
-        dispatchDataSource: "msp-central",
+        dispatchDataSource: "msp-central" as const,
         requests: data.requests.map((candidate) =>
           candidate.id === request.id
             ? { ...candidate, sourceSystem: "msp-central" as const }
             : candidate,
         ),
-      }}
-    />,
-  );
+      };
+  const { rerender } = render(<CommandCentrePrototype data={liveData} />);
 
   const requestButton = screen.getByRole("button", {
     name: `${request.requestNumber} ${request.subject}`,
@@ -1325,10 +1324,66 @@ test("accepts a live schedule locally even when provider queue confirmation stal
   expect(screen.queryByText("Schedule request")).not.toBeInTheDocument();
   expect(
     screen.getByText(
-      `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+      `Saving ${request.requestNumber} in Command Centre. Waiting for confirmation.`,
     ),
   ).toBeInTheDocument();
   expect(screen.getAllByText(request.subject).length).toBeGreaterThan(0);
+  await act(async () => { await vi.advanceTimersByTimeAsync(18_501); });
+  expect(screen.getByText(/^Booking save could not be confirmed\./)).toBeInTheDocument();
+  expect(screen.queryByText(/^Saved in Command Centre\./)).not.toBeInTheDocument();
+  rerender(<CommandCentrePrototype data={{ ...liveData }} />);
+  await act(async () => undefined);
+  expect(screen.getByRole("button", { name: `${request.requestNumber} ${request.subject}` })).toBeInTheDocument();
+});
+
+test.each(["headers", "body"])("confirms an accepted schedule by its original command key after the POST %s times out", async (stall) => {
+  const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+    if (init?.method === "POST") return stall === "body" ? Promise.resolve(new Response(new ReadableStream())) : new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    });
+    return Promise.resolve(new Response(JSON.stringify({ ok: true, operationId: "accepted-operation", status: "syncing" })));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const pending = publishLiveSchedule({ appointmentId: "pending-receipt", customer: "Example", date: "2026-11-27", end: "11:00", idempotencyKey: "schedule-receipt-123", location: "Office", requestId: "request-123", requestNumber: "123", start: "10:00", subject: "Booking", technicianId: "tech-jervy", technicianName: "Jervy", userPrincipalName: "jervy@egit.com.au" });
+  // Attach before advancing the clock so a rejection is always observed.
+  const result = pending.then(value => value, error => ({ error: String(error) }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_001); });
+  await expect(result).resolves.toMatchObject({ operationId: "accepted-operation", status: "syncing", queued: true });
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  expect(fetchMock).toHaveBeenCalledWith("/api/internal/dispatch/live-schedule?idempotencyKey=schedule-receipt-123", expect.objectContaining({ method: "GET", cache: "no-store" }));
+});
+
+test("bounds confirmation when receipt headers arrive but its response body stalls", async () => {
+  vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => init?.method === "POST"
+    ? Promise.reject(new TypeError("Response lost"))
+    : Promise.resolve(new Response(new ReadableStream()))));
+  let outcome: string | undefined;
+  void publishLiveSchedule({ appointmentId: "pending-body", customer: "Example", date: "2026-11-27", end: "11:00", idempotencyKey: "schedule-body-123", location: "Office", requestId: "request-123", requestNumber: "123", start: "10:00", subject: "Booking", technicianId: "tech-jervy", technicianName: "Jervy", userPrincipalName: "jervy@egit.com.au" }).then(() => { outcome = "accepted"; }, () => { outcome = "unconfirmed"; });
+  await act(async () => { await vi.advanceTimersByTimeAsync(3_501); });
+  expect(outcome).toBe("unconfirmed");
+});
+
+test("does not let an older booking receipt confirm a newer still-pending move", async () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const, status: "Scheduled" as const, technicianId: data.technicians[0].id };
+  const lead = { ...data.appointments[0], id: "receipt-race-lead", requestId: request.id, date: "2026-07-08", start: "10:00", end: "11:00", technicianId: request.technicianId, source: "linked" as const, readOnly: false, title: request.subject };
+  const acknowledgements: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => init?.method === "POST"
+    ? new Promise<Response>(resolve => acknowledgements.push(resolve))
+    : Promise.resolve(new Response("{}"))));
+  render(<CommandCentrePrototype data={{ ...data, appointments: [lead], requests: [request], calendarDataSource: "outlook", calendarReadOnly: false, dispatchDataSource: "msp-central" }} />);
+  fireEvent.click(screen.getByTestId("timeline-appointment-receipt-race-lead"));
+  for (const date of ["2026-07-09", "2026-07-10"]) {
+    fireEvent.click(within(screen.getByTestId("command-centre-drawer")).getByRole("button", { name: "Reschedule" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Booking date"), { target: { value: date } });
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Confirm schedule" })); });
+  }
+  expect(acknowledgements).toHaveLength(2);
+  await act(async () => { acknowledgements[0](new Response(JSON.stringify({ operationId: "older-command", status: "queued" }), { status: 202 })); });
+  expect(screen.getByText("Saving booking move in Command Centre. Waiting for confirmation.")).toBeInTheDocument();
+  await act(async () => { acknowledgements[1](new Response(JSON.stringify({ operationId: "latest-command", status: "queued" }), { status: 202 })); });
+  expect(screen.getByText(`${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`)).toBeInTheDocument();
 });
 
 test("rescheduling a refreshed crew appointment sends the parent schedule group", async () => {

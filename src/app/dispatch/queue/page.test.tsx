@@ -382,7 +382,7 @@ test("accepts a live queue schedule locally when provider confirmation stalls", 
 
   await waitFor(() =>
     expect(onScheduled).toHaveBeenCalledWith(
-      `${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`,
+      `Saving ${request.requestNumber} in Command Centre. Waiting for confirmation.`,
     ),
   );
   expect(fetchMock).toHaveBeenCalledWith(
@@ -391,6 +391,42 @@ test("accepts a live queue schedule locally when provider confirmation stalls", 
   );
 
   fetchMock.mockRestore();
+});
+
+test("updates Queue feedback only after a valid saved receipt arrives", async () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  let acknowledge!: (response: Response) => void;
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(resolve => { acknowledge = resolve; }));
+  const onScheduled = vi.fn();
+  const onStatusChange = vi.fn();
+  render(<QueueScheduleModal dashboard={{ ...data, appointments: [], calendarDataSource: "outlook", calendarReadOnly: false, dispatchDataSource: "msp-central", requests: [request] }} request={request} onCancel={vi.fn()} onScheduled={onScheduled} onStatusChange={onStatusChange} />);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  expect(onScheduled).toHaveBeenCalledWith(`Saving ${request.requestNumber} in Command Centre. Waiting for confirmation.`);
+  expect(onStatusChange).not.toHaveBeenCalled();
+  acknowledge(new Response(JSON.stringify({ ok: true, operationId: "saved-receipt", status: "queued" }), { status: 202 }));
+  await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith(`${request.requestNumber} saved in Command Centre. Syncing with MSP Central and Outlook.`));
+  expect(onScheduled).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test("ignores an older Queue receipt after a newer booking command starts", async () => {
+  const data = getDispatchDesignMockData();
+  const request = { ...data.requests[0], sourceSystem: "msp-central" as const };
+  const acknowledgements: Array<(response: Response) => void> = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(resolve => acknowledgements.push(resolve)));
+  let currentKey: string | undefined;
+  const onStatusChange = vi.fn();
+  const props = { dashboard: { ...data, appointments: [], calendarDataSource: "outlook" as const, calendarReadOnly: false, dispatchDataSource: "msp-central" as const, requests: [request] }, request, onCancel: vi.fn(), onScheduled: vi.fn(), onStatusChange, onCommandStarted: (key: string) => { currentKey = key; }, isCurrentCommand: (key: string) => currentKey === key };
+  const { rerender } = render(<QueueScheduleModal key="older" {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  rerender(<QueueScheduleModal key="newer" {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm schedule" }));
+  acknowledgements[0](new Response(JSON.stringify({ operationId: "older", status: "queued" }), { status: 202 }));
+  await waitFor(() => expect(acknowledgements).toHaveLength(2));
+  expect(onStatusChange).not.toHaveBeenCalled();
+  acknowledgements[1](new Response(JSON.stringify({ operationId: "newer", status: "queued" }), { status: 202 }));
+  await waitFor(() => expect(onStatusChange).toHaveBeenCalledTimes(1));
 });
 
 test.each([

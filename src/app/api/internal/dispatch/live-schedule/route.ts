@@ -65,6 +65,43 @@ type LiveSchedulePreviousAssignment = {
 
 type ValidLiveScheduleCommand = ReturnType<typeof validateCommand>;
 
+// Read-only reconciliation after a lost response. A missing receipt is not
+// permission to repeat the command: its original transaction may still commit.
+export async function GET(request: Request) {
+  const access = await getCommandCentreAccess();
+  if (access.status === "unauthenticated") {
+    return noStoreJson({ error: "Authentication required." }, { status: 401 });
+  }
+  if (!isApprovedStaffAccess(access)) {
+    return noStoreJson({ error: "Access not approved." }, { status: 403 });
+  }
+  let idempotencyKey: string;
+  try {
+    idempotencyKey = requireIdempotencyKey(request, new URL(request.url).searchParams.get("idempotencyKey") ?? undefined);
+  } catch {
+    return noStoreJson({ error: "A valid idempotency key is required." }, { status: 400 });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const operation = await Promise.race([
+      createPostgresIntegrationRepository({ databaseUrl: readDispatchConfig().databaseUrl })
+        .findOperationByIdempotencyKey(idempotencyKey),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Receipt lookup timed out.")), 3_000);
+      }),
+    ]);
+    if (!operation || operation.actionType !== "dispatch.schedule" ||
+      operation.actorEmail.toLowerCase() !== access.email.toLowerCase()) {
+      return noStoreJson({ error: "Booking save has not been confirmed." }, { status: 404 });
+    }
+    return noStoreJson({ ok: true, operationId: operation.id, status: operation.state });
+  } catch {
+    return noStoreJson({ error: "Booking confirmation is temporarily unavailable." }, { status: 503 });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function POST(request: Request) {
   const access = await getCommandCentreAccess();
   if (access.status === "unauthenticated") {

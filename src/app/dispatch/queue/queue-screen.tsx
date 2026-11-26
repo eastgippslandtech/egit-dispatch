@@ -115,6 +115,7 @@ export function DispatchQueueScreen({
   const refreshPending = useRef(false);
   const refreshSafetyTimer = useRef<number | undefined>(undefined);
   const lastRefreshAt = useRef(0);
+  const latestScheduleFeedbackCommand = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     refreshPending.current = false;
@@ -572,6 +573,12 @@ export function DispatchQueueScreen({
             setToast(message);
             router.refresh();
           }}
+          onStatusChange={(message) => {
+            setToast(message);
+            router.refresh();
+          }}
+          onCommandStarted={(commandKey) => { latestScheduleFeedbackCommand.current = commandKey; }}
+          isCurrentCommand={(commandKey) => latestScheduleFeedbackCommand.current === commandKey}
         />
       ) : null}
       {workLogTarget && workLogRequest ? (
